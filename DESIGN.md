@@ -1,0 +1,470 @@
+# PAI Skill Package Management System -- Design Specification
+
+> A package management system for PAI skills inspired by apt/dpkg, enabling secure sharing between users with cryptographic trust, tiered repositories, and governance gates.
+
+## Problem Statement
+
+PAI skills are currently non-distributable. Each user's skill directory is a local collection with no mechanism for discovery, installation, versioning, trust verification, or sharing. The existing v3.0 installer handles initial PAI setup but has no post-install skill management. [SkillSeal](https://github.com/mcyork/skillseal) addresses signing but not distribution. [SpecFlow](https://github.com/jcfischer/specflow-bundle) demonstrates a viable packaging pattern (monorepo + installer + manifest) but is one project's approach, not a system-wide solution.
+
+**The gap:** there is no `apt install extract-wisdom` equivalent for PAI.
+
+## Architecture: Three Layers
+
+The system is composed of three distinct layers:
+
+```
++-------------------------------------------------------------+
+|  Layer 3: GOVERNANCE                                        |
+|  Trust tiers, review gates, author verification             |
+|  (Debian FTP Masters model)                                 |
++-------------------------------------------------------------+
+|  Layer 2: TRUST                                             |
+|  Cryptographic signing, capability declarations,            |
+|  verification hooks                                         |
+|  (SkillSeal + pai-manifest.yaml)                            |
++-------------------------------------------------------------+
+|  Layer 1: TRANSPORT                                         |
+|  Package format, registry, versioning, dependencies         |
+|  (npm + pai-pkg CLI wrapper)                                |
++-------------------------------------------------------------+
+```
+
+**Key decisions:**
+1. **npm as transport, not as trust** -- npm gives us versioning, dependency resolution, and a registry. We layer our own trust on top.
+2. **[SkillSeal](https://github.com/mcyork/skillseal) as signing primitive** -- integrate [Ian McCutcheon's](https://github.com/mcyork) cryptographic signing framework rather than reinventing.
+3. **Scoped packages for tiers** -- `@pai-official/extract-wisdom`, `@pai-community/my-skill`, unscoped for universe.
+4. **`pai-pkg` CLI wraps npm** -- users never run npm directly. `pai-pkg install extract-wisdom` handles fetch + verify + review + place.
+
+---
+
+## 1. Repository Trust Model (Three Tiers)
+
+Inspired by Debian's main/universe/multiverse and Ubuntu's component system.
+
+| Tier | npm Scope | Trust Level | Review Required | Signing Required | Who Can Publish |
+|------|-----------|-------------|-----------------|------------------|-----------------|
+| **Official** | `@pai-official/*` | Highest | Automated + 2 human reviewers (neither is author) | Author GPG/SSH + repo countersign | PAI core team or approved contributors |
+| **Community** | `@pai-community/*` | Medium | Automated + 1 community reviewer attestation | Author GPG/SSH signature | Any verified author |
+| **Universe** | `@pai-universe/*` | Low | Automated checks only | Optional (flagged if unsigned) | Anyone |
+| **Private** | Any private npm scope or registry | User-controlled | None | Optional | Registry owner |
+
+### Trust Semantics
+
+- **Official** = "The PAI project vouches for this skill's quality and safety." Equivalent to Debian `main`.
+- **Community** = "A verified author published this and at least one community reviewer attested to it." Equivalent to Ubuntu PPAs with attestation.
+- **Universe** = "This exists, passes basic structural checks, but nobody has reviewed it." Equivalent to AUR (Arch User Repository).
+- **Private** = "Your org's internal skills, never published." Equivalent to a private apt repository.
+
+### Promotion Path
+
+```
+Universe --[automated checks pass]--> eligible for Community review
+Community --[2 human reviews + quality gate]--> eligible for Official
+Official --[quality regression or CVE]--> demoted to Community or Universe
+```
+
+Promotion is never automatic. Demotion can be automated (a [SkillSeal](https://github.com/mcyork/skillseal) destatement from a trusted reviewer triggers demotion).
+
+---
+
+## 2. Package Format
+
+A PAI skill package is an npm package with specific structure conventions. The existing skill directory structure IS the package content -- wrapped, not replaced.
+
+```
+@pai-official/extract-wisdom/
+  package.json              # npm manifest (transport metadata)
+  pai-manifest.yaml         # PAI-specific manifest (capabilities, trust)
+  SKILL.md                  # Standard PAI skill definition (UNCHANGED)
+  Tools/                    # TypeScript CLI tools (UNCHANGED)
+    package.json            # Tool dependencies (UNCHANGED)
+    *.ts
+  Workflows/                # Workflow markdown files (UNCHANGED)
+    *.md
+  MANIFEST.json             # SkillSeal file integrity manifest
+  TRUST.json                # SkillSeal author/attestation metadata
+  SIGNATURES/               # SkillSeal cryptographic signatures
+    gpg.sig
+    ssh.sig
+  ATTESTATIONS/             # Third-party review attestations
+    *.json
+```
+
+### package.json (npm transport layer)
+
+```json
+{
+  "name": "@pai-official/extract-wisdom",
+  "version": "2.1.0",
+  "description": "Dynamic wisdom extraction that adapts sections to content",
+  "keywords": ["pai-skill", "wisdom", "extraction"],
+  "author": "danielmiessler",
+  "license": "Apache-2.0",
+  "pai": {
+    "type": "skill",
+    "tier": "official",
+    "minPaiVersion": "3.0.0",
+    "skillName": "ExtractWisdom",
+    "entryPoint": "SKILL.md"
+  },
+  "dependencies": {
+    "@pai-official/parser": "^1.0.0"
+  }
+}
+```
+
+The `pai` field bridges npm's world and PAI's world.
+
+### pai-manifest.yaml (PAI capability layer)
+
+Adapted from [SpecFlow's pai-deps manifest pattern](https://github.com/jcfischer/specflow-bundle):
+
+```yaml
+name: ExtractWisdom
+version: 2.1.0
+type: skill
+tier: official
+
+author:
+  name: danielmiessler
+  github: danielmiessler
+  verified: true
+
+provides:
+  skill:
+    - trigger: "extract wisdom"
+    - trigger: "analyze video"
+  cli:
+    - command: "bun Tools/ExtractWisdom.ts"
+
+depends_on:
+  skills:
+    - name: Parser
+      version: ">=1.0.0"
+  tools:
+    - name: bun
+      version: ">=1.0.0"
+
+capabilities:
+  filesystem:
+    read: ["~/.claude/skills/PAI/USER/"]
+    write: ["~/.claude/MEMORY/WORK/"]
+  network:
+    - domain: "api.openai.com"
+      reason: "AI inference"
+  bash:
+    allowed: true
+    restricted_to: ["bun Tools/*.ts"]
+  secrets: ["OPENAI_API_KEY"]
+```
+
+### Why Both package.json AND pai-manifest.yaml?
+
+`package.json` speaks npm's language (versioning, dependencies, registry). `pai-manifest.yaml` speaks PAI's language (capabilities, triggers, trust). npm doesn't understand capabilities or trust tiers -- that's PAI's domain.
+
+---
+
+## 3. Cryptographic Signing (SkillSeal Integration)
+
+Rather than building a signing system, we integrate [SkillSeal](https://github.com/mcyork/skillseal) by [Ian McCutcheon](https://github.com/mcyork) as the cryptographic primitive.
+
+### Signing Flow (Author publishes)
+
+1. Author develops skill locally
+2. `pai-pkg init MySkill` -- generates pai-manifest.yaml + package.json templates
+3. Author fills in manifests
+4. `pai-pkg sign MySkill` -- calls `skillseal sign` internally (MANIFEST.json, SIGNATURES/, TRUST.json)
+5. `pai-pkg publish MySkill` -- validates signature, runs quality checks, publishes to npm
+
+### Verification Flow (User installs)
+
+1. `pai-pkg install extract-wisdom` -- resolves and downloads from npm to staging
+2. **Trust verification** (before any files touch ~/.claude/skills/):
+   - Check MANIFEST.json integrity (SHA-256 of all files)
+   - Verify SIGNATURES/ against TRUST.json author keys
+   - Verify author key against GitHub (SkillSeal key discovery)
+   - Check user's trust policy (tier requirements)
+   - Check for destatements
+3. **Capability review** -- display requested permissions, user approves/rejects
+4. **Installation** -- install deps, copy to ~/.claude/skills/, update skill-index.json
+5. **Runtime enforcement** -- SkillSeal PreToolUse hook re-verifies on every invocation
+
+### Key Discovery
+
+GitHub-based ([SkillSeal](https://github.com/mcyork/skillseal)'s model): GPG keys from `github.com/{user}.gpg`, SSH keys from GitHub API. Future: Sigstore keyless signing.
+
+---
+
+## 4. Capability/Permission Model
+
+This is the Android permissions equivalent for PAI skills. [SkillSeal](https://github.com/mcyork/skillseal) verifies WHO; the capability model declares WHAT.
+
+| Category | What It Controls | Example |
+|----------|-----------------|---------|
+| **filesystem** | Read/write/delete paths | `read: ["~/.claude/MEMORY/"]` |
+| **network** | External domain access | `domain: "api.openai.com"` |
+| **bash** | Shell execution patterns | `restricted_to: ["bun Tools/*.ts"]` |
+| **secrets** | Environment variable access | `["OPENAI_API_KEY"]` |
+| **skills** | Invoking other skills | `["Parser", "Browser"]` |
+| **mcp** | MCP server access | `["filesystem", "github"]` |
+| **hooks** | Installing/modifying hooks | `["PreToolUse"]` |
+
+### Enforcement Layers
+
+1. **Install-time** -- user sees capabilities, approves or rejects
+2. **Publish-time** -- automated scan compares declared capabilities against SKILL.md content
+3. **Review-time** -- human reviewer validates declarations are honest
+4. **Runtime** (future) -- PreToolUse hook checks declared vs actual (requires Claude Code platform support)
+
+---
+
+## 5. Governance Framework
+
+### Roles
+
+| Role | Responsibility | Assignment |
+|------|---------------|------------|
+| **Author** | Creates and signs skills | Self (anyone) |
+| **Reviewer** | Attests to quality/safety for Community tier | Self-nominated, track record |
+| **Maintainer** | Manages Official tier, promotes/demotes | PAI core team appointment |
+| **Auditor** | Security review, can issue destatements | PAI security team |
+
+### Submission Pipeline
+
+```
+UNIVERSE: Author signs -> automated checks -> published
+COMMUNITY: Author signs -> automated checks -> review queue -> 1 reviewer attests -> published
+OFFICIAL: Author signs -> automated checks -> official queue -> 2 maintainer reviews -> countersigned -> published
+```
+
+### Automated Quality Checks (all tiers)
+
+| Check | Tool | What It Catches |
+|-------|------|-----------------|
+| Structure validation | `pai-pkg lint` | Missing SKILL.md, bad frontmatter, wrong layout |
+| Capability honesty | `pai-pkg audit-capabilities` | SKILL.md references undeclared capabilities |
+| Dependency resolution | `npm install --dry-run` | Broken or circular dependencies |
+| Signature validity | `skillseal verify` | Unsigned, tampered, or revoked-key packages |
+| Path sanitization | `pai-pkg check-paths` | Hardcoded user paths |
+| Secret scan | `pai-pkg check-secrets` | Embedded API keys or credentials |
+| SKILL.md validity | `pai-pkg validate-skill` | Missing USE WHEN trigger, missing routing |
+
+### Community Review Process
+
+Reviewers use [SkillSeal's](https://github.com/mcyork/skillseal) attestation system:
+
+```bash
+# Reviewer clones and inspects the skill
+pai-pkg review @pai-community/some-skill
+
+# If satisfied, attest
+skillseal attest ./SomeSkill/ --scope security-audit
+
+# If problems found, destate (blocks installation)
+skillseal attest ./SomeSkill/ --reject --reason "Exfiltrates env vars"
+```
+
+---
+
+## 6. CLI Design (pai-pkg)
+
+```bash
+# Discovery
+pai-pkg search <query>              # Search across all tiers
+pai-pkg info <skill>                # Metadata, capabilities, trust
+pai-pkg browse                      # Interactive TUI browser
+
+# Installation
+pai-pkg install <skill>             # Install with trust + capability review
+pai-pkg remove <skill>              # Uninstall
+pai-pkg update [skill]              # Update one or all
+pai-pkg list                        # List installed with versions
+
+# Authoring
+pai-pkg init <name>                 # Scaffold new package
+pai-pkg sign <path>                 # Sign with SkillSeal
+pai-pkg lint <path>                 # Run quality checks
+pai-pkg publish <path>              # Publish to tier
+
+# Repository Management
+pai-pkg sources list                # Show configured repos
+pai-pkg sources add <url>           # Add npm registry
+pai-pkg sources trust <scope>       # Trust a scope
+
+# Trust Management
+pai-pkg trust list                  # Show trusted authors
+pai-pkg trust add <github-user>     # Trust an author
+pai-pkg trust policy                # Show/edit policies
+
+# Review
+pai-pkg review <skill>              # Download for review
+pai-pkg attest <skill>              # Positive attestation
+pai-pkg destate <skill>             # Negative attestation
+```
+
+### Sources Configuration (~/.config/pai/sources.yaml)
+
+```yaml
+registries:
+  - url: https://registry.npmjs.org
+    scopes: ["@pai-official", "@pai-community", "@pai-universe"]
+    enabled: true
+  - url: https://npm.mycompany.com
+    scopes: ["@mycompany-pai"]
+    auth: token
+
+tier_policies:
+  official:
+    require_signature: true
+    require_countersign: true
+    auto_update: true
+  community:
+    require_signature: true
+    require_attestation: true
+  universe:
+    require_signature: false
+  private:
+    require_signature: false
+```
+
+---
+
+## 7. npm as Transport: Analysis
+
+### Why It Works
+
+| Concern | npm Solution |
+|---------|-------------|
+| Versioning | semver built in |
+| Dependencies | Dependency resolution built in |
+| Registry | npmjs.com or self-hosted (Verdaccio) |
+| Search | npm search, web UI |
+| Scoped packages | `@scope/package` for natural tier mapping |
+| TypeScript + Markdown | `files` field includes any file type |
+| Provenance | Sigstore integration available |
+
+### Why npm Alone Is Not Enough
+
+| Gap | Our Solution |
+|-----|-------------|
+| Trust (open-publish) | Layered governance (Section 5) |
+| Capabilities | pai-manifest.yaml (Section 4) |
+| Signing | SkillSeal (Section 3) |
+| Placement | pai-pkg post-install copies to ~/.claude/skills/ |
+| Semantics | `pai` field in package.json + pai-manifest.yaml |
+
+### The Install Flow
+
+```
+pai-pkg install extract-wisdom
+  1. Resolve: extract-wisdom -> @pai-official/extract-wisdom
+  2. Fetch: npm pack to staging directory
+  3. Verify: skillseal verify (signatures, integrity)
+  4. Review: display capabilities, prompt user
+  5. Place: copy to ~/.claude/skills/ExtractWisdom/
+  6. Wire: bun install in Tools/, update skill-index.json
+  7. Record: write to ~/.config/pai/packages.db
+```
+
+---
+
+## 8. Backward Compatibility
+
+### Zero-Change Guarantee
+
+| Existing Skill State | What Happens |
+|---------------------|--------------|
+| No package.json, no manifest | Works exactly as before. Local only. |
+| Has Tools/package.json | Works as before (tool deps, not skill packaging). |
+| Underscore-prefixed (_COUPA) | Works as before. Private by convention. |
+
+### Migration Path (Opt-In)
+
+```bash
+pai-pkg init ~/.claude/skills/ExtractWisdom    # Scaffold packaging
+# Author fills in pai-manifest.yaml capabilities
+pai-pkg sign ~/.claude/skills/ExtractWisdom    # Sign
+pai-pkg publish ~/.claude/skills/ExtractWisdom # Publish
+```
+
+---
+
+## 9. Trusted Author Identity
+
+| Level | Requirements | Capabilities |
+|-------|-------------|-------------|
+| **Unverified** | npm account | Universe only |
+| **Verified** | GitHub linked + GPG/SSH key | Community |
+| **Trusted** | 3+ attested skills, 6+ months active | Nominate reviewers |
+| **Maintainer** | PAI team endorsement | Manage Official tier |
+
+---
+
+## 10. Private Repository Support
+
+| Option | How | Cost | Best For |
+|--------|-----|------|----------|
+| Private npm scope | `@mycompany/*` on npmjs.com | $7/mo | Organizations |
+| Verdaccio | Self-hosted npm registry | Free | Privacy-conscious |
+| Git-based | `pai-pkg install git+ssh://...` | Free | Small teams |
+
+---
+
+## 11. Implementation Roadmap
+
+### Phase 1: Foundation (MVP)
+- `pai-pkg` CLI skeleton (Bun + Commander)
+- `init`, `publish`, `install`, `sign`, `verify`, `lint` commands
+- `sources.yaml` configuration, `packages.db` tracking
+
+### Phase 2: Trust Layer
+- `pai-manifest.yaml` schema + validation
+- Capability display and approval at install time
+- [SkillSeal](https://github.com/mcyork/skillseal) PreToolUse hook integration
+- Author verification levels
+
+### Phase 3: Governance
+- Community review queue (GitHub-based)
+- `review` / `attest` / `destate` workflows
+- Official tier promotion process
+- Quality metrics
+
+### Phase 4: Ecosystem
+- Cached registry index for fast search
+- Interactive TUI browser
+- Auto-update for official tier
+- Web-based skill browser
+- PAI installer integration
+
+---
+
+## Research Foundation
+
+This design draws from analysis of:
+
+- **[SkillSeal](https://github.com/mcyork/skillseal)** by [Ian McCutcheon](https://github.com/mcyork) -- Cryptographic signing for Claude Code skills. GitHub-based key discovery, multi-key signing, fail-closed PreToolUse hook enforcement, attestation/destatement system. Apache 2.0 licensed.
+- **[SpecFlow](https://github.com/jcfischer/specflow-bundle)** by [Jens-Christian Fischer](https://github.com/jcfischer) -- Monorepo packaging with `pai-manifest.yaml` for capability declarations and `pai-deps` for dependency tracking.
+- **[PAI](https://github.com/danielmiessler/Personal_AI_Infrastructure)** by [Daniel Miessler](https://github.com/danielmiessler) -- The skill system this package manager extends.
+- **Debian apt/dpkg** -- Gold standard for tiered trust. GPG chain, FTP Masters governance.
+- **Homebrew** -- Community review for core taps, Sigstore bottle attestation.
+- **npm/PyPI security incidents** -- Lessons from open self-publishing failures (typosquatting, dependency confusion, supply chain attacks).
+- **[MCP Registry](https://github.com/modelcontextprotocol/registry)** -- Emerging standard for MCP server discovery.
+- **[Anthropic Agent Skills](https://agentskills.io/)** -- Cross-platform SKILL.md standard.
+- **[Agentic AI Foundation (AAIF)](https://www.linuxfoundation.org/press/linux-foundation-announces-the-formation-of-the-agentic-ai-foundation)** -- Linux Foundation umbrella for MCP, Goose, AGENTS.md.
+
+---
+
+## Contributing
+
+This is an early design document. We welcome feedback and contributions:
+
+1. **Design feedback** -- Open an issue to discuss architectural decisions
+2. **Use case contributions** -- Share your skill distribution needs
+3. **Security review** -- Help us strengthen the trust model
+4. **Implementation** -- PRs welcome once the design stabilizes
+
+---
+
+## License
+
+Apache 2.0
