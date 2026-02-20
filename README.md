@@ -262,7 +262,7 @@ pai-pkg destate <skill>             # Negative attestation
 
 This project builds on the work of several open-source projects and their authors:
 
-- **[SkillSeal](https://github.com/mcyork/skillseal)** by [Ian McCutcheon](https://github.com/mcyork) -- Cryptographic signing and verification framework for Claude Code skills. pai-pkg integrates SkillSeal as its trust layer rather than reinventing signing. SkillSeal provides the MANIFEST.json integrity chain, GPG/SSH signature verification, GitHub-based key discovery, attestation/destatement system, and fail-closed PreToolUse hook enforcement. Apache 2.0 licensed.
+- **[SkillSeal](https://github.com/mcyork/skillseal)** by [Ian McCutcheon](https://github.com/mcyork) -- Cryptographic signing and verification framework for Claude Code skills. pai-pkg integrates SkillSeal as its trust layer rather than reinventing signing. SkillSeal provides the MANIFEST.json integrity chain, GPG/SSH signature verification, GitHub-based key discovery, attestation/destatement system, and fail-closed PreToolUse hook enforcement. MIT licensed.
 
 - **[SpecFlow](https://github.com/jcfischer/specflow-bundle)** by [Jens-Christian Fischer](https://github.com/jcfischer) -- Spec-driven development orchestration. The `pai-manifest.yaml` capability declaration format is adapted from SpecFlow's `pai-deps` manifest schema pattern (provides/depends_on/capabilities).
 
@@ -279,4 +279,4 @@ This project builds on the work of several open-source projects and their author
 
 ## License
 
-Apache 2.0
+MIT

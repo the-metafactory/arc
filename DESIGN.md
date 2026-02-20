@@ -442,7 +442,7 @@ pai-pkg publish ~/.claude/skills/ExtractWisdom # Publish
 
 This design draws from analysis of:
 
-- **[SkillSeal](https://github.com/mcyork/skillseal)** by [Ian McCutcheon](https://github.com/mcyork) -- Cryptographic signing for Claude Code skills. GitHub-based key discovery, multi-key signing, fail-closed PreToolUse hook enforcement, attestation/destatement system. Apache 2.0 licensed.
+- **[SkillSeal](https://github.com/mcyork/skillseal)** by [Ian McCutcheon](https://github.com/mcyork) -- Cryptographic signing for Claude Code skills. GitHub-based key discovery, multi-key signing, fail-closed PreToolUse hook enforcement, attestation/destatement system. MIT licensed.
 - **[SpecFlow](https://github.com/jcfischer/specflow-bundle)** by [Jens-Christian Fischer](https://github.com/jcfischer) -- Monorepo packaging with `pai-manifest.yaml` for capability declarations and `pai-deps` for dependency tracking.
 - **[PAI](https://github.com/danielmiessler/Personal_AI_Infrastructure)** by [Daniel Miessler](https://github.com/danielmiessler) -- The skill system this package manager extends.
 - **Debian apt/dpkg** -- Gold standard for tiered trust. GPG chain, FTP Masters governance.
@@ -467,4 +467,4 @@ This is an early design document. We welcome feedback and contributions:
 
 ## License
 
-Apache 2.0
+MIT

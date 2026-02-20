@@ -1,0 +1,25 @@
+# Operator profile — Tier 1 (public) + Tier 2 (hive-scoped)
+# Tier 3 (private) stays in local blackboard only
+# See: operator-identity.md
+schemaVersion: "1.0"
+handle: mellanon
+name: Andreas
+signing:
+  publicKey: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIO6xYoY3NSCNkCSiS4GU+EhZPQFh098vsiUh6KggOg1a andreas.aastroem@gmail.com
+  fingerprint: SHA256:+sgg04W+IN7//6af+CaRDn5PIG6p3adMkbMHa5zWTGk
+identities:
+  - provider: github
+    id: mellanon
+    verified: true
+    verified_at: "2026-02-20T12:11:50.478Z"
+skills: []
+availability: open
+hives:
+  - hive: mellanon/pai-collab
+    role: contributor
+    trust_zone: untrusted
+    identity_provider: github
+    joined: "2026-02-20T12:11:50.478Z"
+    contributions: 0
+    reviews: 0
+    swarms: 0

@@ -1,0 +1,14 @@
+# Spoke status snapshot — auto-generated, do not edit manually
+# Regenerate with: hive-spoke status
+schemaVersion: "1.0"
+generatedAt: "2026-02-20T12:11:50.477Z"
+generatedBy: hive-spoke 0.1.0
+phase: specify
+tests:
+  passing: 0
+  failing: 0
+git:
+  branch: main
+  lastCommit: "2026-02-20T12:11:50.477Z"
+  dirty: false
+  behindRemote: 0
