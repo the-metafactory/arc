@@ -232,30 +232,31 @@ pai-pkg destate <skill>             # Negative attestation
 | **Trusted** | 3+ attested skills, 6+ months | Nominate reviewers |
 | **Maintainer** | PAI team endorsement | Manage Official tier |
 
-## Implementation Roadmap
+## Implementation Roadmap (Revised per Community Council Review)
 
-### Phase 1: Foundation (MVP)
+### Phase 1: Security Spine (MVP)
 - `pai-pkg` CLI skeleton (Bun + Commander)
-- `init`, `publish`, `install`, `sign`, `verify`, `lint` commands
-- `sources.yaml` configuration, `packages.db` tracking
+- Flat tarball distribution with SkillSeal signing
+- Single `pai-manifest.yaml` as sole authority
+- Visual risk hierarchy in install flow (green/amber/red)
+- Default-deny for unsigned skills
+- `init`, `install`, `sign`, `verify`, `lint` commands
 
-### Phase 2: Trust Layer
-- `pai-manifest.yaml` schema + validation
-- Capability display and approval at install time
-- SkillSeal PreToolUse hook integration
+### Phase 2: Standards Evaluation (after real usage)
+- Evaluate AAIF, MCP Registry, Agent Skills convergence
+- Decide transport: emerging standard vs npm-as-blob-store
 - Author verification levels
+- Capability approval refinement from user feedback
 
-### Phase 3: Governance
-- Community review queue (GitHub-based)
+### Phase 3: Governance (if ecosystem warrants)
+- Community review queue
 - `review` / `attest` / `destate` workflows
-- Official tier promotion process
-- Quality metrics
+- Tier promotion with automated, transparent criteria
 
 ### Phase 4: Ecosystem
-- Cached registry index for fast search
+- Registry integration (aligned with winning standard)
 - Interactive TUI browser
 - Auto-update for official tier
-- Web-based skill browser
 - PAI installer integration
 
 ## Acknowledgments

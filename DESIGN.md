@@ -410,27 +410,63 @@ pai-pkg publish ~/.claude/skills/ExtractWisdom # Publish
 
 ---
 
-## 11. Implementation Roadmap
+## 11. Community Review: Council Findings
 
-### Phase 1: Foundation (MVP)
+A four-agent council debate (Architect, Designer, Engineer, Researcher) evaluated this design. Their findings reshape the implementation approach.
+
+### Areas of Consensus
+
+1. **Single manifest authority** -- The dual-manifest design (package.json + pai-manifest.yaml) creates a "two sources of truth" problem. `pai-manifest.yaml` should be the single authoritative manifest; `package.json` should be mechanically generated from it when npm transport is needed.
+
+2. **Phase 1 = flat tarballs with signing** -- The full three-layer architecture is premature for an ecosystem that doesn't exist yet. Ship flat tarball distribution with SkillSeal signing first. No npm dependency resolution, no registry infrastructure, no governance tiers on day one.
+
+3. **Default-deny over consent dialogs** -- The Android-style permission approval model suffers from "consent fatigue theater." Research shows 94% of UAC-style prompts are blindly approved. The install flow should use visual risk hierarchy (green/amber/red tiers based on most dangerous capability) rather than flat permission lists. Default-deny for untrusted skills.
+
+4. **Watch standards convergence** -- The Agentic AI Foundation (AAIF, launched December 2025 with Anthropic, Google, Microsoft, OpenAI), MCP Registry (live in preview), and Anthropic's Agent Skills standard are converging fast. Building a custom registry now risks 12-18 months of throwaway work. Phase 2 should evaluate these standards before building registry infrastructure.
+
+5. **npm attack surface is real** -- 512,000+ malicious npm packages discovered in the past year (156% YoY increase), including typosquatting, dependency confusion, and "slopsquatting" (exploiting AI-hallucinated package names). If npm is used as transport, it must be treated as a pure blob store with our own integrity verification on top.
+
+### Remaining Tensions
+
+| Question | Position A | Position B |
+|----------|-----------|-----------|
+| SkillSeal in Phase 1? | Yes -- cheap now, expensive to retrofit (Architect, Researcher) | SHA-256 checksums suffice for Phase 1 (Engineer) |
+| UX design investment in Phase 1? | Yes -- "ship ugly, stay ugly," first interaction IS the design system (Designer) | Let real usage patterns reveal what UX matters (Engineer) |
+| Are governance tiers viable? | Yes, with formal automated criteria (Architect) | Historically devolve into gatekeeping regardless (Researcher) |
+
+### Impact on Design
+
+The council findings don't invalidate the three-layer architecture -- they resequence it. The layers remain the right abstraction, but Layer 1 (Transport) should start simpler than npm, and Layer 3 (Governance) should be deferred until there's a real ecosystem to govern. The revised roadmap below reflects this.
+
+---
+
+## 12. Implementation Roadmap (Revised)
+
+### Phase 1: Security Spine (MVP)
 - `pai-pkg` CLI skeleton (Bun + Commander)
-- `init`, `publish`, `install`, `sign`, `verify`, `lint` commands
-- `sources.yaml` configuration, `packages.db` tracking
+- Flat tarball distribution (no npm dependency resolution)
+- Single `pai-manifest.yaml` as sole authority (generate `package.json` mechanically if npm transport needed)
+- SkillSeal signing and verification at install time
+- Visual risk hierarchy in install flow (green/amber/red based on capability risk)
+- Default-deny for unsigned or untrusted skills
+- `init`, `install`, `sign`, `verify`, `lint` commands
+- `packages.db` tracking
 
-### Phase 2: Trust Layer
-- `pai-manifest.yaml` schema + validation
-- Capability display and approval at install time
-- [SkillSeal](https://github.com/mcyork/skillseal) PreToolUse hook integration
+### Phase 2: Standards Evaluation (after 6 months of real usage)
+- Evaluate AAIF, MCP Registry, and Agent Skills convergence
+- Decide: adopt emerging standard as transport OR proceed with npm-as-blob-store
+- `pai-manifest.yaml` schema finalization based on real usage patterns
+- Capability display and approval refinement based on user feedback
 - Author verification levels
 
-### Phase 3: Governance
-- Community review queue (GitHub-based)
+### Phase 3: Governance (only if ecosystem warrants)
+- Community review queue (GitHub-based or standard-aligned)
 - `review` / `attest` / `destate` workflows
-- Official tier promotion process
+- Tier promotion process with automated, transparent criteria
 - Quality metrics
 
 ### Phase 4: Ecosystem
-- Cached registry index for fast search
+- Registry integration (aligned with whatever standard wins)
 - Interactive TUI browser
 - Auto-update for official tier
 - Web-based skill browser
