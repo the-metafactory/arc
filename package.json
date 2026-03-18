@@ -1,0 +1,23 @@
+{
+  "name": "pai-pkg",
+  "version": "0.1.0",
+  "description": "PAI skill package manager — install, manage, and distribute AI agent skills",
+  "type": "module",
+  "bin": {
+    "pai-pkg": "./src/cli.ts"
+  },
+  "scripts": {
+    "start": "bun src/cli.ts",
+    "test": "bun test",
+    "test:unit": "bun test test/unit/",
+    "test:commands": "bun test test/commands/",
+    "test:e2e": "bun test test/e2e/"
+  },
+  "dependencies": {
+    "commander": "^13.0.0",
+    "yaml": "^2.7.0"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.2.0"
+  }
+}
