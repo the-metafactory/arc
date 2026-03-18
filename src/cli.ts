@@ -12,6 +12,9 @@ import { enable } from "./commands/enable.js";
 import { remove } from "./commands/remove.js";
 import { verify, formatVerify } from "./commands/verify.js";
 import { init } from "./commands/init.js";
+import { upgradeCore, formatUpgrade } from "./commands/upgrade-core.js";
+import { homedir } from "os";
+import { join } from "path";
 
 const pkg = require("../package.json");
 
@@ -162,5 +165,52 @@ program
       process.exit(1);
     }
   });
+
+program
+  .command("upgrade-core <version>")
+  .description("Upgrade PAI core to a new version (symlink management)")
+  .option(
+    "--versions-dir <path>",
+    "PAI versions directory",
+    join(homedir(), "Developer", "pai", "versions")
+  )
+  .option("--branch <name>", "Branch directory name", "4.0-develop")
+  .option(
+    "--personal-data <path>",
+    "Personal data repo path",
+    join(homedir(), "Developer", "pai-personal-data")
+  )
+  .action(
+    async (
+      version: string,
+      opts: {
+        versionsDir: string;
+        branch: string;
+        personalData: string;
+      }
+    ) => {
+      const home = homedir();
+      const paths = createPaths();
+      const db = openDatabase(paths.dbPath);
+
+      const result = await upgradeCore(
+        db,
+        {
+          versionsDir: opts.versionsDir,
+          branch: opts.branch,
+          personalDataDir: opts.personalData,
+          configRoot: paths.configRoot,
+          homeDir: home,
+          claudeSymlink: join(home, ".claude"),
+        },
+        version
+      );
+
+      console.log(formatUpgrade(result));
+      db.close();
+
+      if (!result.success) process.exit(1);
+    }
+  );
 
 program.parse();
