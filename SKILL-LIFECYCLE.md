@@ -577,11 +577,11 @@ Network required only for:
 | pai-collab governance | ✅ Active | `mellanon/pai-collab` | Working, SOPs defined |
 | Hive protocol specs | ✅ Draft/Review | `mellanon/the-hive` | Specs exist, implementation partial |
 | Arbor security kernel | ✅ 8/9 phases | `~/Developer/arbor/` | Reference only — patterns, not dependency |
-| **pai-pkg CLI** | ❌ Not built | `mellanon/pai-pkg` | **The missing piece** |
+| **pai-pkg CLI** | ✅ Built | `mellanon/pai-pkg` | 10 commands, 64 tests, 202 assertions |
 | **Curated skill list** | ❌ Not built | — | Needed for discovery |
 | **SessionAudit hook** | ❌ Not built | — | Needed for drip-feed detection |
-| **packages.db** | ❌ Not built | — | Needed for state tracking |
-| **pai-manifest.yaml in skills** | ❌ Not added | — | Needed for capability declarations |
+| **packages.db** | ✅ Built | `~/.config/pai/packages.db` | SQLite via bun:sqlite, WAL mode |
+| **pai-manifest.yaml in skills** | ✅ Added | All 7 `pai-skill-*/` repos | Capability declarations for all custom skills |
 
 ---
 

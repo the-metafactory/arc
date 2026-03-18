@@ -443,14 +443,15 @@ The council findings don't invalidate the three-layer architecture -- they reseq
 ## 12. Implementation Roadmap (Revised)
 
 ### Phase 1: Security Spine (MVP)
-- `pai-pkg` CLI skeleton (Bun + Commander)
-- Flat tarball distribution (no npm dependency resolution)
-- Single `pai-manifest.yaml` as sole authority (generate `package.json` mechanically if npm transport needed)
+- ✅ `pai-pkg` CLI skeleton (Bun + Commander) — 10 commands, 64 tests
+- Git-based distribution (Phase 1 = `git clone`, no npm)
+- ✅ Single `pai-manifest.yaml` as sole authority — added to all 7 custom skill repos
 - SkillSeal signing and verification at install time
-- Visual risk hierarchy in install flow (green/amber/red based on capability risk)
+- ✅ Visual risk hierarchy in install flow (green/amber/red based on capability risk)
 - Default-deny for unsigned or untrusted skills
-- `init`, `install`, `sign`, `verify`, `lint` commands
-- `packages.db` tracking
+- ✅ `init`, `install`, `verify`, `list`, `info`, `audit`, `disable`, `enable`, `remove` commands
+- ✅ `upgrade-core` command — automates version upgrades (symlink management)
+- ✅ `packages.db` tracking — SQLite via bun:sqlite with WAL mode
 
 ### Phase 2: Standards Evaluation (after 6 months of real usage)
 - Evaluate AAIF, MCP Registry, and Agent Skills convergence
