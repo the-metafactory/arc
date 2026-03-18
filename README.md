@@ -8,6 +8,45 @@ pai-pkg search security               # Search across all tiers
 pai-pkg publish ./my-skill            # Share your skill
 ```
 
+## Setup
+
+```bash
+# Clone and install
+git clone git@github.com:mellanon/pai-pkg.git ~/Developer/pai-pkg
+cd ~/Developer/pai-pkg
+bun install
+
+# Add to PATH (creates ~/.bun/bin/pai-pkg)
+bun link
+
+# Verify
+pai-pkg --version
+```
+
+### Available Commands (Phase 1)
+
+```bash
+pai-pkg install <git-url>     # Install a skill from a git repo
+pai-pkg list                  # List installed skills
+pai-pkg info <name>           # Show skill details and capabilities
+pai-pkg audit                 # Audit total capability surface
+pai-pkg disable <name>        # Disable a skill (preserves repo)
+pai-pkg enable <name>         # Re-enable a disabled skill
+pai-pkg remove <name>         # Completely uninstall a skill
+pai-pkg verify <name>         # Verify integrity of installed skill
+pai-pkg init <name>           # Scaffold a new skill repo
+pai-pkg upgrade-core <ver>    # Upgrade PAI core version (symlink management)
+```
+
+### Running Tests
+
+```bash
+bun test                      # All 64 tests
+bun test:unit                 # Unit tests (db, manifest, paths)
+bun test:commands             # Command tests (install, list, audit, etc.)
+bun test:e2e                  # End-to-end lifecycle test
+```
+
 ## The Problem
 
 [PAI](https://github.com/danielmiessler/Personal_AI_Infrastructure) skills are powerful but non-distributable. Each user's skill directory is a local collection with no mechanism for discovery, installation, versioning, trust verification, or sharing between users.
