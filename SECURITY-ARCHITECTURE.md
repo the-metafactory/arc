@@ -101,6 +101,25 @@ The hook stays global — it enforces whatever patterns.yaml contains
 
 This avoids the hardest problem (runtime skill attribution) entirely.
 
+### 3.1.1 Known Limitation: Union Model Permissiveness
+
+**Conscious architectural tradeoff, documented per community review (JC, 2026-03-18).**
+
+The union model means every installed skill operates within the combined capability surface of ALL installed skills. A malicious SKILL.md can exploit capabilities declared by other installed skills without declaring its own. This is the "capability piggybacking" problem.
+
+**Why we accept this for Phase 1:**
+- Per-skill isolation requires **runtime skill attribution** — knowing which skill triggered each tool call. Claude Code's hook payload provides `tool_name` and `tool_input` but not skill origin. This is a platform constraint, not a design choice.
+- The union model is simple, auditable, and predictable. The alternative (parsing conversation history to infer skill context) is fragile and adds ~50ms of transcript I/O per PreToolUse call.
+- With <50 skills in the ecosystem, the union surface is bounded and manageable.
+
+**Mitigations (all shipping in Phase 1):**
+1. **Zero declared = zero granted.** A skill that declares no capabilities in its `pai-manifest.yaml` gets no implicit permissions from the union. This prevents the "free-rider" attack where a minimal skill exploits the union surface.
+2. **Capability delta display.** `pai-pkg install` shows what NEW combined capabilities this install creates, not just the skill's own capabilities.
+3. **Expanded composition warnings.** `pai-pkg audit` flags all dangerous compositions including `secrets + network` (data exfiltration), not just `network + write`.
+4. **Publish-time SKILL.md analysis** (Phase 2). Registry-side static analysis scans SKILL.md for tool references inconsistent with declared capabilities (e.g., skill declares no network but references `curl`).
+
+**Gate for revisiting:** If Claude Code exposes skill-level tool attribution in its hook payload, per-skill isolation becomes feasible and should be implemented. Track: [Anthropic hook API evolution].
+
 ### 3.2 Extended patterns.yaml Schema
 
 ```yaml
@@ -124,10 +143,13 @@ base:
     zeroAccess:
       - "~/.ssh/"
       - "~/.gnupg/"
+      - "~/.aws/credentials"
       - "~/.config/pai/secrets/"
     readOnly:
       - "/etc/"
       - "/usr/"
+      - "~/.claude/hooks/"                    # Security hooks are immutable
+      - "~/.claude/PAI/USER/PAISECURITYSYSTEM/"  # Security policy is immutable
 
 # ── Skill Policies (managed by pai-pkg install/disable) ──
 skills:
@@ -164,6 +186,31 @@ skills:
         allowed_patterns: []
       secrets: []
 ```
+
+### 3.2.1 Migration from v1.0 to v2.0
+
+The existing patterns.yaml has no `version` field and no `skills:` section. Migration is automatic and backward-compatible:
+
+```
+Detection: if no `version` key in parsed YAML → v1 format
+Migration:
+  1. Insert `version: "2.0"` at top
+  2. Wrap existing content under `base:` section
+  3. Add empty `skills: {}` section
+  4. Write migrated file back
+  5. If no patterns.yaml exists, behavior is unchanged (no skill policies)
+```
+
+### 3.2.2 Manifest Hash Integrity Verification
+
+Each skill policy in `patterns.yaml` includes a `manifest_hash` field (SHA-256 of the installed `pai-manifest.yaml`). On every SecurityValidator load:
+
+1. For each skill in `skills:`, compute current hash of the installed skill's `pai-manifest.yaml`
+2. Compare against recorded `manifest_hash`
+3. On mismatch: skill was modified post-install → log security event + set skill policy to `suspended` (most restrictive — no capabilities until re-verified)
+4. On match: proceed normally
+
+This catches post-install tampering (e.g., attacker modifies a skill's manifest to declare additional capabilities after the user approved the original).
 
 ### 3.3 Enforcement Logic
 
@@ -332,10 +379,11 @@ rules:
     trigger:
       sequence:
         - event: {tool: "Read", path_matches: "~/.config/pai/secrets/*"}
-        - event: {tool: "Bash", command_matches: "curl|wget|nc|fetch"}
+        - event: {tool: "Bash", command_matches: "curl|wget|nc|fetch|python3|node"}
       within_minutes: 5
     action: block
     severity: critical
+    fail_mode: closed  # Critical = block even on evaluation error
 
   # Detect reconnaissance pattern
   - name: "reconnaissance-sweep"
@@ -347,6 +395,7 @@ rules:
       within_minutes: 2
     action: alert
     severity: high
+    fail_mode: open  # High = alert but allow on evaluation error
 
   # Detect privilege escalation via composition
   - name: "capability-escalation"
@@ -358,57 +407,95 @@ rules:
       within_minutes: 10
     action: ask
     severity: high
+    fail_mode: open  # High = alert but allow on evaluation error
 ```
 
-### 5.3 Implementation: Session Audit Hook
+### 5.2.1 Fail Mode Policy
 
-A `PostToolUse` hook that runs AFTER tool execution, maintaining a rolling window of recent events and evaluating anomaly rules:
+Anomaly rules have explicit fail modes, following the pai-content-filter pattern (per JC review):
+
+| Severity | Default Fail Mode | Rationale |
+|----------|------------------|-----------|
+| **critical** | `closed` (block) | False positive is annoying; false negative is catastrophic (data exfiltration) |
+| **high** | `open` (alert) | Alert the user, allow the operation to continue |
+| **medium** | `open` (alert) | Log for trend analysis, no user interruption |
+
+The `fail_mode` field can be explicitly set per rule to override the default. For example, a `high` severity rule that detects a known attack pattern may be set to `closed`.
+
+### 5.3 Implementation: Dual-Hook Session Audit
+
+**Revised per community review (JC, 2026-03-18).** The original PostToolUse-only design had a critical flaw: PostToolUse cannot block, so `read secrets → curl exfiltrate` completes before detection. The fix: split recording and enforcement across both hooks.
+
+**Architecture:**
+- **PostToolUse** (SessionAuditRecorder): Records events to rolling window. Non-blocking, append-only. ~0.3ms per call.
+- **PreToolUse** (SessionAuditEnforcer): Reads rolling window, evaluates sequence/count rules BEFORE allowing the next tool call. Can block. ~5-8ms per call.
+
+This closes the exfiltration window completely: when the agent calls `curl`, the PreToolUse enforcer sees the prior secret read in the window and blocks the curl BEFORE execution.
 
 ```typescript
-// SessionAudit.hook.ts (PostToolUse)
-// Maintains rolling event window, evaluates behavioral patterns
+// SessionAuditRecorder.hook.ts (PostToolUse)
+// Records events to rolling window. Non-blocking, fast.
 
 interface SessionEvent {
   timestamp: number;
   tool: string;
   input: Record<string, unknown>;
-  result_summary: string;  // truncated, no sensitive data
+  result_summary: string;
 }
 
 const WINDOW_FILE = '/tmp/pai-session-audit-{session_id}.jsonl';
+const MAX_WINDOW_SIZE = 100;  // ~20KB, bounded
 
 async function main() {
   const input = JSON.parse(await Bun.stdin.text());
 
-  // Append event to rolling window
   const event: SessionEvent = {
     timestamp: Date.now(),
     tool: input.tool_name,
     input: sanitizeInput(input.tool_input),
     result_summary: truncate(input.tool_result, 200)
   };
-  appendToWindow(WINDOW_FILE, event);
+
+  // O_APPEND for atomic writes (POSIX guarantee for reasonable sizes)
+  appendToWindow(WINDOW_FILE, event, MAX_WINDOW_SIZE);
+}
+```
+
+```typescript
+// SessionAuditEnforcer.hook.ts (PreToolUse)
+// Reads rolling window, evaluates anomaly rules. CAN BLOCK.
+
+async function main() {
+  const input = JSON.parse(await Bun.stdin.text());
+  const pendingTool = { tool: input.tool_name, input: input.tool_input };
+
+  // Read rolling window (~20KB, <1ms on warm cache)
+  const events = readWindow(WINDOW_FILE);
 
   // Load anomaly rules
   const rules = loadAnomalyRules();
 
-  // Evaluate each rule against the window
   for (const rule of rules) {
-    if (matchesPattern(getWindow(WINDOW_FILE), rule)) {
-      logAnomaly(rule, event);
+    // Check if executing this pending tool would complete a dangerous sequence
+    if (wouldCompleteSequence(events, pendingTool, rule)) {
+      logAnomaly(rule, pendingTool);
 
-      if (rule.action === 'block') {
-        // Can't block PostToolUse, but can:
-        // 1. Write a flag file that PreToolUse checks next call
-        // 2. Alert the user via system-reminder injection
-        writeBlockFlag(rule.name);
-      }
-
-      if (rule.action === 'alert') {
+      if (rule.severity === 'critical') {
+        // FAIL-CLOSED: block the tool call
+        process.exit(2);  // PreToolUse exit 2 = block
+      } else if (rule.action === 'ask') {
+        // FAIL-OPEN with user prompt
+        console.error(`[PAI SECURITY] ⚠️ ${rule.description}`);
+        process.exit(1);  // exit 1 = ask user
+      } else {
+        // ALERT: log but allow
         console.error(`[PAI SECURITY] ⚠️ Anomaly: ${rule.description}`);
       }
     }
   }
+
+  // No anomaly matched — allow
+  process.exit(0);
 }
 ```
 
@@ -426,7 +513,7 @@ Integration with Arbor's observability patterns — specifically the dual-emit m
 |-------|------|------|
 | **L1: Event logging** | Individual security events to MEMORY/SECURITY/ | **Today (shipped)** |
 | **L2: Skill-scoped policies** | patterns.yaml skill sections, install/disable | **Phase 1 of pai-pkg** |
-| **L3: Behavioral anomaly detection** | Session audit hook with sequence/count rules | **Phase 2** |
+| **L3: Behavioral anomaly detection** | Dual-hook session audit (PreToolUse blocks, PostToolUse records) | **Phase 2** |
 | **L4: Cross-session correlation** | Persistent event store with trend analysis | **Phase 3** |
 | **L5: Real-time dashboard** | Integration with ivy-blackboard for live monitoring | **Phase 4** |
 
@@ -483,13 +570,23 @@ Integration with Arbor's observability patterns — specifically the dual-emit m
 │  └─────────────────────────────────────────────────────────────┘ │
 │                                                                  │
 │  ┌─────────────────────────────────────────────────────────────┐ │
-│  │  OBSERVABILITY (PostToolUse hooks)                          │ │
+│  │  BEHAVIORAL ENFORCEMENT (PreToolUse — Session Audit)        │ │
 │  │                                                             │ │
-│  │  SessionAudit.hook.ts                                       │ │
-│  │   • Rolling event window per session                        │ │
-│  │   • Behavioral anomaly rules (YAML)                         │ │
-│  │   • Sequence detection (drip-feed attacks)                  │ │
-│  │   • Count-based detection (recon sweeps)                    │ │
+│  │  SessionAuditEnforcer.hook.ts (PreToolUse, priority 8)      │ │
+│  │   • Reads rolling event window before each tool call        │ │
+│  │   • Evaluates sequence rules (drip-feed detection)          │ │
+│  │   • Critical severity → BLOCK (exit 2)                      │ │
+│  │   • High/medium severity → ALERT (log, allow)               │ │
+│  │   • <8ms p99 (bounded window read + pattern match)          │ │
+│  └─────────────────────────────────────────────────────────────┘ │
+│                                                                  │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │  OBSERVABILITY (PostToolUse — Event Recording)              │ │
+│  │                                                             │ │
+│  │  SessionAuditRecorder.hook.ts (PostToolUse)                 │ │
+│  │   • Appends events to rolling window (~0.3ms, O_APPEND)     │ │
+│  │   • Bounded to last 100 events (~20KB)                      │ │
+│  │   • Session-scoped tmpfile: /tmp/pai-session-audit-{id}     │ │
 │  │                                                             │ │
 │  │  Security event log → MEMORY/SECURITY/ (already shipping)   │ │
 │  │  Future: → ivy-blackboard SSE stream → dashboard            │ │
@@ -523,10 +620,60 @@ pai-pkg install --system skill-enforcer
 ```
 
 The `--system` flag distinguishes infrastructure packages from regular skills. System packages:
-- Cannot be disabled by non-maintainer users
+- Cannot be disabled by non-maintainer users (requires `--system` flag + separate confirmation)
 - Are verified against a separate trust chain (the hive's allowed-signers)
-- Update independently from regular skills
+- Update independently from regular skills via signed atomic operations (write tmp, validate, rename)
 - Provide patterns/rules consumed by the SecurityValidator rather than SKILL.md instructions
+- Install to a protected path (`~/.config/pai/system-skills/`) separate from user skills
+- Have integrity verified at SessionStart + periodically (every 30 minutes for long sessions)
+
+### 6.2.1 System Package Manifest Schema
+
+System packages use the same `pai-manifest.yaml` format as regular skills (manifest superset model, per council review), with an additional `system` section:
+
+```yaml
+name: pai-content-filter
+version: 3.2.0
+type: system                      # Distinguishes from type: skill
+
+author:
+  name: jcfischer
+  github: jcfischer
+
+# System-specific section (not present in regular skills)
+system:
+  hooks:
+    pre_tool_use:
+      - file: hooks/ContentFilter.hook.ts
+        priority: 10              # 0-9 reserved for core, 10-29 for system, 50+ for user
+        tools: [Read, Glob, Grep]
+    pre_commit:
+      - file: hooks/secret-scan.sh
+  patterns:
+    - file: patterns/content-filter.yaml
+      merge_into: base            # Merge into base rules, not skills section
+  protected: true                 # Cannot be disabled without --system flag
+  update_policy: manual           # auto | manual — manual requires explicit confirmation
+
+capabilities:
+  filesystem:
+    read: ["~/.claude/skills/"]   # Reads skill content for filtering
+  network: []
+  bash:
+    allowed: false
+  secrets: []
+```
+
+**Priority ranges (council consensus):**
+
+| Range | Reserved For | Examples |
+|-------|-------------|---------|
+| 0-9 | Core PAI hooks | SecurityValidator (5) |
+| 10-29 | System packages | ContentFilter (10), SkillEnforcer (15), SecretScanning (20) |
+| 30-49 | Reserved (future) | — |
+| 50-99 | User hooks | Custom PreToolUse hooks |
+
+**Collaboration note:** This schema is a starting point proposed by @jcfischer. The first `--system` package (pai-content-filter) will be co-designed with JC to validate the schema against real integration needs.
 
 **How to activate them today (before pai-pkg exists):**
 
@@ -564,7 +711,7 @@ The Hive's 7 protocol specs include a **Skill Protocol** that defines how skills
 | **Skill validation** | skill-enforcer (shipped, standalone) | Integrated as `--system` package | Packaging wrapper |
 | **Capability declarations** | pai-manifest.yaml (designed, not enforced) | Manifest → policy at install time | Policy generation code |
 | **Composition awareness** | None | Capability budget warnings at install | New audit logic |
-| **Session observability** | Individual event files in MEMORY/SECURITY/ | Rolling window + anomaly rules | New PostToolUse hook |
+| **Session observability** | Individual event files in MEMORY/SECURITY/ | Dual-hook: PreToolUse enforcer + PostToolUse recorder | New hook pair |
 | **Cross-session analysis** | None | Persistent event store + trend rules | Future (L4) |
 | **Real-time dashboard** | None | ivy-blackboard integration | Future (L5) |
 
@@ -591,30 +738,34 @@ The Hive's 7 protocol specs include a **Skill Protocol** that defines how skills
 
 **Goal:** Detect behavioral anomalies and flag dangerous capability combinations.
 
-1. **SessionAudit.hook.ts** — PostToolUse hook with rolling event window
-2. **anomaly-rules.yaml** — Sequence and count-based pattern detection
-3. **`pai-pkg audit`** — Scan total installed capability surface for dangerous unions
+1. **Dual-hook Session Audit** — SessionAuditRecorder (PostToolUse, records events) + SessionAuditEnforcer (PreToolUse, blocks dangerous sequences)
+2. **anomaly-rules.yaml** — Sequence and count-based pattern detection with fail mode policy (critical=closed, high/medium=open)
+3. **`pai-pkg audit`** — Scan total installed capability surface for dangerous unions (including secrets+network composition)
 4. **Composition warnings** — Flag when installing a skill creates new combined capabilities
-5. **Integration of spoke repos** — Package pai-secret-scanning, pai-content-filter, skill-enforcer as `--system` packages
+5. **Integration of spoke repos** — Package pai-secret-scanning, pai-content-filter, skill-enforcer as `--system` packages using system manifest schema
+6. **Publish-time SKILL.md static analysis** — Registry-side scan for tool references inconsistent with declared capabilities
+7. **Arbor-style rate limiting** — Constraint enforcement (rate limits, time windows) for reconnaissance detection
 
 **Deliverables:**
-- SessionAudit hook shipping with default anomaly rules
-- `pai-pkg audit` command
-- Three `--system` packages created
+- Dual-hook SessionAudit shipping with default anomaly rules
+- `pai-pkg audit` command (already built, needs composition expansion)
+- Three `--system` packages created (co-designed with @jcfischer)
 
 ### Phase 3: Cross-Session Intelligence (Weeks 9-16)
 
 **Goal:** Persistent behavioral analysis across sessions.
 
 1. **Event store** — SQLite database for security events (building on ivy-blackboard's pattern)
-2. **Trend analysis** — Cross-session anomaly detection rules
-3. **ivy-blackboard integration** — Security events streamed via SSE to dashboard
-4. **Incident response** — Automated policy tightening on anomaly detection
+2. **Cross-session anomaly detection** — Persistent state that survives session boundaries. An attacker exfiltrating one file per session over 10 sessions triggers cross-session thresholds.
+3. **Runtime telemetry (opt-in)** — Log which capabilities are actually exercised during skill invocations, so `pai-pkg audit` can distinguish "theoretical risk" from "observed risk." This reduces audit noise for capability combinations that exist in theory but never co-occur in practice.
+4. **ivy-blackboard integration** — Security events streamed via SSE to dashboard
+5. **Incident response** — Automated policy tightening on anomaly detection
 
 **Deliverables:**
 - Security event SQLite store
 - ivy-blackboard security panel
 - Cross-session anomaly rules
+- Runtime capability telemetry (opt-in)
 
 ---
 
@@ -819,6 +970,12 @@ These principles are derived from Arbor's security philosophy and validated thro
 6. **Observe everything, analyze holistically.** Individual events are logged (L1, today). Behavioral patterns across events detect drip-feed attacks (L3, Phase 2). Cross-session trends detect persistent adversaries (L4, Phase 3).
 
 7. **The kill switch must work instantly.** `pai-pkg disable` removes the policy section from patterns.yaml. The very next tool call is evaluated without that skill's capabilities. No restart, no delay.
+
+8. **The security policy must be self-protecting.** `patterns.yaml`, `SecurityValidator.hook.ts`, and `settings.json` are in the `readOnly` paths of the base security rules. Modifications require explicit user confirmation. The hook verifies its own configuration integrity (manifest hash check) on every load.
+
+9. **Signing proves WHO, not WHETHER SAFE.** SkillSeal creates accountability, not safety guarantees. Users should not reduce scrutiny because a skill is "verified" — verification means identity, not intent. Capability review remains essential regardless of trust tier.
+
+10. **Blocklists are incomplete by nature.** Bash is Turing-complete; there are infinite ways to express the same operation. Pattern matching against command strings is necessary but not sufficient. Defense in depth (behavioral detection, capability composition analysis, runtime telemetry) compensates for blocklist incompleteness. This is a documented known limitation.
 
 ---
 

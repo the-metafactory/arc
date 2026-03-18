@@ -593,7 +593,7 @@ Network required only for:
 | [DESIGN.md](DESIGN.md) | What's the package format? How does transport/trust/governance work? |
 | [SECURITY-ARCHITECTURE.md](SECURITY-ARCHITECTURE.md) | How does runtime enforcement work? How do we detect attacks? |
 | [RESEARCH.md](RESEARCH.md) | What does the landscape look like? What do the council and red team say? |
-| [Migration Plan](../../Documents/andreas_brain/2026-03-02-PAI%20v3.0%20→%20v4.0%20Migration%20Plan-1603.md) | What broke during v3→v4? What must survive upgrades? |
+| Migration Plan (v3→v4) | What broke during v3→v4? What must survive upgrades? (Internal document, not in repo) |
 
 ---
 
