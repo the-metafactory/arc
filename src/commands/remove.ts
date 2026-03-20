@@ -3,7 +3,7 @@ import { rm } from "fs/promises";
 import type { Database } from "bun:sqlite";
 import type { PaiPaths } from "../types.js";
 import { getSkill, removeSkill } from "../lib/db.js";
-import { removeSymlink } from "../lib/symlinks.js";
+import { removeSymlink, removeCliShim } from "../lib/symlinks.js";
 
 export interface RemoveResult {
   success: boolean;
@@ -33,6 +33,9 @@ export async function remove(
   const binName = name.replace(/^_/, "").toLowerCase();
   const binLink = join(paths.binDir, binName);
   await removeSymlink(binLink);
+
+  // Remove CLI shim from PATH
+  await removeCliShim(paths.shimDir, binName);
 
   // Remove repo directory
   await rm(skill.install_path, { recursive: true, force: true });

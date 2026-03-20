@@ -2,7 +2,7 @@ import { join } from "path";
 import type { Database } from "bun:sqlite";
 import type { PaiPaths } from "../types.js";
 import { getSkill, updateSkillStatus } from "../lib/db.js";
-import { removeSymlink } from "../lib/symlinks.js";
+import { removeSymlink, removeCliShim } from "../lib/symlinks.js";
 
 export interface DisableResult {
   success: boolean;
@@ -32,10 +32,12 @@ export async function disable(
   await removeSymlink(skillLink);
 
   // Remove bin symlink if it exists
-  // We use the skill name to guess the bin name
   const binName = name.replace(/^_/, "").toLowerCase();
   const binLink = join(paths.binDir, binName);
   await removeSymlink(binLink);
+
+  // Remove CLI shim from PATH
+  await removeCliShim(paths.shimDir, binName);
 
   // Update database
   updateSkillStatus(db, name, "disabled");

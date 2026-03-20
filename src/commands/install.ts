@@ -4,7 +4,7 @@ import type { PaiPaths, PaiManifest } from "../types.js";
 import type { Database } from "bun:sqlite";
 import { readManifest, assessRisk, formatCapabilities } from "../lib/manifest.js";
 import { recordInstall, getSkill } from "../lib/db.js";
-import { createSymlink } from "../lib/symlinks.js";
+import { createSymlink, createCliShim, extractCliInfo } from "../lib/symlinks.js";
 
 export interface InstallOptions {
   paths: PaiPaths;
@@ -115,12 +115,13 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
   }
 
   // 5. Create bin symlink if CLI declared
-  if (manifest.provides?.cli?.length) {
-    const binName =
-      manifest.provides.cli[0].name ??
-      manifest.name.replace(/^_/, "").toLowerCase();
-    const binLinkPath = join(paths.binDir, binName);
+  const cliInfo = extractCliInfo(manifest);
+  if (cliInfo) {
+    const binLinkPath = join(paths.binDir, cliInfo.binName);
     await createSymlink(installPath, binLinkPath);
+
+    // 5b. Create PATH-accessible shim
+    await createCliShim(paths.shimDir, paths.binDir, manifest);
   }
 
   // 6. Run bun install if package.json exists

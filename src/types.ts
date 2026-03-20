@@ -113,4 +113,6 @@ export interface PaiPaths {
   secretsDir: string;
   /** Runtime state (~/.config/pai/skills/) */
   runtimeDir: string;
+  /** PATH-accessible shim directory (~/bin/) */
+  shimDir: string;
 }

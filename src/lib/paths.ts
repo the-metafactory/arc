@@ -20,6 +20,7 @@ export function createPaths(overrides?: Partial<PaiPaths>): PaiPaths {
     configRoot,
     secretsDir: overrides?.secretsDir ?? join(configRoot, "secrets"),
     runtimeDir: overrides?.runtimeDir ?? join(configRoot, "skills"),
+    shimDir: overrides?.shimDir ?? join(home, "bin"),
   };
 }
 

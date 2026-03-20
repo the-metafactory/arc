@@ -4,7 +4,7 @@ import type { Database } from "bun:sqlite";
 import type { PaiPaths } from "../types.js";
 import { getSkill, updateSkillStatus } from "../lib/db.js";
 import { readManifest } from "../lib/manifest.js";
-import { createSymlink } from "../lib/symlinks.js";
+import { createSymlink, createCliShim } from "../lib/symlinks.js";
 
 export interface EnableResult {
   success: boolean;
@@ -39,7 +39,7 @@ export async function enable(
     await createSymlink(skill.install_path, skillLinkPath);
   }
 
-  // Re-create bin symlink if CLI declared
+  // Re-create bin symlink and CLI shim if CLI declared
   const manifest = await readManifest(skill.install_path);
   if (manifest?.provides?.cli?.length) {
     const binName =
@@ -47,6 +47,8 @@ export async function enable(
       name.replace(/^_/, "").toLowerCase();
     const binLinkPath = join(paths.binDir, binName);
     await createSymlink(skill.install_path, binLinkPath);
+
+    await createCliShim(paths.shimDir, paths.binDir, manifest);
   }
 
   // Update database
