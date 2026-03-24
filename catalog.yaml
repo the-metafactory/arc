@@ -1,0 +1,44 @@
+defaults:
+  skills_dir: ~/.claude/skills/
+  agents_dir: ~/.claude/agents/
+  prompts_dir: ~/.claude/commands/
+catalog:
+  skills:
+    - name: Research
+      description: Multi-agent research with parallel researchers
+      source: https://github.com/danielmiessler/pai/blob/main/skills/Research/SKILL.md
+      type: builtin
+    - name: Thinking
+      description: Unified analytical and creative thinking modes
+      source: https://github.com/danielmiessler/pai/blob/main/skills/Thinking/SKILL.md
+      type: builtin
+    - name: Council
+      description: Multi-agent debate with visible transcripts
+      source: https://github.com/danielmiessler/pai/blob/main/skills/Thinking/Council/SKILL.md
+      type: builtin
+      requires:
+        - skill:Thinking
+    - name: RedTeam
+      description: Adversarial stress testing and critique
+      source: https://github.com/danielmiessler/pai/blob/main/skills/Thinking/RedTeam/SKILL.md
+      type: builtin
+      requires:
+        - skill:Thinking
+    - name: Media
+      description: Visual and video content creation
+      source: https://github.com/danielmiessler/pai/blob/main/skills/Media/SKILL.md
+      type: builtin
+  agents:
+    - name: Architect
+      description: Elite system design specialist (Serena Blackwood)
+      source: https://github.com/danielmiessler/pai/blob/main/agents/Architect.md
+      type: builtin
+    - name: Engineer
+      description: Elite principal engineer (Marcus Chen)
+      source: https://github.com/danielmiessler/pai/blob/main/agents/Engineer.md
+      type: builtin
+    - name: Pentester
+      description: Offensive security specialist (Rook Blackburn)
+      source: https://github.com/danielmiessler/pai/blob/main/agents/Pentester.md
+      type: builtin
+  prompts: []

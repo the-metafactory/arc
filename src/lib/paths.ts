@@ -21,6 +21,12 @@ export function createPaths(overrides?: Partial<PaiPaths>): PaiPaths {
     secretsDir: overrides?.secretsDir ?? join(configRoot, "secrets"),
     runtimeDir: overrides?.runtimeDir ?? join(configRoot, "skills"),
     shimDir: overrides?.shimDir ?? join(home, "bin"),
+    catalogPath:
+      overrides?.catalogPath ??
+      join(import.meta.dir, "..", "..", "catalog.yaml"),
+    registryPath:
+      overrides?.registryPath ??
+      join(import.meta.dir, "..", "..", "registry.yaml"),
   };
 }
 

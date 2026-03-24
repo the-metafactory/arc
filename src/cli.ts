@@ -13,6 +13,26 @@ import { remove } from "./commands/remove.js";
 import { verify, formatVerify } from "./commands/verify.js";
 import { init } from "./commands/init.js";
 import { upgradeCore, formatUpgrade } from "./commands/upgrade-core.js";
+import {
+  catalogList,
+  catalogSearch,
+  catalogAdd,
+  catalogRemove,
+  catalogUse,
+  catalogSync,
+  catalogPushCatalog,
+  formatCatalogList,
+  formatCatalogSearch,
+} from "./commands/catalog.js";
+import type { CatalogEntry, ArtifactType } from "../types.js";
+import {
+  loadRegistry,
+  searchRegistry,
+  findRegistryEntry,
+  addFromRegistry,
+  formatRegistrySearch,
+} from "./lib/registry.js";
+import { loadCatalog, saveCatalog } from "./lib/catalog.js";
 import { homedir } from "os";
 import { join } from "path";
 
@@ -212,5 +232,204 @@ program
       if (!result.success) process.exit(1);
     }
   );
+
+// ── Registry search (top-level) ─────────────────────────────
+
+program
+  .command("search <keyword>")
+  .description("Search the community registry for skills, agents, and prompts")
+  .action(async (keyword: string) => {
+    const paths = createPaths();
+    const registry = await loadRegistry(paths.registryPath);
+    if (!registry) {
+      console.error("Error: No registry.yaml found");
+      process.exit(1);
+    }
+
+    const results = searchRegistry(registry, keyword);
+    console.log(formatRegistrySearch(results));
+  });
+
+// ── Catalog commands ────────────────────────────────────────
+
+const catalog = program
+  .command("catalog")
+  .description("Manage the skill/agent/prompt catalog");
+
+catalog
+  .command("list")
+  .description("List catalog entries with install status")
+  .action(async () => {
+    const paths = createPaths();
+    const db = openDatabase(paths.dbPath);
+    const result = await catalogList(paths, db);
+    console.log(formatCatalogList(result));
+    db.close();
+  });
+
+catalog
+  .command("search <keyword>")
+  .description("Search catalog by name or description")
+  .action(async (keyword: string) => {
+    const paths = createPaths();
+    const result = await catalogSearch(paths, keyword);
+    console.log(formatCatalogSearch(result));
+  });
+
+catalog
+  .command("add <name>")
+  .description("Add an entry to the catalog (manual or from registry)")
+  .option("--from-registry", "Copy entry from community registry")
+  .option("-s, --source <url>", "Source URL or path (manual mode)")
+  .option("-d, --desc <description>", "Description (manual mode)")
+  .option("-t, --type <type>", "Entry type (builtin|community|system|custom)", "custom")
+  .option("--artifact <type>", "Artifact type (skill|agent|prompt)", "skill")
+  .option("--has-cli", "Skill provides CLI tooling")
+  .option("--bundle", "Skill is a spec-flow bundle")
+  .action(
+    async (
+      name: string,
+      opts: {
+        fromRegistry?: boolean;
+        source?: string;
+        desc?: string;
+        type: string;
+        artifact: string;
+        hasCli?: boolean;
+        bundle?: boolean;
+      }
+    ) => {
+      const paths = createPaths();
+
+      if (opts.fromRegistry) {
+        // Copy from registry
+        const registry = await loadRegistry(paths.registryPath);
+        if (!registry) {
+          console.error("Error: No registry.yaml found");
+          process.exit(1);
+        }
+        const catalogConfig = await loadCatalog(paths.catalogPath);
+        if (!catalogConfig) {
+          console.error("Error: No catalog.yaml found");
+          process.exit(1);
+        }
+
+        try {
+          const { entry, artifactType } = addFromRegistry(
+            registry,
+            catalogConfig,
+            name
+          );
+          await saveCatalog(paths.catalogPath, catalogConfig);
+          console.log(`Added ${entry.name} [${artifactType}] to catalog from registry`);
+        } catch (err: any) {
+          console.error(`Error: ${err.message}`);
+          process.exit(1);
+        }
+      } else {
+        // Manual add — source and desc required
+        if (!opts.source || !opts.desc) {
+          console.error(
+            "Error: --source and --desc are required (or use --from-registry)"
+          );
+          process.exit(1);
+        }
+        const entry: CatalogEntry = {
+          name,
+          description: opts.desc,
+          source: opts.source,
+          type: opts.type as CatalogEntry["type"],
+          has_cli: opts.hasCli,
+          bundle: opts.bundle,
+        };
+        const result = await catalogAdd(
+          paths,
+          entry,
+          opts.artifact as ArtifactType
+        );
+        if (result.success) {
+          console.log(`Added ${result.name} [${result.artifactType}] to catalog`);
+        } else {
+          console.error(`Error: ${result.error}`);
+          process.exit(1);
+        }
+      }
+    }
+  );
+
+catalog
+  .command("remove <name>")
+  .description("Remove an entry from the catalog")
+  .action(async (name: string) => {
+    const paths = createPaths();
+    const result = await catalogRemove(paths, name);
+    if (result.success) {
+      console.log(`Removed ${result.name} from catalog`);
+    } else {
+      console.error(`Error: ${result.error}`);
+      process.exit(1);
+    }
+  });
+
+catalog
+  .command("use <name>")
+  .description("Install a catalog entry (resolves dependencies)")
+  .action(async (name: string) => {
+    const paths = createPaths();
+    await ensureDirectories(paths);
+    const db = openDatabase(paths.dbPath);
+    const result = await catalogUse(paths, db, name);
+
+    if (result.success) {
+      for (const item of result.installed!) {
+        console.log(`Installed ${item.name} [${item.artifactType}]`);
+      }
+    } else {
+      console.error(`Error: ${result.error}`);
+      process.exit(1);
+    }
+
+    db.close();
+  });
+
+catalog
+  .command("sync")
+  .description("Re-pull all installed catalog entries from source")
+  .action(async () => {
+    const paths = createPaths();
+    await ensureDirectories(paths);
+    const db = openDatabase(paths.dbPath);
+    const result = await catalogSync(paths, db);
+
+    if (result.success) {
+      if (!result.synced?.length) {
+        console.log("No installed catalog entries to sync.");
+      } else {
+        for (const item of result.synced) {
+          const badge = item.status === "ok" ? "ok" : `failed: ${item.error}`;
+          console.log(`  ${item.name}: ${badge}`);
+        }
+      }
+    } else {
+      console.error(`Error: ${result.error}`);
+      process.exit(1);
+    }
+
+    db.close();
+  });
+
+catalog
+  .command("push-catalog")
+  .description("Commit and push catalog.yaml to git remote")
+  .action(async () => {
+    const paths = createPaths();
+    const result = await catalogPushCatalog(paths);
+    if (result.success) {
+      console.log("Catalog pushed to remote.");
+    } else {
+      console.error(`Error: ${result.error}`);
+      process.exit(1);
+    }
+  });
 
 program.parse();

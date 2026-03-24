@@ -1,5 +1,76 @@
 // pai-pkg core types
 
+// ── Catalog types ──────────────────────────────────────────────
+
+/** Artifact types in the catalog */
+export type ArtifactType = "skill" | "agent" | "prompt";
+
+/** Catalog entry type — controls trust level and install behavior */
+export type CatalogEntryType = "builtin" | "community" | "system" | "custom";
+
+/** A single entry in catalog.yaml */
+export interface CatalogEntry {
+  name: string;
+  description: string;
+  source: string;
+  type: CatalogEntryType;
+  has_cli?: boolean;
+  bundle?: boolean;
+  requires?: string[]; // typed refs: "skill:Thinking", "agent:Architect"
+}
+
+/** Default directories for artifact installation */
+export interface CatalogDefaults {
+  skills_dir: string;
+  agents_dir: string;
+  prompts_dir: string;
+}
+
+/** Top-level catalog.yaml structure */
+export interface CatalogConfig {
+  defaults: CatalogDefaults;
+  catalog: {
+    skills: CatalogEntry[];
+    agents: CatalogEntry[];
+    prompts: CatalogEntry[];
+  };
+}
+
+// ── Registry types ────────────────────────────────────────────
+
+/** A registry entry extends CatalogEntry with community metadata */
+export interface RegistryEntry extends CatalogEntry {
+  author: string;
+  status: "shipped" | "beta" | "deprecated";
+  reviewed_by?: string[];
+}
+
+/** Top-level registry.yaml structure */
+export interface RegistryConfig {
+  registry: {
+    skills: RegistryEntry[];
+    agents: RegistryEntry[];
+    prompts: RegistryEntry[];
+  };
+}
+
+/** Resolved source — output of source-resolver */
+export interface ResolvedSource {
+  type: "local" | "github";
+  /** For local: absolute path to the parent directory. For github: clone URL */
+  cloneUrl: string;
+  /** GitHub org (undefined for local) */
+  org?: string;
+  /** GitHub repo name (undefined for local) */
+  repo?: string;
+  /** Git branch (undefined for local) */
+  branch?: string;
+  /** Path within the repo to the parent directory of the referenced file */
+  parentPath: string;
+  /** The filename referenced in the source URL */
+  filename: string;
+}
+
 /** Capability declarations from pai-manifest.yaml */
 export interface Capabilities {
   filesystem?: {
@@ -115,4 +186,8 @@ export interface PaiPaths {
   runtimeDir: string;
   /** PATH-accessible shim directory (~/bin/) */
   shimDir: string;
+  /** Catalog file path (repo-root/catalog.yaml) */
+  catalogPath: string;
+  /** Registry file path (repo-root/registry.yaml) */
+  registryPath: string;
 }
