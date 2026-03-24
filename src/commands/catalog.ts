@@ -454,15 +454,24 @@ async function installSkillEntry(
   entry: CatalogEntry
 ): Promise<EntryInstallResult> {
   const resolved = resolveSource(entry.source);
-  const skillDir = join(paths.skillsDir, entry.name);
+  const isCli = entry.has_cli || entry.bundle;
+  const installDir = join(isCli ? paths.reposDir : paths.skillsDir, entry.name);
+  const skillLinkDir = join(paths.skillsDir, entry.name);
   const isRefresh = getSkill(db, entry.name) !== null;
 
   if (resolved.type === "local") {
-    if (existsSync(skillDir)) {
-      await rm(skillDir, { recursive: true, force: true });
+    // For CLI skills: find the repo root (walk up from skill dir to find pai-manifest.yaml)
+    // For simple skills: just copy the parent dir of SKILL.md
+    let sourceDir = resolved.parentPath;
+    if (isCli) {
+      sourceDir = findRepoRoot(resolved.parentPath);
     }
-    await mkdir(paths.skillsDir, { recursive: true });
-    await cp(resolved.parentPath, skillDir, { recursive: true });
+
+    if (existsSync(installDir)) {
+      await rm(installDir, { recursive: true, force: true });
+    }
+    await mkdir(isCli ? paths.reposDir : paths.skillsDir, { recursive: true });
+    await cp(sourceDir, installDir, { recursive: true });
   } else {
     // GitHub source: clone to temp, extract
     const tmpDir = join(paths.reposDir, `_tmp_${entry.name}_${Date.now()}`);
@@ -487,16 +496,18 @@ async function installSkillEntry(
         };
       }
 
-      const sourceDir =
-        resolved.parentPath === "."
+      // For CLI skills: install the whole repo. For simple skills: just the skill subdir.
+      const sourceDir = isCli
+        ? tmpDir
+        : resolved.parentPath === "."
           ? tmpDir
           : join(tmpDir, resolved.parentPath);
 
-      if (existsSync(skillDir)) {
-        await rm(skillDir, { recursive: true, force: true });
+      if (existsSync(installDir)) {
+        await rm(installDir, { recursive: true, force: true });
       }
-      await mkdir(paths.skillsDir, { recursive: true });
-      await cp(sourceDir, skillDir, { recursive: true });
+      await mkdir(isCli ? paths.reposDir : paths.skillsDir, { recursive: true });
+      await cp(sourceDir, installDir, { recursive: true });
     } finally {
       if (existsSync(tmpDir)) {
         await rm(tmpDir, { recursive: true, force: true });
@@ -504,15 +515,28 @@ async function installSkillEntry(
     }
   }
 
+  // For CLI skills: create symlink from skills dir to repo's skill/ subdir
+  if (isCli) {
+    const skillSubDir = join(installDir, "skill");
+    const symlinkTarget = existsSync(skillSubDir) ? skillSubDir : installDir;
+    if (existsSync(skillLinkDir)) {
+      await rm(skillLinkDir, { recursive: true, force: true });
+    }
+    await createSymlink(symlinkTarget, skillLinkDir);
+  }
+
   // Read manifest if present (security pipeline)
-  const manifest = await readManifest(skillDir);
+  // For CLI skills, manifest is at the repo root (installDir)
+  // For simple skills, manifest might be in the skill dir
+  const manifestDir = isCli ? installDir : skillLinkDir;
+  const manifest = await readManifest(manifestDir);
 
   // CLI tooling: bun install + shims
-  if (entry.has_cli || entry.bundle) {
-    const packageJsonPath = join(skillDir, "package.json");
+  if (isCli) {
+    const packageJsonPath = join(installDir, "package.json");
     if (existsSync(packageJsonPath)) {
       Bun.spawnSync(["bun", "install"], {
-        cwd: skillDir,
+        cwd: installDir,
         stdout: "pipe",
         stderr: "pipe",
       });
@@ -540,8 +564,8 @@ async function installSkillEntry(
       name: entry.name,
       version: manifest?.version ?? "0.0.0",
       repo_url: entry.source,
-      install_path: skillDir,
-      skill_dir: skillDir,
+      install_path: installDir,
+      skill_dir: isCli ? join(installDir, "skill") : installDir,
       status: "active",
       installed_at: now,
       updated_at: now,
@@ -550,6 +574,27 @@ async function installSkillEntry(
   );
 
   return { success: true };
+}
+
+/**
+ * Walk up from a directory to find the repo root (where pai-manifest.yaml or package.json lives).
+ * Falls back to the given dir if nothing found.
+ */
+function findRepoRoot(startDir: string): string {
+  let dir = startDir;
+  for (let i = 0; i < 5; i++) {
+    if (
+      existsSync(join(dir, "pai-manifest.yaml")) ||
+      existsSync(join(dir, "package.json")) ||
+      existsSync(join(dir, ".git"))
+    ) {
+      return dir;
+    }
+    const parent = join(dir, "..");
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return startDir;
 }
 
 async function installAgentEntry(
