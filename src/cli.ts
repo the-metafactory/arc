@@ -20,6 +20,7 @@ import {
   catalogRemove,
   catalogUse,
   catalogSync,
+  catalogPush,
   catalogPushCatalog,
   formatCatalogList,
   formatCatalogSearch,
@@ -46,21 +47,67 @@ program
   .version(pkg.version);
 
 program
-  .command("install <repo-url>")
-  .description("Install a skill from a git repository")
+  .command("install <name-or-url>")
+  .description("Install a skill from git URL, or by name from the registry")
   .option("-y, --yes", "Skip confirmation prompt")
-  .action(async (repoUrl: string, opts: { yes?: boolean }) => {
+  .action(async (nameOrUrl: string, opts: { yes?: boolean }) => {
     const paths = createPaths();
     await ensureDirectories(paths);
     const db = openDatabase(paths.dbPath);
 
-    const result = await install({ paths, db, repoUrl, yes: opts.yes });
+    const isUrl =
+      nameOrUrl.includes("/") ||
+      nameOrUrl.startsWith("git@") ||
+      nameOrUrl.startsWith("http");
 
-    if (result.success) {
-      console.log(`\n✅ Installed ${result.name} v${result.version}`);
+    if (isUrl) {
+      // Direct git install
+      const result = await install({ paths, db, repoUrl: nameOrUrl, yes: opts.yes });
+      if (result.success) {
+        console.log(`\n✅ Installed ${result.name} v${result.version}`);
+      } else {
+        console.error(`\n❌ ${result.error}`);
+        process.exit(1);
+      }
     } else {
-      console.error(`\n❌ ${result.error}`);
-      process.exit(1);
+      // Name-based: search registry → add to catalog → install
+      const registry = await loadRegistry(paths.registryPath);
+      if (!registry) {
+        console.error("❌ No registry.yaml found");
+        process.exit(1);
+      }
+
+      const found = findRegistryEntry(registry, nameOrUrl);
+      if (!found) {
+        console.error(`❌ "${nameOrUrl}" not found in registry. Try: pai-pkg search <keyword>`);
+        process.exit(1);
+      }
+
+      // Add to catalog if not already there
+      const catalogConfig = await loadCatalog(paths.catalogPath);
+      if (!catalogConfig) {
+        console.error("❌ No catalog.yaml found");
+        process.exit(1);
+      }
+
+      try {
+        addFromRegistry(registry, catalogConfig, nameOrUrl);
+        await saveCatalog(paths.catalogPath, catalogConfig);
+        console.log(`Added ${nameOrUrl} to catalog from registry`);
+      } catch {
+        // Already in catalog — that's fine, proceed to install
+      }
+
+      // Install via catalog use
+      const result = await catalogUse(paths, db, nameOrUrl);
+      if (result.success) {
+        for (const item of result.installed!) {
+          console.log(`✅ Installed ${item.name} [${item.artifactType}]`);
+        }
+      } else {
+        console.error(`❌ ${result.error}`);
+        process.exit(1);
+      }
     }
 
     db.close();
@@ -416,6 +463,20 @@ catalog
     }
 
     db.close();
+  });
+
+catalog
+  .command("push <name>")
+  .description("Push local changes to a catalog entry back to its source")
+  .action(async (name: string) => {
+    const paths = createPaths();
+    const result = await catalogPush(paths, name);
+    if (result.success) {
+      console.log(`Pushed ${result.name} back to source`);
+    } else {
+      console.error(`Error: ${result.error}`);
+      process.exit(1);
+    }
   });
 
 catalog

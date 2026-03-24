@@ -16,7 +16,9 @@ import {
   type CatalogListItem,
 } from "../lib/catalog.js";
 import { resolveSource } from "../lib/source-resolver.js";
-import { install } from "./install.js";
+import { readManifest } from "../lib/manifest.js";
+import { recordInstall, getSkill } from "../lib/db.js";
+import { createSymlink, createCliShim, extractCliInfo } from "../lib/symlinks.js";
 
 // ── Result types ──────────────────────────────────────────────
 
@@ -48,6 +50,12 @@ export interface CatalogRemoveResult {
 export interface CatalogUseResult {
   success: boolean;
   installed?: Array<{ name: string; artifactType: ArtifactType }>;
+  error?: string;
+}
+
+export interface CatalogPushResult {
+  success: boolean;
+  name?: string;
   error?: string;
 }
 
@@ -204,6 +212,125 @@ export async function catalogSync(
 }
 
 /**
+ * Push local changes to a catalog entry back to its source.
+ * Local sources: copy back. GitHub sources: clone, overlay, commit, push.
+ */
+export async function catalogPush(
+  paths: PaiPaths,
+  name: string
+): Promise<CatalogPushResult> {
+  const config = await loadCatalog(paths.catalogPath);
+  if (!config) {
+    return { success: false, error: "No catalog.yaml found" };
+  }
+
+  const found = findEntry(config, name);
+  if (!found) {
+    return { success: false, error: `"${name}" not found in catalog` };
+  }
+
+  const { entry, artifactType } = found;
+  const resolved = resolveSource(entry.source);
+
+  // Determine local installed path
+  const localPath =
+    artifactType === "skill"
+      ? join(paths.skillsDir, entry.name)
+      : artifactType === "agent"
+        ? join(
+            config.defaults.agents_dir.replace(/^~/, homedir()),
+            resolved.filename
+          )
+        : join(
+            config.defaults.prompts_dir.replace(/^~/, homedir()),
+            resolved.filename
+          );
+
+  if (!existsSync(localPath)) {
+    return { success: false, error: `${name} is not installed locally` };
+  }
+
+  if (resolved.type === "local") {
+    // Local source: copy back
+    if (artifactType === "skill") {
+      await rm(resolved.parentPath, { recursive: true, force: true });
+      await cp(localPath, resolved.parentPath, { recursive: true });
+    } else {
+      const targetPath = join(resolved.parentPath, resolved.filename);
+      await cp(localPath, targetPath);
+    }
+    return { success: true, name };
+  }
+
+  // GitHub source: clone, overlay, commit, push
+  const tmpDir = join(paths.reposDir, `_push_${name}_${Date.now()}`);
+  try {
+    let cloneResult = Bun.spawnSync(
+      ["git", "clone", "--depth", "1", "--branch", resolved.branch!, resolved.cloneUrl, tmpDir],
+      { stdout: "pipe", stderr: "pipe" }
+    );
+
+    if (cloneResult.exitCode !== 0) {
+      const sshUrl = `git@github.com:${resolved.org}/${resolved.repo}.git`;
+      cloneResult = Bun.spawnSync(
+        ["git", "clone", "--depth", "1", "--branch", resolved.branch!, sshUrl, tmpDir],
+        { stdout: "pipe", stderr: "pipe" }
+      );
+    }
+
+    if (cloneResult.exitCode !== 0) {
+      return { success: false, error: `git clone failed: ${cloneResult.stderr.toString().trim()}` };
+    }
+
+    // Overlay local changes into the clone
+    if (artifactType === "skill") {
+      const targetDir =
+        resolved.parentPath === "."
+          ? tmpDir
+          : join(tmpDir, resolved.parentPath);
+      await rm(targetDir, { recursive: true, force: true });
+      await cp(localPath, targetDir, { recursive: true });
+    } else {
+      const targetFile =
+        resolved.parentPath === "."
+          ? join(tmpDir, resolved.filename)
+          : join(tmpDir, resolved.parentPath, resolved.filename);
+      await cp(localPath, targetFile);
+    }
+
+    // Stage, commit, push
+    const pathInRepo = resolved.parentPath === "." ? "." : resolved.parentPath;
+    Bun.spawnSync(["git", "add", pathInRepo], { cwd: tmpDir, stdout: "pipe", stderr: "pipe" });
+
+    const commitResult = Bun.spawnSync(
+      ["git", "commit", "-m", `pai-pkg: update ${name}`],
+      { cwd: tmpDir, stdout: "pipe", stderr: "pipe" }
+    );
+    if (commitResult.exitCode !== 0) {
+      const msg = commitResult.stderr.toString().trim();
+      if (msg.includes("nothing to commit")) {
+        return { success: true, name }; // no changes to push
+      }
+      return { success: false, error: `git commit failed: ${msg}` };
+    }
+
+    const pushResult = Bun.spawnSync(
+      ["git", "push"],
+      { cwd: tmpDir, stdout: "pipe", stderr: "pipe" }
+    );
+    if (pushResult.exitCode !== 0) {
+      return { success: false, error: `git push failed: ${pushResult.stderr.toString().trim()}` };
+    }
+
+    return { success: true, name };
+  } finally {
+    if (existsSync(tmpDir)) {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  }
+}
+
+/**
  * Commit and push catalog.yaml to git remote.
  */
 export async function catalogPushCatalog(
@@ -327,78 +454,102 @@ async function installSkillEntry(
   entry: CatalogEntry
 ): Promise<EntryInstallResult> {
   const resolved = resolveSource(entry.source);
+  const skillDir = join(paths.skillsDir, entry.name);
+  const isRefresh = getSkill(db, entry.name) !== null;
 
   if (resolved.type === "local") {
-    // Local source: symlink or copy the parent directory
-    const skillLink = join(paths.skillsDir, entry.name);
-    if (existsSync(skillLink)) {
-      // Already installed — refresh by removing and re-copying
-      await rm(skillLink, { recursive: true, force: true });
+    if (existsSync(skillDir)) {
+      await rm(skillDir, { recursive: true, force: true });
     }
     await mkdir(paths.skillsDir, { recursive: true });
-    await cp(resolved.parentPath, skillLink, { recursive: true });
-    return { success: true };
-  }
-
-  // GitHub source: clone and install
-  const tmpDir = join(paths.reposDir, `_tmp_${entry.name}_${Date.now()}`);
-  try {
-    // Try HTTPS first
-    let cloneResult = Bun.spawnSync(
-      ["git", "clone", "--depth", "1", "--branch", resolved.branch!, resolved.cloneUrl, tmpDir],
-      { stdout: "pipe", stderr: "pipe" }
-    );
-
-    // Fallback to SSH if HTTPS fails
-    if (cloneResult.exitCode !== 0) {
-      const sshUrl = `git@github.com:${resolved.org}/${resolved.repo}.git`;
-      cloneResult = Bun.spawnSync(
-        ["git", "clone", "--depth", "1", "--branch", resolved.branch!, sshUrl, tmpDir],
+    await cp(resolved.parentPath, skillDir, { recursive: true });
+  } else {
+    // GitHub source: clone to temp, extract
+    const tmpDir = join(paths.reposDir, `_tmp_${entry.name}_${Date.now()}`);
+    try {
+      let cloneResult = Bun.spawnSync(
+        ["git", "clone", "--depth", "1", "--branch", resolved.branch!, resolved.cloneUrl, tmpDir],
         { stdout: "pipe", stderr: "pipe" }
       );
-    }
 
-    if (cloneResult.exitCode !== 0) {
-      return {
-        success: false,
-        error: `git clone failed: ${cloneResult.stderr.toString().trim()}`,
-      };
-    }
+      if (cloneResult.exitCode !== 0) {
+        const sshUrl = `git@github.com:${resolved.org}/${resolved.repo}.git`;
+        cloneResult = Bun.spawnSync(
+          ["git", "clone", "--depth", "1", "--branch", resolved.branch!, sshUrl, tmpDir],
+          { stdout: "pipe", stderr: "pipe" }
+        );
+      }
 
-    // Extract the parent directory to the skills dir
-    const sourceDir =
-      resolved.parentPath === "."
-        ? tmpDir
-        : join(tmpDir, resolved.parentPath);
+      if (cloneResult.exitCode !== 0) {
+        return {
+          success: false,
+          error: `git clone failed: ${cloneResult.stderr.toString().trim()}`,
+        };
+      }
 
-    const skillLink = join(paths.skillsDir, entry.name);
-    if (existsSync(skillLink)) {
-      await rm(skillLink, { recursive: true, force: true });
-    }
-    await mkdir(paths.skillsDir, { recursive: true });
-    await cp(sourceDir, skillLink, { recursive: true });
+      const sourceDir =
+        resolved.parentPath === "."
+          ? tmpDir
+          : join(tmpDir, resolved.parentPath);
 
-    // If skill has CLI tooling, run full install pipeline
-    if (entry.has_cli || entry.bundle) {
-      // Delegate to the existing install command for CLI-enabled skills
-      // The skill is already in place; install handles bun install + shims
-      const packageJsonPath = join(skillLink, "package.json");
-      if (existsSync(packageJsonPath)) {
-        Bun.spawnSync(["bun", "install"], {
-          cwd: skillLink,
-          stdout: "pipe",
-          stderr: "pipe",
-        });
+      if (existsSync(skillDir)) {
+        await rm(skillDir, { recursive: true, force: true });
+      }
+      await mkdir(paths.skillsDir, { recursive: true });
+      await cp(sourceDir, skillDir, { recursive: true });
+    } finally {
+      if (existsSync(tmpDir)) {
+        await rm(tmpDir, { recursive: true, force: true });
       }
     }
+  }
 
-    return { success: true };
-  } finally {
-    // Cleanup temp clone
-    if (existsSync(tmpDir)) {
-      await rm(tmpDir, { recursive: true, force: true });
+  // Read manifest if present (security pipeline)
+  const manifest = await readManifest(skillDir);
+
+  // CLI tooling: bun install + shims
+  if (entry.has_cli || entry.bundle) {
+    const packageJsonPath = join(skillDir, "package.json");
+    if (existsSync(packageJsonPath)) {
+      Bun.spawnSync(["bun", "install"], {
+        cwd: skillDir,
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+    }
+    if (manifest) {
+      await createCliShim(paths.shimDir, paths.binDir, manifest);
     }
   }
+
+  // Record in DB (update if refresh, insert if new)
+  if (isRefresh) {
+    db.prepare("DELETE FROM skills WHERE name = ?").run(entry.name);
+  }
+  const now = new Date().toISOString();
+  const emptyManifest = {
+    name: entry.name,
+    version: "0.0.0",
+    type: "skill" as const,
+    author: { name: "unknown", github: "unknown" },
+    capabilities: {},
+  };
+  recordInstall(
+    db,
+    {
+      name: entry.name,
+      version: manifest?.version ?? "0.0.0",
+      repo_url: entry.source,
+      install_path: skillDir,
+      skill_dir: skillDir,
+      status: "active",
+      installed_at: now,
+      updated_at: now,
+    },
+    manifest ?? emptyManifest
+  );
+
+  return { success: true };
 }
 
 async function installAgentEntry(

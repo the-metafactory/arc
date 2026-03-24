@@ -2,8 +2,10 @@ import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { join } from "path";
 import { existsSync } from "fs";
 import { mkdir, writeFile } from "fs/promises";
+import YAML from "yaml";
 import { createTestEnv, type TestEnv } from "../helpers/test-env.js";
 import { saveCatalog } from "../../src/lib/catalog.js";
+import { getSkill } from "../../src/lib/db.js";
 import type { CatalogConfig, CatalogEntry } from "../../src/types.js";
 import {
   catalogList,
@@ -60,13 +62,37 @@ function sampleCatalog(root: string): CatalogConfig {
   };
 }
 
-async function createMockSkillDir(root: string, path: string): Promise<void> {
+async function createMockSkillDir(
+  root: string,
+  path: string,
+  opts?: { name?: string; withManifest?: boolean }
+): Promise<void> {
   const dir = join(root, path);
+  const name = opts?.name ?? "MockSkill";
   await mkdir(dir, { recursive: true });
   await writeFile(
     join(dir, "SKILL.md"),
-    "---\nname: MockSkill\n---\n\n# Mock Skill\n"
+    `---\nname: ${name}\n---\n\n# ${name}\n`
   );
+
+  if (opts?.withManifest !== false) {
+    const manifest = {
+      name,
+      version: "1.0.0",
+      type: "skill",
+      author: { name: "testuser", github: "testuser" },
+      capabilities: {
+        filesystem: { read: [], write: [] },
+        network: [],
+        bash: { allowed: false },
+        secrets: [],
+      },
+    };
+    await writeFile(
+      join(dir, "pai-manifest.yaml"),
+      YAML.stringify(manifest)
+    );
+  }
 }
 
 async function createMockAgentFile(
@@ -215,8 +241,8 @@ describe("catalogRemove", () => {
 });
 
 describe("catalogUse", () => {
-  test("installs local skill entry", async () => {
-    await createMockSkillDir(env.root, "mock-skills/Research");
+  test("installs local skill entry and records in DB", async () => {
+    await createMockSkillDir(env.root, "mock-skills/Research", { name: "Research" });
     await saveCatalog(env.paths.catalogPath, sampleCatalog(env.root));
 
     const result = await catalogUse(env.paths, env.db, "Research");
@@ -228,6 +254,13 @@ describe("catalogUse", () => {
     const skillDir = join(env.paths.skillsDir, "Research");
     expect(existsSync(skillDir)).toBe(true);
     expect(existsSync(join(skillDir, "SKILL.md"))).toBe(true);
+
+    // Verify DB record
+    const dbRecord = getSkill(env.db, "Research");
+    expect(dbRecord).not.toBeNull();
+    expect(dbRecord!.name).toBe("Research");
+    expect(dbRecord!.status).toBe("active");
+    expect(dbRecord!.repo_url).toContain("mock-skills/Research/SKILL.md");
   });
 
   test("installs local agent entry", async () => {
@@ -245,8 +278,8 @@ describe("catalogUse", () => {
   });
 
   test("resolves dependencies before installing", async () => {
-    await createMockSkillDir(env.root, "mock-skills/Thinking");
-    await createMockSkillDir(env.root, "mock-skills/Thinking/Council");
+    await createMockSkillDir(env.root, "mock-skills/Thinking", { name: "Thinking" });
+    await createMockSkillDir(env.root, "mock-skills/Thinking/Council", { name: "Council" });
     await saveCatalog(env.paths.catalogPath, sampleCatalog(env.root));
 
     const result = await catalogUse(env.paths, env.db, "Council");
@@ -260,8 +293,22 @@ describe("catalogUse", () => {
     expect(existsSync(join(env.paths.skillsDir, "Council"))).toBe(true);
   });
 
+  test("catalog list shows installed status after use", async () => {
+    await createMockSkillDir(env.root, "mock-skills/Research", { name: "Research" });
+    await saveCatalog(env.paths.catalogPath, sampleCatalog(env.root));
+
+    await catalogUse(env.paths, env.db, "Research");
+
+    const listResult = await catalogList(env.paths, env.db);
+    const researchItem = listResult.items!.find(
+      (i) => i.entry.name === "Research"
+    );
+    expect(researchItem!.installed).toBe(true);
+    expect(researchItem!.status).toBe("active");
+  });
+
   test("refreshes already-installed skill (overwrites)", async () => {
-    await createMockSkillDir(env.root, "mock-skills/Research");
+    await createMockSkillDir(env.root, "mock-skills/Research", { name: "Research" });
     await saveCatalog(env.paths.catalogPath, sampleCatalog(env.root));
 
     // Install first time
