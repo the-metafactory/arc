@@ -6,6 +6,7 @@ import type { InstalledSkill, PaiManifest } from "../types.js";
 export interface InfoResult {
   skill: InstalledSkill | null;
   manifest: PaiManifest | null;
+  releaseNotes: string | null;
   error?: string;
 }
 
@@ -18,12 +19,44 @@ export async function info(
 ): Promise<InfoResult> {
   const skill = getSkill(db, name);
   if (!skill) {
-    return { skill: null, manifest: null, error: `Skill '${name}' is not installed` };
+    return { skill: null, manifest: null, releaseNotes: null, error: `Skill '${name}' is not installed` };
   }
 
   const manifest = await readManifest(skill.install_path);
+  const releaseNotes = await fetchReleaseNotes(skill);
 
-  return { skill, manifest };
+  return { skill, manifest, releaseNotes };
+}
+
+/**
+ * Fetch release notes for the installed version.
+ * Tries: gh release view from the source repo.
+ */
+async function fetchReleaseNotes(skill: InstalledSkill): Promise<string | null> {
+  const tag = `v${skill.version}`;
+
+  // Extract owner/repo from repo_url for gh CLI
+  const ghMatch = skill.repo_url.match(
+    /github\.com[:/]([^/]+)\/([^/.]+)/
+  );
+  if (!ghMatch) return null;
+
+  const nwo = `${ghMatch[1]}/${ghMatch[2]}`;
+
+  try {
+    const result = Bun.spawnSync(
+      ["gh", "release", "view", tag, "--repo", nwo, "--json", "body", "--jq", ".body"],
+      { stdout: "pipe", stderr: "pipe", timeout: 5000 }
+    );
+    if (result.exitCode === 0) {
+      const body = result.stdout.toString().trim();
+      if (body) return body;
+    }
+  } catch {
+    // gh not available or network issue — skip
+  }
+
+  return null;
 }
 
 /**
@@ -61,6 +94,17 @@ export function formatInfo(result: InfoResult): string {
       for (const t of manifest.provides.skill) {
         lines.push(`    - "${t.trigger}"`);
       }
+    }
+  }
+
+  if (result.releaseNotes) {
+    lines.push("");
+    lines.push("  Release Notes:");
+    for (const line of result.releaseNotes.split("\n").slice(0, 15)) {
+      lines.push(`    ${line}`);
+    }
+    if (result.releaseNotes.split("\n").length > 15) {
+      lines.push("    ...(truncated)");
     }
   }
 

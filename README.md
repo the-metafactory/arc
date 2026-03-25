@@ -56,7 +56,7 @@ pai-pkg search doc
 pai-pkg install _DOC
 ```
 
-Requires [Bun](https://bun.sh/) (v1.0+) and Git. See [QUICKSTART.md](QUICKSTART.md) for the full walkthrough.
+Requires [Bun](https://bun.sh/) (v1.0+) and Git. Optional: [GitHub CLI](https://cli.github.com/) (`gh`) for release notes in `pai-pkg info`. See [QUICKSTART.md](QUICKSTART.md) for the full walkthrough.
 
 ---
 
