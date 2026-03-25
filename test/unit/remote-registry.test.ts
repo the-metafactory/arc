@@ -5,7 +5,7 @@ import {
   searchAllSources,
   formatSourcedSearch,
 } from "../../src/lib/remote-registry.js";
-import type { RegistryConfig, SourcesConfig, RegistrySource } from "../../src/types.js";
+import type { RegistryConfig, SourcesConfig } from "../../src/types.js";
 import YAML from "yaml";
 import { join } from "path";
 import { writeFile, mkdir } from "fs/promises";
@@ -22,26 +22,6 @@ function sampleRemoteRegistry(): RegistryConfig {
           author: "remoteauthor",
           source: "https://github.com/remote/skill/blob/main/SKILL.md",
           type: "community",
-          status: "shipped",
-        },
-      ],
-      agents: [],
-      prompts: [],
-      tools: [],
-    },
-  };
-}
-
-function localRegistry(): RegistryConfig {
-  return {
-    registry: {
-      skills: [
-        {
-          name: "LocalSkill",
-          description: "A local fallback skill",
-          author: "localauthor",
-          source: "https://github.com/local/skill/blob/main/SKILL.md",
-          type: "builtin",
           status: "shipped",
         },
       ],
@@ -95,13 +75,7 @@ describe("fetchRemoteRegistry", () => {
 });
 
 describe("searchAllSources", () => {
-  test("falls back to local registry when remotes fail", async () => {
-    // Write local registry
-    await Bun.write(
-      env.paths.registryPath,
-      YAML.stringify(localRegistry())
-    );
-
+  test("returns empty when all remotes fail", async () => {
     const sources: SourcesConfig = {
       sources: [
         {
@@ -115,14 +89,11 @@ describe("searchAllSources", () => {
 
     const results = await searchAllSources(
       sources,
-      "local",
-      env.paths.cachePath,
-      env.paths.registryPath
+      "anything",
+      env.paths.cachePath
     );
 
-    expect(results.length).toBeGreaterThanOrEqual(1);
-    expect(results[0].sourceName).toBe("local");
-    expect(results[0].entry.name).toBe("LocalSkill");
+    expect(results).toHaveLength(0);
   });
 
   test("aggregates from cached sources", async () => {
@@ -161,8 +132,7 @@ describe("searchAllSources", () => {
     const results = await searchAllSources(
       sources,
       "skill",
-      env.paths.cachePath,
-      env.paths.registryPath
+      env.paths.cachePath
     );
 
     expect(results.length).toBe(2);
@@ -196,8 +166,7 @@ describe("searchAllSources", () => {
     const results = await searchAllSources(
       sources,
       "remote",
-      env.paths.cachePath,
-      env.paths.registryPath
+      env.paths.cachePath
     );
 
     // Should not find anything (disabled source skipped, no local fallback since no registry)

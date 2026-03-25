@@ -5,7 +5,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/version-0.1.0-blue" alt="Version: 0.1.0" />
   <img src="https://img.shields.io/badge/status-alpha-orange" alt="Status: Alpha" />
-  <img src="https://img.shields.io/badge/tests-169%20passing-brightgreen" alt="Tests: 169 passing" />
+  <img src="https://img.shields.io/badge/tests-179%20passing-brightgreen" alt="Tests: 179 passing" />
   <img src="https://img.shields.io/badge/runtime-Bun-f472b6" alt="Runtime: Bun" />
   <img src="https://img.shields.io/badge/license-MIT-green" alt="License: MIT" />
   <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey" alt="Platform: macOS | Linux" />
@@ -73,13 +73,15 @@ pai-pkg disable <name>            # Disable (preserves repo)
 pai-pkg enable <name>             # Re-enable a disabled package
 pai-pkg remove <name>             # Completely uninstall
 pai-pkg verify <name>             # Verify integrity
+pai-pkg upgrade --check           # Check for available upgrades
+pai-pkg upgrade                   # Upgrade all packages
+pai-pkg upgrade <name>            # Upgrade a specific package
 ```
 
 ### Discovery
 
 ```bash
 pai-pkg search <keyword>          # Search all configured sources
-pai-pkg search --local <keyword>  # Search local registry only
 ```
 
 ### Source Management
@@ -87,6 +89,7 @@ pai-pkg search --local <keyword>  # Search local registry only
 ```bash
 pai-pkg source list               # Show configured registry sources
 pai-pkg source add <n> <url>      # Add a source (--tier official|community|custom)
+pai-pkg source update             # Refresh indexes from all sources (like apt update)
 pai-pkg source remove <name>      # Remove a source
 ```
 
@@ -262,13 +265,35 @@ capabilities:
 ## Running Tests
 
 ```bash
-bun test                    # All 169 tests
+bun test                    # All 179 tests
 bun test:unit               # Unit tests only
 bun test:commands           # Command tests
 bun test:e2e                # End-to-end lifecycle tests
 ```
 
 Tests run in isolated temp directories — never touch real `~/.claude/` or `~/.config/`.
+
+---
+
+## Versioning
+
+Packages use [semver](https://semver.org/). The canonical version lives in `pai-manifest.yaml`:
+
+```yaml
+version: 1.2.0
+```
+
+**Convention:** bump the version, commit, tag the commit:
+
+```bash
+# After updating pai-manifest.yaml version to 1.2.0
+git tag v1.2.0
+git push origin v1.2.0
+```
+
+Tags must match the manifest version (tag `v1.2.0` ↔ manifest `version: 1.2.0`).
+
+Registry entries include a `version` field to advertise the latest available version. `pai-pkg upgrade --check` compares installed versions against registry versions. Pinned installs (`pai-pkg install MySkill@1.2.0`) are planned for a future release.
 
 ---
 

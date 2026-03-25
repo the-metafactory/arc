@@ -43,6 +43,7 @@ export interface CatalogConfig {
 /** A registry entry extends CatalogEntry with community metadata */
 export interface RegistryEntry extends CatalogEntry {
   author: string;
+  version?: string;
   status: "shipped" | "beta" | "deprecated";
   reviewed_by?: string[];
 }

@@ -14,6 +14,13 @@ import { verify, formatVerify } from "./commands/verify.js";
 import { init } from "./commands/init.js";
 import { upgradeCore, formatUpgrade } from "./commands/upgrade-core.js";
 import {
+  checkUpgrades,
+  upgradePackage,
+  upgradeAll,
+  formatCheckResults,
+  formatUpgradeResults,
+} from "./commands/upgrade.js";
+import {
   catalogList,
   catalogSearch,
   catalogAdd,
@@ -25,15 +32,8 @@ import {
   formatCatalogList,
   formatCatalogSearch,
 } from "./commands/catalog.js";
-import type { CatalogEntry, ArtifactType } from "../types.js";
-import {
-  loadRegistry,
-  searchRegistry,
-  findRegistryEntry,
-  addFromRegistry,
-  formatRegistrySearch,
-} from "./lib/registry.js";
-import { loadCatalog, saveCatalog } from "./lib/catalog.js";
+import type { CatalogEntry, ArtifactType, PackageTier } from "../types.js";
+import { loadCatalog, saveCatalog, findEntry } from "./lib/catalog.js";
 import {
   loadSources,
   saveSources,
@@ -43,9 +43,10 @@ import {
 } from "./lib/sources.js";
 import {
   searchAllSources,
+  findInAllSources,
+  updateAllSources,
   formatSourcedSearch,
 } from "./lib/remote-registry.js";
-import type { RegistrySource, PackageTier } from "../types.js";
 import { homedir } from "os";
 import { join } from "path";
 
@@ -82,40 +83,28 @@ program
         process.exit(1);
       }
     } else {
-      // Name-based: search registry → add to catalog → install
-      const registry = await loadRegistry(paths.registryPath);
-      if (!registry) {
-        console.error("❌ No registry.yaml found");
-        process.exit(1);
-      }
+      // Name-based: search all configured sources → install
+      const sources = await loadSources(paths.sourcesPath);
+      const found = await findInAllSources(sources, nameOrUrl, paths.cachePath);
 
-      const found = findRegistryEntry(registry, nameOrUrl);
       if (!found) {
-        console.error(`❌ "${nameOrUrl}" not found in registry. Try: pai-pkg search <keyword>`);
+        console.error(`❌ "${nameOrUrl}" not found in any source. Try: pai-pkg search <keyword>`);
         process.exit(1);
       }
 
-      // Add to catalog if not already there
-      const catalogConfig = await loadCatalog(paths.catalogPath);
-      if (!catalogConfig) {
-        console.error("❌ No catalog.yaml found");
-        process.exit(1);
-      }
+      console.log(`Found ${nameOrUrl} [${found.artifactType}] in ${found.sourceName} [${found.sourceTier}]`);
 
-      try {
-        addFromRegistry(registry, catalogConfig, nameOrUrl);
-        await saveCatalog(paths.catalogPath, catalogConfig);
-        console.log(`Added ${nameOrUrl} to catalog from registry`);
-      } catch {
-        // Already in catalog — that's fine, proceed to install
-      }
-
-      // Install via catalog use
-      const result = await catalogUse(paths, db, nameOrUrl);
+      // Install directly from the source URL
+      const result = await install({
+        paths,
+        db,
+        repoUrl: found.entry.source,
+        yes: opts.yes,
+        sourceName: found.sourceName,
+        sourceTier: found.sourceTier,
+      });
       if (result.success) {
-        for (const item of result.installed!) {
-          console.log(`✅ Installed ${item.name} [${item.artifactType}]`);
-        }
+        console.log(`✅ Installed ${result.name} v${result.version}`);
       } else {
         console.error(`❌ ${result.error}`);
         process.exit(1);
@@ -224,6 +213,50 @@ program
   });
 
 program
+  .command("upgrade [name]")
+  .description("Upgrade installed packages to latest version")
+  .option("--check", "Only check for available upgrades, don't install")
+  .action(async (name: string | undefined, opts: { check?: boolean }) => {
+    const paths = createPaths();
+    await ensureDirectories(paths);
+    const db = openDatabase(paths.dbPath);
+
+    if (opts.check || !name) {
+      // Check mode or upgrade-all: first show what's available
+      const checks = await checkUpgrades(db, paths);
+
+      if (opts.check) {
+        console.log(formatCheckResults(checks));
+      } else {
+        // No name = upgrade all
+        const upgradable = checks.filter((c) => c.upgradable);
+        if (!upgradable.length) {
+          console.log("All packages are up to date.");
+        } else {
+          console.log(`Upgrading ${upgradable.length} package(s)...\n`);
+          const results = await upgradeAll(db, paths);
+          console.log(formatUpgradeResults(results));
+        }
+      }
+    } else {
+      // Upgrade specific package
+      const result = await upgradePackage(db, paths, name);
+      if (result.success) {
+        if (result.oldVersion === result.newVersion) {
+          console.log(`${result.name} is already at ${result.oldVersion}`);
+        } else {
+          console.log(`${result.name}: ${result.oldVersion} → ${result.newVersion}`);
+        }
+      } else {
+        console.error(`${result.error}`);
+        process.exit(1);
+      }
+    }
+
+    db.close();
+  });
+
+program
   .command("init <name>")
   .description("Scaffold a new skill, tool, agent, or prompt repo")
   .option("-d, --dir <path>", "Target directory")
@@ -323,28 +356,10 @@ program
 program
   .command("search <keyword>")
   .description("Search all configured sources for skills, agents, and prompts")
-  .option("--local", "Search local registry only")
-  .action(async (keyword: string, opts: { local?: boolean }) => {
+  .action(async (keyword: string) => {
     const paths = createPaths();
-
-    if (opts.local) {
-      const registry = await loadRegistry(paths.registryPath);
-      if (!registry) {
-        console.error("Error: No registry.yaml found");
-        process.exit(1);
-      }
-      const results = searchRegistry(registry, keyword);
-      console.log(formatRegistrySearch(results));
-      return;
-    }
-
     const sources = await loadSources(paths.sourcesPath);
-    const results = await searchAllSources(
-      sources,
-      keyword,
-      paths.cachePath,
-      paths.registryPath
-    );
+    const results = await searchAllSources(sources, keyword, paths.cachePath);
     console.log(formatSourcedSearch(results));
   });
 
@@ -383,6 +398,23 @@ source
     } catch (err: any) {
       console.error(`Error: ${err.message}`);
       process.exit(1);
+    }
+  });
+
+source
+  .command("update")
+  .description("Refresh cached package indexes from all sources (like apt update)")
+  .action(async () => {
+    const paths = createPaths();
+    const sources = await loadSources(paths.sourcesPath);
+    const results = await updateAllSources(sources, paths.cachePath);
+
+    for (const r of results) {
+      if (r.status === "ok") {
+        console.log(`  ${r.name}: ${r.count} packages`);
+      } else {
+        console.error(`  ${r.name}: failed`);
+      }
     }
   });
 
@@ -455,30 +487,50 @@ catalog
       const paths = createPaths();
 
       if (opts.fromRegistry) {
-        // Copy from registry
-        const registry = await loadRegistry(paths.registryPath);
-        if (!registry) {
-          console.error("Error: No registry.yaml found");
+        // Search all configured sources for the named package
+        const sources = await loadSources(paths.sourcesPath);
+        const found = await findInAllSources(sources, name, paths.cachePath);
+
+        if (!found) {
+          console.error(`Error: "${name}" not found in any configured source`);
           process.exit(1);
         }
+
         const catalogConfig = await loadCatalog(paths.catalogPath);
         if (!catalogConfig) {
           console.error("Error: No catalog.yaml found");
           process.exit(1);
         }
 
-        try {
-          const { entry, artifactType } = addFromRegistry(
-            registry,
-            catalogConfig,
-            name
-          );
-          await saveCatalog(paths.catalogPath, catalogConfig);
-          console.log(`Added ${entry.name} [${artifactType}] to catalog from registry`);
-        } catch (err: any) {
-          console.error(`Error: ${err.message}`);
+        // Check if already in catalog
+        if (findEntry(catalogConfig, name)) {
+          console.error(`Error: "${name}" already exists in your catalog`);
           process.exit(1);
         }
+
+        // Strip registry-specific fields to create a CatalogEntry
+        const catalogEntry: CatalogEntry = {
+          name: found.entry.name,
+          description: found.entry.description,
+          source: found.entry.source,
+          type: found.entry.type,
+          ...(found.entry.has_cli ? { has_cli: true } : {}),
+          ...(found.entry.bundle ? { bundle: true } : {}),
+          ...(found.entry.requires?.length ? { requires: found.entry.requires } : {}),
+        };
+
+        const section =
+          found.artifactType === "skill"
+            ? catalogConfig.catalog.skills
+            : found.artifactType === "agent"
+              ? catalogConfig.catalog.agents
+              : found.artifactType === "tool"
+                ? catalogConfig.catalog.tools
+                : catalogConfig.catalog.prompts;
+
+        section.push(catalogEntry);
+        await saveCatalog(paths.catalogPath, catalogConfig);
+        console.log(`Added ${found.entry.name} [${found.artifactType}] to catalog from ${found.sourceName}`);
       } else {
         // Manual add — source and desc required
         if (!opts.source || !opts.desc) {

@@ -11,7 +11,7 @@ import type {
   RegistryEntry,
   PackageTier,
 } from "../types.js";
-import { loadRegistry, searchRegistry } from "./registry.js";
+import { loadRegistry, searchRegistry, findRegistryEntry } from "./registry.js";
 
 const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
 
@@ -34,14 +34,37 @@ async function isCacheFresh(
   }
 }
 
+/**
+ * Fetch a registry from a source URL.
+ * Supports https:// (remote) and file:// (local private registries).
+ * Caches remote results for CACHE_TTL_MS. Local files are always read fresh.
+ */
 export async function fetchRemoteRegistry(
   source: RegistrySource,
-  cachePath: string
+  cachePath: string,
+  forceRefresh?: boolean
 ): Promise<RegistryConfig | null> {
-  // Check cache first
+  // Local file source — read directly, no caching
+  if (source.url.startsWith("file://")) {
+    const filePath = source.url.replace("file://", "");
+    try {
+      const content = await readFile(filePath, "utf-8");
+      const parsed = YAML.parse(content) as RegistryConfig;
+      if (!parsed?.registry) return null;
+      parsed.registry.skills ??= [];
+      parsed.registry.agents ??= [];
+      parsed.registry.prompts ??= [];
+      parsed.registry.tools ??= [];
+      return parsed;
+    } catch {
+      return null;
+    }
+  }
+
+  // Remote source — check cache first
   const cached = join(cachePath, cacheFileName(source));
 
-  if (await isCacheFresh(cachePath, source)) {
+  if (!forceRefresh && (await isCacheFresh(cachePath, source))) {
     try {
       const content = await readFile(cached, "utf-8");
       const parsed = YAML.parse(content) as RegistryConfig;
@@ -91,22 +114,21 @@ export async function fetchRemoteRegistry(
   }
 }
 
+/**
+ * Search across all enabled sources (like `apt-cache search`).
+ */
 export async function searchAllSources(
   sources: SourcesConfig,
   keyword: string,
-  cachePath: string,
-  localRegistryPath: string
+  cachePath: string
 ): Promise<SourcedSearchResult[]> {
   const results: SourcedSearchResult[] = [];
   const enabledSources = sources.sources.filter((s) => s.enabled);
-  let anyRemoteSucceeded = false;
 
-  // Fetch from all enabled remote sources in parallel
   const fetches = enabledSources.map(async (source) => {
     const registry = await fetchRemoteRegistry(source, cachePath);
     if (!registry) return;
 
-    anyRemoteSucceeded = true;
     const matches = searchRegistry(registry, keyword);
     for (const m of matches) {
       results.push({
@@ -119,20 +141,59 @@ export async function searchAllSources(
   });
 
   await Promise.all(fetches);
+  return results;
+}
 
-  // Fallback to local registry if all remotes failed
-  if (!anyRemoteSucceeded) {
-    const local = await loadRegistry(localRegistryPath);
-    if (local) {
-      const matches = searchRegistry(local, keyword);
-      for (const m of matches) {
-        results.push({
-          entry: m.entry,
-          artifactType: m.artifactType,
-          sourceName: "local",
-          sourceTier: "official" as PackageTier,
-        });
-      }
+/**
+ * Find a specific package by exact name across all sources (like `apt-cache show`).
+ */
+export async function findInAllSources(
+  sources: SourcesConfig,
+  name: string,
+  cachePath: string
+): Promise<SourcedSearchResult | null> {
+  const enabledSources = sources.sources.filter((s) => s.enabled);
+
+  const fetches = enabledSources.map(async (source) => {
+    const registry = await fetchRemoteRegistry(source, cachePath);
+    if (!registry) return null;
+
+    const found = findRegistryEntry(registry, name);
+    if (!found) return null;
+
+    return {
+      entry: found.entry,
+      artifactType: found.artifactType,
+      sourceName: source.name,
+      sourceTier: source.tier,
+    } as SourcedSearchResult;
+  });
+
+  const results = await Promise.all(fetches);
+  return results.find((r) => r !== null) ?? null;
+}
+
+/**
+ * Force-refresh all source caches (like `apt update`).
+ */
+export async function updateAllSources(
+  sources: SourcesConfig,
+  cachePath: string
+): Promise<Array<{ name: string; status: "ok" | "failed"; count?: number }>> {
+  const enabledSources = sources.sources.filter((s) => s.enabled);
+  const results: Array<{ name: string; status: "ok" | "failed"; count?: number }> = [];
+
+  for (const source of enabledSources) {
+    const registry = await fetchRemoteRegistry(source, cachePath, true);
+    if (registry) {
+      const count =
+        registry.registry.skills.length +
+        registry.registry.agents.length +
+        registry.registry.prompts.length +
+        registry.registry.tools.length;
+      results.push({ name: source.name, status: "ok", count });
+    } else {
+      results.push({ name: source.name, status: "failed" });
     }
   }
 

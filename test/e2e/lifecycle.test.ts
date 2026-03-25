@@ -426,8 +426,7 @@ describe("Full lifecycle: install → list → info → audit → disable → en
     const docResults = await searchAllSources(
       sources,
       "doc",
-      env.paths.cachePath,
-      env.paths.registryPath
+      env.paths.cachePath
     );
     expect(docResults.length).toBe(1);
     expect(docResults[0].entry.name).toBe("_DOC");
@@ -439,8 +438,7 @@ describe("Full lifecycle: install → list → info → audit → disable → en
     const agentResults = await searchAllSources(
       sources,
       "architect",
-      env.paths.cachePath,
-      env.paths.registryPath
+      env.paths.cachePath
     );
     expect(agentResults.length).toBe(1);
     expect(agentResults[0].entry.name).toBe("CustomArchitect");
