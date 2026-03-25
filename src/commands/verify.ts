@@ -72,7 +72,14 @@ export async function verify(
       stdout: "pipe",
       stderr: "pipe",
     });
-    const isClean = result.stdout.toString().trim() === "";
+    // Filter out expected untracked files from bun install
+    const ignored = /^(\?\? |..)?(node_modules\/|bun\.lock|\.DS_Store)$/;
+    const dirtyLines = result.stdout
+      .toString()
+      .trim()
+      .split("\n")
+      .filter((l) => l && !ignored.test(l));
+    const isClean = dirtyLines.length === 0;
     checks.push({
       check: "Git repo clean",
       passed: isClean,

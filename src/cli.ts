@@ -291,6 +291,12 @@ program
         process.exit(1);
       }
 
+      // Sanitize name — prevent path traversal
+      if (/[\/\\]|\.\./.test(name)) {
+        console.error(`\n❌ Invalid name "${name}". Name must not contain path separators or "..".`);
+        process.exit(1);
+      }
+
       const prefix = `pai-${artifactType}`;
       const targetDir =
         opts.dir ??
