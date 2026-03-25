@@ -55,6 +55,7 @@ function sampleRegistry(): RegistryConfig {
         },
       ],
       prompts: [],
+      tools: [],
     },
   };
 }
@@ -65,11 +66,13 @@ function emptyCatalog(): CatalogConfig {
       skills_dir: "~/.claude/skills/",
       agents_dir: "~/.claude/agents/",
       prompts_dir: "~/.claude/commands/",
+      tools_dir: "~/.claude/bin/",
     },
     catalog: {
       skills: [],
       agents: [],
       prompts: [],
+      tools: [],
     },
   };
 }

@@ -22,10 +22,18 @@ export function openDatabase(dbPath: string): Database {
       install_path TEXT NOT NULL,
       skill_dir TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'active',
+      artifact_type TEXT NOT NULL DEFAULT 'skill',
       installed_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
   `);
+
+  // Migration: add artifact_type column to existing databases
+  try {
+    db.exec(`ALTER TABLE skills ADD COLUMN artifact_type TEXT NOT NULL DEFAULT 'skill'`);
+  } catch {
+    // Column already exists — expected for new or already-migrated databases
+  }
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS capabilities (
@@ -52,8 +60,8 @@ export function recordInstall(
   const now = new Date().toISOString();
 
   const insertSkill = db.prepare(`
-    INSERT INTO skills (name, version, repo_url, install_path, skill_dir, status, installed_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO skills (name, version, repo_url, install_path, skill_dir, status, artifact_type, installed_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   insertSkill.run(
@@ -63,6 +71,7 @@ export function recordInstall(
     skill.install_path,
     skill.skill_dir,
     skill.status,
+    skill.artifact_type || "skill",
     skill.installed_at || now,
     skill.updated_at || now
   );

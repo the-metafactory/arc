@@ -2,6 +2,7 @@ defaults:
   skills_dir: ~/.claude/skills/
   agents_dir: ~/.claude/agents/
   prompts_dir: ~/.claude/commands/
+  tools_dir: ~/.claude/bin/
 catalog:
   skills:
     - name: Research
@@ -42,3 +43,4 @@ catalog:
       source: https://github.com/danielmiessler/pai/blob/main/agents/Pentester.md
       type: builtin
   prompts: []
+  tools: []

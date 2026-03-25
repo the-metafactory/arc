@@ -21,6 +21,7 @@ function sampleCatalog(): CatalogConfig {
       skills_dir: "~/.claude/skills/",
       agents_dir: "~/.claude/agents/",
       prompts_dir: "~/.claude/commands/",
+      tools_dir: "~/.claude/bin/",
     },
     catalog: {
       skills: [
@@ -53,6 +54,7 @@ function sampleCatalog(): CatalogConfig {
         },
       ],
       prompts: [],
+      tools: [],
     },
   };
 }
@@ -96,10 +98,12 @@ describe("loadCatalog", () => {
   skills_dir: ~/.claude/skills/
   agents_dir: ~/.claude/agents/
   prompts_dir: ~/.claude/commands/
+  tools_dir: ~/.claude/bin/
 catalog:
   skills: null
   agents: null
   prompts: null
+  tools: null
 `
     );
     const config = await loadCatalog(env.paths.catalogPath);
@@ -107,6 +111,7 @@ catalog:
     expect(config!.catalog.skills).toEqual([]);
     expect(config!.catalog.agents).toEqual([]);
     expect(config!.catalog.prompts).toEqual([]);
+    expect(config!.catalog.tools).toEqual([]);
   });
 });
 

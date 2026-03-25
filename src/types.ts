@@ -3,7 +3,7 @@
 // ── Catalog types ──────────────────────────────────────────────
 
 /** Artifact types in the catalog */
-export type ArtifactType = "skill" | "agent" | "prompt";
+export type ArtifactType = "skill" | "agent" | "prompt" | "tool";
 
 /** Catalog entry type — controls trust level and install behavior */
 export type CatalogEntryType = "builtin" | "community" | "system" | "custom";
@@ -24,6 +24,7 @@ export interface CatalogDefaults {
   skills_dir: string;
   agents_dir: string;
   prompts_dir: string;
+  tools_dir: string;
 }
 
 /** Top-level catalog.yaml structure */
@@ -33,6 +34,7 @@ export interface CatalogConfig {
     skills: CatalogEntry[];
     agents: CatalogEntry[];
     prompts: CatalogEntry[];
+    tools: CatalogEntry[];
   };
 }
 
@@ -117,7 +119,7 @@ export interface SkillTrigger {
 export interface PaiManifest {
   name: string;
   version: string;
-  type: "skill" | "system";
+  type: "skill" | "system" | "tool";
   tier?: "official" | "custom" | "community";
   author: {
     name: string;
@@ -135,7 +137,7 @@ export interface PaiManifest {
   capabilities: Capabilities;
 }
 
-/** Installed skill record in packages.db */
+/** Installed package record in packages.db (skills and tools) */
 export interface InstalledSkill {
   name: string;
   version: string;
@@ -143,6 +145,7 @@ export interface InstalledSkill {
   install_path: string;
   skill_dir: string;
   status: "active" | "disabled";
+  artifact_type: ArtifactType;
   installed_at: string;
   updated_at: string;
 }

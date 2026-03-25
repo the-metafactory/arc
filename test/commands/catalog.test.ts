@@ -26,6 +26,7 @@ function sampleCatalog(root: string): CatalogConfig {
       skills_dir: join(root, ".claude", "skills") + "/",
       agents_dir: join(root, ".claude", "agents") + "/",
       prompts_dir: join(root, ".claude", "commands") + "/",
+      tools_dir: join(root, ".claude", "bin") + "/",
     },
     catalog: {
       skills: [
@@ -58,6 +59,7 @@ function sampleCatalog(root: string): CatalogConfig {
         },
       ],
       prompts: [],
+      tools: [],
     },
   };
 }

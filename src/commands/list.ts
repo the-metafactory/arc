@@ -19,19 +19,28 @@ export function list(db: Database): ListResult {
  */
 export function formatList(result: ListResult): string {
   if (result.skills.length === 0) {
-    return "No skills installed.";
+    return "No packages installed.";
   }
 
-  const lines: string[] = [
-    `Installed skills (${result.skills.length}):`,
-    "",
-  ];
+  const skills = result.skills.filter((s) => s.artifact_type !== "tool");
+  const tools = result.skills.filter((s) => s.artifact_type === "tool");
+  const lines: string[] = [];
 
-  for (const s of result.skills) {
-    const statusBadge = s.status === "active" ? "✅" : "⏸️";
-    lines.push(
-      `  ${statusBadge} ${s.name} v${s.version} [${s.status}]`
-    );
+  if (skills.length > 0) {
+    lines.push(`Installed skills (${skills.length}):`, "");
+    for (const s of skills) {
+      const statusBadge = s.status === "active" ? "✅" : "⏸️";
+      lines.push(`  ${statusBadge} ${s.name} v${s.version} [${s.status}]`);
+    }
+  }
+
+  if (tools.length > 0) {
+    if (skills.length > 0) lines.push("");
+    lines.push(`Installed tools (${tools.length}):`, "");
+    for (const t of tools) {
+      const statusBadge = t.status === "active" ? "✅" : "⏸️";
+      lines.push(`  ${statusBadge} ${t.name} v${t.version} [${t.status}]`);
+    }
   }
 
   return lines.join("\n");

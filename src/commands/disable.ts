@@ -27,17 +27,26 @@ export async function disable(
     return { success: false, error: `Skill '${name}' is already disabled` };
   }
 
-  // Remove skill symlink
-  const skillLink = join(paths.skillsDir, name);
-  await removeSymlink(skillLink);
+  const isTool = skill.artifact_type === "tool";
 
-  // Remove bin symlink if it exists
-  const binName = name.replace(/^_/, "").toLowerCase();
-  const binLink = join(paths.binDir, binName);
-  await removeSymlink(binLink);
+  if (isTool) {
+    // Tools: remove bin symlink
+    const binLink = join(paths.binDir, name);
+    await removeSymlink(binLink);
+  } else {
+    // Skills: remove skill symlink
+    const skillLink = join(paths.skillsDir, name);
+    await removeSymlink(skillLink);
+
+    // Remove bin symlink if it exists (skills with CLI)
+    const binName = name.replace(/^_/, "").toLowerCase();
+    const binLink = join(paths.binDir, binName);
+    await removeSymlink(binLink);
+  }
 
   // Remove CLI shim from PATH
-  await removeCliShim(paths.shimDir, binName);
+  const shimName = isTool ? name.toLowerCase() : name.replace(/^_/, "").toLowerCase();
+  await removeCliShim(paths.shimDir, shimName);
 
   // Update database
   updateSkillStatus(db, name, "disabled");

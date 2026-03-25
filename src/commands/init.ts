@@ -10,12 +10,13 @@ export interface InitResult {
 }
 
 /**
- * Scaffold a new skill repo directory.
+ * Scaffold a new skill or tool repo directory.
  */
 export async function init(
   targetDir: string,
   name: string,
-  author?: string
+  author?: string,
+  isTool?: boolean
 ): Promise<InitResult> {
   if (existsSync(targetDir)) {
     return {
@@ -27,13 +28,50 @@ export async function init(
   const authorName = author ?? "username";
   const skillName = name.startsWith("_") ? name : name;
   const files: string[] = [];
+  const prefix = isTool ? "pai-tool" : "pai-skill";
+  const lowerName = skillName.replace(/^_/, "").toLowerCase();
 
-  // Create directory structure
-  await mkdir(join(targetDir, "skill", "workflows"), { recursive: true });
-  await mkdir(join(targetDir, "src", "lib"), { recursive: true });
+  if (isTool) {
+    // Tool structure: flat, no skill/ subdirectory
+    await mkdir(join(targetDir, "lib"), { recursive: true });
+  } else {
+    // Skill structure: skill/ subdirectory with workflows
+    await mkdir(join(targetDir, "skill", "workflows"), { recursive: true });
+    await mkdir(join(targetDir, "src", "lib"), { recursive: true });
+  }
 
   // pai-manifest.yaml
-  const manifestContent = `# pai-manifest.yaml — PAI capability declaration
+  const manifestContent = isTool
+    ? `# pai-manifest.yaml — PAI capability declaration
+name: ${skillName}
+version: 1.0.0
+type: tool
+tier: custom
+
+author:
+  name: ${authorName}
+  github: ${authorName}
+
+provides:
+  cli:
+    - command: "bun ${lowerName}.ts"
+      name: "${lowerName}"
+
+depends_on:
+  tools:
+    - name: bun
+      version: ">=1.0.0"
+
+capabilities:
+  filesystem:
+    read: []
+    write: []
+  network: []
+  bash:
+    allowed: false
+  secrets: []
+`
+    : `# pai-manifest.yaml — PAI capability declaration
 # Schema: pai-pkg DESIGN.md §2 (pai-manifest.yaml)
 
 name: ${skillName}
@@ -47,7 +85,7 @@ author:
 
 provides:
   skill:
-    - trigger: "${skillName.replace(/^_/, "").toLowerCase()}"
+    - trigger: "${lowerName}"
   # cli:
   #   - command: "bun src/tool.ts"
 
@@ -69,8 +107,21 @@ capabilities:
   await Bun.write(join(targetDir, "pai-manifest.yaml"), manifestContent);
   files.push("pai-manifest.yaml");
 
-  // SKILL.md
-  const skillMdContent = `---
+  if (isTool) {
+    // Tool entry point
+    const toolContent = `#!/usr/bin/env bun
+
+/**
+ * ${skillName} — PAI tool
+ */
+
+console.log("${skillName} tool");
+`;
+    await Bun.write(join(targetDir, `${lowerName}.ts`), toolContent);
+    files.push(`${lowerName}.ts`);
+  } else {
+    // SKILL.md
+    const skillMdContent = `---
 name: ${skillName}
 description: |
   [Describe what this skill does]
@@ -89,11 +140,11 @@ description: |
 | [trigger] | \`Workflows/Main.md\` |
 `;
 
-  await Bun.write(join(targetDir, "skill", "SKILL.md"), skillMdContent);
-  files.push("skill/SKILL.md");
+    await Bun.write(join(targetDir, "skill", "SKILL.md"), skillMdContent);
+    files.push("skill/SKILL.md");
 
-  // Workflow template
-  const workflowContent = `# Main Workflow
+    // Workflow template
+    const workflowContent = `# Main Workflow
 
 ## Steps
 
@@ -101,17 +152,18 @@ description: |
 2. [Step 2]
 `;
 
-  await Bun.write(
-    join(targetDir, "skill", "workflows", "Main.md"),
-    workflowContent
-  );
-  files.push("skill/workflows/Main.md");
+    await Bun.write(
+      join(targetDir, "skill", "workflows", "Main.md"),
+      workflowContent
+    );
+    files.push("skill/workflows/Main.md");
+  }
 
   // package.json
   const packageJson = {
-    name: `pai-skill-${skillName.replace(/^_/, "").toLowerCase()}`,
+    name: `${prefix}-${lowerName}`,
     version: "1.0.0",
-    description: `PAI ${skillName} Skill`,
+    description: `PAI ${skillName} ${isTool ? "Tool" : "Skill"}`,
     type: "module",
     scripts: {
       test: "bun test",
@@ -126,22 +178,45 @@ description: |
   files.push("package.json");
 
   // README.md
-  const readmeContent = `# ${skillName}
+  const readmeContent = isTool
+    ? `# ${skillName}
+
+PAI tool — [brief description].
+
+## Setup
+
+\`\`\`bash
+pai-pkg install ${prefix}-${lowerName}
+\`\`\`
+
+## Manual Setup
+
+\`\`\`bash
+git clone [repo-url] ~/Developer/${prefix}-${lowerName}/
+cd ~/Developer/${prefix}-${lowerName}/
+bun install
+\`\`\`
+
+## License
+
+MIT
+`
+    : `# ${skillName}
 
 PAI skill — [brief description].
 
 ## Setup
 
 \`\`\`bash
-git clone [repo-url] ~/Developer/pai-skill-${skillName.replace(/^_/, "").toLowerCase()}/
-cd ~/Developer/pai-skill-${skillName.replace(/^_/, "").toLowerCase()}/
+git clone [repo-url] ~/Developer/${prefix}-${lowerName}/
+cd ~/Developer/${prefix}-${lowerName}/
 bun install
 \`\`\`
 
 ## Integration
 
 \`\`\`bash
-ln -sfn ~/Developer/pai-skill-${skillName.replace(/^_/, "").toLowerCase()}/skill ~/.claude/skills/${skillName}
+ln -sfn ~/Developer/${prefix}-${lowerName}/skill ~/.claude/skills/${skillName}
 \`\`\`
 
 ## License

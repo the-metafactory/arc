@@ -213,13 +213,15 @@ program
 
 program
   .command("init <name>")
-  .description("Scaffold a new skill repo")
+  .description("Scaffold a new skill or tool repo")
   .option("-d, --dir <path>", "Target directory")
   .option("-a, --author <name>", "Author GitHub username")
-  .action(async (name: string, opts: { dir?: string; author?: string }) => {
+  .option("--tool", "Scaffold a tool instead of a skill")
+  .action(async (name: string, opts: { dir?: string; author?: string; tool?: boolean }) => {
+    const prefix = opts.tool ? "pai-tool" : "pai-skill";
     const targetDir =
-      opts.dir ?? `./${`pai-skill-${name.replace(/^_/, "").toLowerCase()}`}`;
-    const result = await init(targetDir, name, opts.author);
+      opts.dir ?? `./${`${prefix}-${name.replace(/^_/, "").toLowerCase()}`}`;
+    const result = await init(targetDir, name, opts.author, opts.tool);
 
     if (result.success) {
       console.log(`\n✅ Scaffolded skill at ${result.path}`);
@@ -330,7 +332,7 @@ catalog
   .option("-s, --source <url>", "Source URL or path (manual mode)")
   .option("-d, --desc <description>", "Description (manual mode)")
   .option("-t, --type <type>", "Entry type (builtin|community|system|custom)", "custom")
-  .option("--artifact <type>", "Artifact type (skill|agent|prompt)", "skill")
+  .option("--artifact <type>", "Artifact type (skill|agent|prompt|tool)", "skill")
   .option("--has-cli", "Skill provides CLI tooling")
   .option("--bundle", "Skill is a spec-flow bundle")
   .action(

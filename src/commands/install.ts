@@ -103,25 +103,34 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
     }
   }
 
-  // 4. Create skill symlink
-  const skillSourceDir = join(installPath, "skill");
-  const skillLinkPath = join(paths.skillsDir, manifest.name);
+  // 4. Create symlinks based on artifact type
+  const isTool = manifest.type === "tool";
 
-  if (existsSync(skillSourceDir)) {
-    await createSymlink(skillSourceDir, skillLinkPath);
-  } else {
-    // Some skills might have SKILL.md at root
-    await createSymlink(installPath, skillLinkPath);
-  }
-
-  // 5. Create bin symlink if CLI declared
-  const cliInfo = extractCliInfo(manifest);
-  if (cliInfo) {
-    const binLinkPath = join(paths.binDir, cliInfo.binName);
+  if (isTool) {
+    // Tools: symlink repo root to binDir (no skill/ subdirectory)
+    const binLinkPath = join(paths.binDir, manifest.name);
     await createSymlink(installPath, binLinkPath);
 
-    // 5b. Create PATH-accessible shim
+    // Create PATH-accessible shim
     await createCliShim(paths.shimDir, paths.binDir, manifest);
+  } else {
+    // Skills: symlink skill/ subdirectory (or root) to skillsDir
+    const skillSourceDir = join(installPath, "skill");
+    const skillLinkPath = join(paths.skillsDir, manifest.name);
+
+    if (existsSync(skillSourceDir)) {
+      await createSymlink(skillSourceDir, skillLinkPath);
+    } else {
+      await createSymlink(installPath, skillLinkPath);
+    }
+
+    // Create bin symlink if CLI declared (skills with CLI)
+    const cliInfo = extractCliInfo(manifest);
+    if (cliInfo) {
+      const binLinkPath = join(paths.binDir, cliInfo.binName);
+      await createSymlink(installPath, binLinkPath);
+      await createCliShim(paths.shimDir, paths.binDir, manifest);
+    }
   }
 
   // 6. Run bun install if package.json exists
@@ -136,6 +145,7 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
 
   // 7. Record in database
   const now = new Date().toISOString();
+  const skillSourceDir = isTool ? installPath : join(installPath, "skill");
   recordInstall(
     db,
     {
@@ -143,8 +153,9 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
       version: manifest.version,
       repo_url: repoUrl,
       install_path: installPath,
-      skill_dir: skillSourceDir,
+      skill_dir: isTool ? installPath : skillSourceDir,
       status: "active",
+      artifact_type: isTool ? "tool" : "skill",
       installed_at: now,
       updated_at: now,
     },

@@ -65,6 +65,6 @@ describe("list command", () => {
     expect(result.skills.length).toBe(0);
 
     const output = formatList(result);
-    expect(output).toContain("No skills installed");
+    expect(output).toContain("No packages installed");
   });
 });

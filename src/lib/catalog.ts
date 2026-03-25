@@ -30,6 +30,7 @@ export async function loadCatalog(
     parsed.catalog.skills ??= [];
     parsed.catalog.agents ??= [];
     parsed.catalog.prompts ??= [];
+    parsed.catalog.tools ??= [];
 
     return parsed;
   } catch (err: any) {
@@ -70,6 +71,9 @@ export function findEntry(
   for (const entry of config.catalog.prompts) {
     if (entry.name === name) return { entry, artifactType: "prompt" };
   }
+  for (const entry of config.catalog.tools) {
+    if (entry.name === name) return { entry, artifactType: "tool" };
+  }
   return null;
 }
 
@@ -87,6 +91,7 @@ export function searchCatalog(
     { entries: config.catalog.skills, type: "skill" },
     { entries: config.catalog.agents, type: "agent" },
     { entries: config.catalog.prompts, type: "prompt" },
+    { entries: config.catalog.tools, type: "tool" },
   ];
 
   for (const { entries, type } of sections) {
@@ -124,6 +129,7 @@ export function listCatalog(
     { entries: config.catalog.skills, type: "skill" },
     { entries: config.catalog.agents, type: "agent" },
     { entries: config.catalog.prompts, type: "prompt" },
+    { entries: config.catalog.tools, type: "tool" },
   ];
 
   for (const { entries, type } of sections) {
@@ -161,7 +167,9 @@ export function addEntry(
       ? config.catalog.skills
       : artifactType === "agent"
         ? config.catalog.agents
-        : config.catalog.prompts;
+        : artifactType === "tool"
+          ? config.catalog.tools
+          : config.catalog.prompts;
 
   section.push(entry);
 }
@@ -177,6 +185,7 @@ export function removeEntry(
     config.catalog.skills,
     config.catalog.agents,
     config.catalog.prompts,
+    config.catalog.tools,
   ]) {
     const idx = section.findIndex((e) => e.name === name);
     if (idx !== -1) {

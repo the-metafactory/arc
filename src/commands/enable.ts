@@ -29,26 +29,38 @@ export async function enable(
     return { success: false, error: `Skill '${name}' is already active` };
   }
 
-  // Re-create skill symlink
-  const skillSourceDir = join(skill.install_path, "skill");
-  const skillLinkPath = join(paths.skillsDir, name);
-
-  if (existsSync(skillSourceDir)) {
-    await createSymlink(skillSourceDir, skillLinkPath);
-  } else {
-    await createSymlink(skill.install_path, skillLinkPath);
-  }
-
-  // Re-create bin symlink and CLI shim if CLI declared
+  const isTool = skill.artifact_type === "tool";
   const manifest = await readManifest(skill.install_path);
-  if (manifest?.provides?.cli?.length) {
-    const binName =
-      manifest.provides.cli[0].name ??
-      name.replace(/^_/, "").toLowerCase();
-    const binLinkPath = join(paths.binDir, binName);
+
+  if (isTool) {
+    // Tools: re-create bin symlink (repo root to binDir)
+    const binLinkPath = join(paths.binDir, name);
     await createSymlink(skill.install_path, binLinkPath);
 
-    await createCliShim(paths.shimDir, paths.binDir, manifest);
+    // Re-create CLI shim
+    if (manifest) {
+      await createCliShim(paths.shimDir, paths.binDir, manifest);
+    }
+  } else {
+    // Skills: re-create skill symlink
+    const skillSourceDir = join(skill.install_path, "skill");
+    const skillLinkPath = join(paths.skillsDir, name);
+
+    if (existsSync(skillSourceDir)) {
+      await createSymlink(skillSourceDir, skillLinkPath);
+    } else {
+      await createSymlink(skill.install_path, skillLinkPath);
+    }
+
+    // Re-create bin symlink and CLI shim if CLI declared
+    if (manifest?.provides?.cli?.length) {
+      const binName =
+        manifest.provides.cli[0].name ??
+        name.replace(/^_/, "").toLowerCase();
+      const binLinkPath = join(paths.binDir, binName);
+      await createSymlink(skill.install_path, binLinkPath);
+      await createCliShim(paths.shimDir, paths.binDir, manifest);
+    }
   }
 
   // Update database
