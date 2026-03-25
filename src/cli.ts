@@ -13,6 +13,7 @@ import { remove } from "./commands/remove.js";
 import { verify, formatVerify } from "./commands/verify.js";
 import { init } from "./commands/init.js";
 import { upgradeCore, formatUpgrade } from "./commands/upgrade-core.js";
+import { selfUpdate, formatSelfUpdate } from "./commands/self-update.js";
 import {
   checkUpgrades,
   upgradePackage,
@@ -351,6 +352,15 @@ program
       if (!result.success) process.exit(1);
     }
   );
+
+program
+  .command("self-update")
+  .description("Update pai-pkg itself (git pull + bun install)")
+  .action(async () => {
+    const result = await selfUpdate();
+    console.log(formatSelfUpdate(result));
+    if (!result.success) process.exit(1);
+  });
 
 // ── Registry search (top-level) ─────────────────────────────
 
