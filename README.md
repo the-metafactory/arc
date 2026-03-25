@@ -45,14 +45,15 @@ pai-pkg handles all four PAI artifact types:
 ## Quick Start
 
 ```bash
-# Install
+# Install pai-pkg
 git clone https://github.com/mellanon/pai-pkg.git
 cd pai-pkg && bun install && bun link
 
-# Search the community registry
-pai-pkg search doc
+# Fetch the community registry
+pai-pkg source update
 
-# Install a skill
+# Search and install
+pai-pkg search doc
 pai-pkg install _DOC
 ```
 
@@ -67,15 +68,23 @@ Requires [Bun](https://bun.sh/) (v1.0+) and Git. Optional: [GitHub CLI](https://
 ```bash
 pai-pkg install <name-or-url>     # Install from registry or git URL
 pai-pkg list                      # List installed packages
-pai-pkg info <name>               # Show details and capabilities
-pai-pkg audit                     # Audit total capability surface
+pai-pkg info <name>               # Show details, capabilities, and release notes
+pai-pkg audit                     # Audit capability surface (summary + cross-tier warnings)
+pai-pkg audit --verbose           # Full pairwise capability combination list
 pai-pkg disable <name>            # Disable (preserves repo)
 pai-pkg enable <name>             # Re-enable a disabled package
 pai-pkg remove <name>             # Completely uninstall
-pai-pkg verify <name>             # Verify integrity
-pai-pkg upgrade --check           # Check for available upgrades
+pai-pkg verify <name>             # Verify manifest integrity
+```
+
+### Upgrades
+
+```bash
+pai-pkg upgrade --check           # Check for available upgrades (compares against registry)
 pai-pkg upgrade                   # Upgrade all packages
 pai-pkg upgrade <name>            # Upgrade a specific package
+pai-pkg self-update               # Update pai-pkg itself (git pull + bun install)
+pai-pkg upgrade-core <version>    # Upgrade PAI core (symlink management)
 ```
 
 ### Discovery
@@ -93,6 +102,21 @@ pai-pkg source update             # Refresh indexes from all sources (like apt u
 pai-pkg source remove <name>      # Remove a source
 ```
 
+### Catalog
+
+The catalog is a local `catalog.yaml` tracking available PAI artifacts (built-in skills, agents). It complements the registry — the registry is for community-published packages, the catalog is for known artifacts you may want to install.
+
+```bash
+pai-pkg catalog list              # List catalog with install status
+pai-pkg catalog search <keyword>  # Search catalog by name or description
+pai-pkg catalog add <name>        # Add entry (--from-registry to pull from sources)
+pai-pkg catalog remove <name>     # Remove entry from catalog
+pai-pkg catalog use <name>        # Install from catalog (resolves deps)
+pai-pkg catalog sync              # Re-pull all installed catalog entries
+pai-pkg catalog push <name>       # Push local changes back to source
+pai-pkg catalog push-catalog      # Commit and push catalog.yaml to git remote
+```
+
 ### Scaffolding
 
 ```bash
@@ -102,50 +126,51 @@ pai-pkg init my-agent --type agent
 pai-pkg init my-prompt --type prompt
 ```
 
-### Catalog
-
-```bash
-pai-pkg catalog list              # List catalog with install status
-pai-pkg catalog use <name>        # Install from catalog (resolves deps)
-pai-pkg catalog sync              # Re-pull all installed catalog entries
-```
+Each scaffold includes `pai-manifest.yaml`, `package.json`, `README.md`, `.gitignore`, and type-specific files (SKILL.md + workflows, agent persona, prompt template, or tool entry point).
 
 ---
 
 ## How It Works
 
 ```
-    Community Registry              pai-pkg                    Your Machine
-    ──────────────────              ───────                    ────────────
-           │                           │                           │
-           │  REGISTRY.yaml            │                           │
-           │  (skills, tools,          │                           │
-           │   agents, prompts)        │                           │
-           │◄──────────────────────────│  search "doc"             │
-           │                           │                           │
-           │  source: github.com/...   │                           │
-           │──────────────────────────►│                           │
-           │                           │                           │
-           │                           │  git clone → repos/       │
-           │                           │──────────────────────────►│
-           │                           │                           │
-           │                           │  read pai-manifest.yaml   │
-           │                           │  display capabilities     │
-           │                           │  user confirms            │
-           │                           │                           │
-           │                           │  symlink → skills/        │
-           │                           │  record in packages.db    │
-           │                           │──────────────────────────►│
-           │                           │                           │
+  sources.yaml             Registry Sources              pai-pkg                  Your Machine
+  ────────────             ────────────────              ───────                  ────────────
+       │                          │                         │                         │
+       │  pai-collab (community)  │                         │                         │
+       │  personal (custom)       │                         │                         │
+       │─────────────────────────►│                         │                         │
+       │                          │                         │                         │
+       │                          │  source update          │                         │
+       │                          │  (fetch REGISTRY.yaml)  │                         │
+       │                          │◄────────────────────────│                         │
+       │                          │                         │                         │
+       │                          │  cached indexes         │                         │
+       │                          │────────────────────────►│  search "doc"           │
+       │                          │                         │  (queries cached files)  │
+       │                          │                         │                         │
+       │                          │                         │  install _DOC           │
+       │                          │                         │  → git clone            │
+       │                          │                         │─────────────────────────►
+       │                          │                         │                         │
+       │                          │                         │  read pai-manifest.yaml │
+       │                          │                         │  display capabilities   │
+       │                          │                         │  user confirms          │
+       │                          │                         │                         │
+       │                          │                         │  symlink → skills/      │
+       │                          │                         │  record in packages.db  │
+       │                          │                         │─────────────────────────►
+       │                          │                         │                         │
 ```
 
 **The flow:**
-1. `pai-pkg search` queries cached registry files from configured sources
-2. `pai-pkg install` clones the source repo via git
-3. Reads `pai-manifest.yaml` — the capability declaration
-4. Displays capabilities and risk level for user approval
-5. Creates symlinks to the appropriate Claude directory
-6. Records metadata in SQLite (`packages.db`)
+1. `pai-pkg source update` fetches REGISTRY.yaml from each source in `sources.yaml` and caches locally
+2. `pai-pkg search` queries the cached indexes across all enabled sources
+3. `pai-pkg install` resolves the package from the registry, clones the source repo via git
+4. Reads `pai-manifest.yaml` — the capability declaration
+5. Displays capabilities and risk level for user approval
+6. Creates symlinks to the appropriate Claude directory
+7. For tools: runs `bun install` and creates CLI shim on PATH
+8. Records metadata in SQLite (`packages.db`)
 
 No npm. No Docker. Just git clone, symlinks, and a manifest.
 
@@ -168,6 +193,7 @@ Add additional sources:
 
 ```bash
 pai-pkg source add my-team https://raw.githubusercontent.com/my-org/registry/main/REGISTRY.yaml --tier community
+pai-pkg source update            # Fetch indexes from all sources
 ```
 
 Search aggregates results across all enabled sources, showing the source name and trust tier for each match.
@@ -202,7 +228,14 @@ capabilities:
   secrets: ["JIRA_URL", "JIRA_API_TOKEN"]
 ```
 
-`pai-pkg audit` shows your total attack surface across all installed packages — network domains, secrets, filesystem access, bash permissions.
+### Audit
+
+`pai-pkg audit` shows your total attack surface and detects dangerous capability compositions across installed packages:
+
+- **Summary mode** (default): grouped composition stats + cross-tier warnings only
+- **Verbose mode** (`--verbose`): full pairwise list of all capability combination warnings
+
+Cross-tier warnings surface when a community package's capabilities combine dangerously with your personal packages — the actually interesting signals. Same-tier combinations (your own skills) are summarized as expected.
 
 ---
 
@@ -265,7 +298,7 @@ capabilities:
 ## Running Tests
 
 ```bash
-bun test                    # All 179 tests
+bun test                    # All 180 tests
 bun test:unit               # Unit tests only
 bun test:commands           # Command tests
 bun test:e2e                # End-to-end lifecycle tests
@@ -283,15 +316,20 @@ Packages use [semver](https://semver.org/). The canonical version lives in `pai-
 version: 1.2.0
 ```
 
-**Convention:** bump the version, commit, tag the commit:
+**Convention:** bump the version, tag the commit, create a GitHub Release:
 
 ```bash
 # After updating pai-manifest.yaml version to 1.2.0
 git tag v1.2.0
 git push origin v1.2.0
+gh release create v1.2.0 --title "v1.2.0" --notes "## What Changed
+- Added new workflow for X
+- Fixed Y bug in Z"
 ```
 
 Tags must match the manifest version (tag `v1.2.0` ↔ manifest `version: 1.2.0`).
+
+GitHub Releases are the changelog — no separate CHANGELOG.md needed. `pai-pkg info` fetches and displays release notes directly via the `gh` CLI.
 
 Registry entries include a `version` field to advertise the latest available version. `pai-pkg upgrade --check` compares installed versions against registry versions. Pinned installs (`pai-pkg install MySkill@1.2.0`) are planned for a future release.
 
@@ -305,6 +343,7 @@ To add your package to a community registry, see the [pai-collab publishing guid
 - Public GitHub repo with `pai-manifest.yaml`
 - All capabilities honestly declared
 - License file (MIT, Apache-2.0, BSD-2-Clause, BSD-3-Clause)
+- Git tag + GitHub Release matching the manifest version
 - Open a PR adding your entry to the registry's `REGISTRY.yaml`
 
 ---
