@@ -1,4 +1,4 @@
-import { symlink, unlink, readlink, lstat, mkdir, writeFile, chmod } from "fs/promises";
+import { symlink, unlink, readlink, lstat, mkdir, writeFile, chmod, rename } from "fs/promises";
 import { join, dirname, basename } from "path";
 import type { PaiManifest } from "../types.js";
 
@@ -15,6 +15,12 @@ export async function createSymlink(
   try {
     const stat = await lstat(linkPath);
     if (stat.isSymbolicLink()) {
+      await unlink(linkPath);
+    } else if (stat.isDirectory()) {
+      // Back up existing directory (e.g., manually-installed skill being replaced by pai-pkg)
+      const backupPath = linkPath + ".pre-pai-pkg";
+      await rename(linkPath, backupPath);
+    } else if (stat.isFile()) {
       await unlink(linkPath);
     }
   } catch (err: any) {

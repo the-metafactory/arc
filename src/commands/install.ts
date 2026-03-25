@@ -80,6 +80,11 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
     }
   }
 
+  // Clean up stale clone from a previous failed install
+  if (existsSync(installPath)) {
+    Bun.spawnSync(["rm", "-rf", installPath], { stdout: "pipe", stderr: "pipe" });
+  }
+
   const cloneResult = Bun.spawnSync(["git", "clone", repoUrl, installPath], {
     stdout: "pipe",
     stderr: "pipe",
