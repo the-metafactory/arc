@@ -13,7 +13,7 @@ import { remove } from "./commands/remove.js";
 import { verify, formatVerify } from "./commands/verify.js";
 import { init } from "./commands/init.js";
 import { upgradeCore, formatUpgrade } from "./commands/upgrade-core.js";
-import { selfUpdate, formatSelfUpdate } from "./commands/self-update.js";
+import { selfUpdate, formatSelfUpdate, checkSelfUpdate, formatSelfUpdateCheck } from "./commands/self-update.js";
 import {
   checkUpgrades,
   upgradePackage,
@@ -228,6 +228,10 @@ program
       const checks = await checkUpgrades(db, paths);
 
       if (opts.check) {
+        // Also check if pai-pkg itself has an update
+        const selfCheck = checkSelfUpdate();
+        const selfMsg = formatSelfUpdateCheck(selfCheck);
+        if (selfMsg) console.log(selfMsg + "\n");
         console.log(formatCheckResults(checks));
       } else {
         // No name = upgrade all

@@ -72,6 +72,84 @@ export async function selfUpdate(): Promise<SelfUpdateResult> {
   return { success: true, oldVersion, newVersion };
 }
 
+export interface SelfUpdateCheck {
+  currentVersion: string;
+  latestVersion: string | null;
+  updateAvailable: boolean;
+}
+
+/**
+ * Check if a newer version of pai-pkg is available.
+ * Compares local package.json against the latest GitHub Release tag.
+ */
+export function checkSelfUpdate(): SelfUpdateCheck {
+  const pkgRoot = join(import.meta.dir, "..", "..");
+  const pkgJsonPath = join(pkgRoot, "package.json");
+
+  let currentVersion: string;
+  try {
+    const raw = require(pkgJsonPath);
+    currentVersion = raw.version;
+  } catch {
+    return { currentVersion: "unknown", latestVersion: null, updateAvailable: false };
+  }
+
+  // Check latest release tag via gh CLI
+  try {
+    const result = Bun.spawnSync(
+      ["gh", "release", "view", "--repo", "mellanon/pai-pkg", "--json", "tagName", "--jq", ".tagName"],
+      { stdout: "pipe", stderr: "pipe", timeout: 5000 }
+    );
+    if (result.exitCode === 0) {
+      const tag = result.stdout.toString().trim().replace(/^v/, "");
+      if (tag) {
+        const pa = currentVersion.split(".").map(Number);
+        const pb = tag.split(".").map(Number);
+        let newer = false;
+        for (let i = 0; i < 3; i++) {
+          if ((pa[i] ?? 0) < (pb[i] ?? 0)) { newer = true; break; }
+          if ((pa[i] ?? 0) > (pb[i] ?? 0)) break;
+        }
+        return { currentVersion, latestVersion: tag, updateAvailable: newer };
+      }
+    }
+  } catch {
+    // gh not available — skip
+  }
+
+  // Fallback: check if local git has newer commits on remote
+  try {
+    Bun.spawnSync(["git", "fetch", "--quiet"], {
+      cwd: pkgRoot,
+      stdout: "pipe",
+      stderr: "pipe",
+      timeout: 5000,
+    });
+    const result = Bun.spawnSync(
+      ["git", "rev-list", "HEAD..@{u}", "--count"],
+      { cwd: pkgRoot, stdout: "pipe", stderr: "pipe" }
+    );
+    if (result.exitCode === 0) {
+      const count = parseInt(result.stdout.toString().trim(), 10);
+      if (count > 0) {
+        return { currentVersion, latestVersion: null, updateAvailable: true };
+      }
+    }
+  } catch {
+    // git not available or no remote — skip
+  }
+
+  return { currentVersion, latestVersion: null, updateAvailable: false };
+}
+
+export function formatSelfUpdateCheck(check: SelfUpdateCheck): string {
+  if (!check.updateAvailable) return "";
+  if (check.latestVersion) {
+    return `pai-pkg update available: v${check.currentVersion} → v${check.latestVersion} (run \`pai-pkg self-update\`)`;
+  }
+  return `pai-pkg update available (run \`pai-pkg self-update\`)`;
+}
+
 export function formatSelfUpdate(result: SelfUpdateResult): string {
   if (!result.success) {
     return `Self-update failed: ${result.error}`;
