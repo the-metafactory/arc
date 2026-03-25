@@ -8,6 +8,8 @@ pai-pkg search security               # Search across all tiers
 pai-pkg publish ./my-skill            # Share your skill
 ```
 
+**New here?** Start with the [Quickstart Guide](QUICKSTART.md) — zero to installing skills in 5 minutes.
+
 ## Setup
 
 ```bash
@@ -23,10 +25,11 @@ bun link
 pai-pkg --version
 ```
 
-### Available Commands (Phase 1)
+### Available Commands
 
 ```bash
-pai-pkg install <git-url>     # Install a skill from a git repo
+# Package management
+pai-pkg install <name-or-url> # Install from registry or git URL
 pai-pkg list                  # List installed skills
 pai-pkg info <name>           # Show skill details and capabilities
 pai-pkg audit                 # Audit total capability surface
@@ -35,15 +38,61 @@ pai-pkg enable <name>         # Re-enable a disabled skill
 pai-pkg remove <name>         # Completely uninstall a skill
 pai-pkg verify <name>         # Verify integrity of installed skill
 pai-pkg init <name>           # Scaffold a new skill repo
-pai-pkg upgrade-core <ver>    # Upgrade PAI core version (symlink management)
+pai-pkg upgrade-core <ver>    # Upgrade PAI core version
+
+# Discovery (multi-source)
+pai-pkg search <keyword>      # Search all configured sources
+pai-pkg search --local <kw>   # Search local registry only
+
+# Source management (apt-get style)
+pai-pkg source list           # Show configured registry sources
+pai-pkg source add <n> <url>  # Add a new source (--tier official|community|custom)
+pai-pkg source remove <name>  # Remove a registry source
+
+# Catalog
+pai-pkg catalog list          # List catalog with install status
+pai-pkg catalog use <name>    # Install from catalog (resolves deps)
+pai-pkg catalog sync          # Re-pull all installed catalog entries
 ```
+
+### Multi-Source Registry
+
+pai-pkg supports multiple registry sources, similar to apt-get's sources.list. Each source points to a `REGISTRY.yaml` hosted on GitHub (or any raw URL).
+
+```yaml
+# ~/.config/pai/sources.yaml (auto-created on first run)
+sources:
+  - name: pai-collab
+    url: https://raw.githubusercontent.com/mellanon/pai-collab/main/skills/REGISTRY.yaml
+    tier: community
+    enabled: true
+```
+
+Add additional sources:
+
+```bash
+pai-pkg source add miessler-hub https://raw.githubusercontent.com/danielmiessler/pai/main/REGISTRY.yaml --tier official
+pai-pkg source add jcfischer-tools https://raw.githubusercontent.com/jcfischer/pai-tools/main/REGISTRY.yaml --tier community
+```
+
+`pai-pkg search` aggregates results across all enabled sources, showing the source name and trust tier for each match.
+
+### Trust Tiers
+
+Trust flows from the **source**, not the package:
+
+| Tier | Behavior | Example |
+|------|----------|---------|
+| **official** | Auto-approves, minimal display | Daniel Miessler's upstream PAI |
+| **community** | Shows capabilities, requires confirmation | pai-collab, jcfischer's tools |
+| **custom** | Shows risk warning, full capability review | Unknown/personal sources |
 
 ### Running Tests
 
 ```bash
-bun test                      # All 64 tests
-bun test:unit                 # Unit tests (db, manifest, paths)
-bun test:commands             # Command tests (install, list, audit, etc.)
+bun test                      # All tests
+bun test:unit                 # Unit tests
+bun test:commands             # Command tests
 bun test:e2e                  # End-to-end lifecycle test
 ```
 

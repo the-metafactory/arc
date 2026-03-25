@@ -2,6 +2,8 @@ import { join } from "path";
 import { existsSync } from "fs";
 import { mkdir } from "fs/promises";
 
+export type ArtifactInitType = "skill" | "tool" | "agent" | "prompt";
+
 export interface InitResult {
   success: boolean;
   path?: string;
@@ -10,13 +12,13 @@ export interface InitResult {
 }
 
 /**
- * Scaffold a new skill or tool repo directory.
+ * Scaffold a new skill, tool, agent, or prompt repo directory.
  */
 export async function init(
   targetDir: string,
   name: string,
   author?: string,
-  isTool?: boolean
+  type: ArtifactInitType = "skill"
 ): Promise<InitResult> {
   if (existsSync(targetDir)) {
     return {
@@ -26,24 +28,30 @@ export async function init(
   }
 
   const authorName = author ?? "username";
-  const skillName = name.startsWith("_") ? name : name;
   const files: string[] = [];
-  const prefix = isTool ? "pai-tool" : "pai-skill";
-  const lowerName = skillName.replace(/^_/, "").toLowerCase();
+  const prefix = `pai-${type}`;
+  const lowerName = name.replace(/^_/, "").toLowerCase();
 
-  if (isTool) {
-    // Tool structure: flat, no skill/ subdirectory
+  // ── Directory structure ──────────────────────────────────────────────────
+
+  if (type === "tool") {
     await mkdir(join(targetDir, "lib"), { recursive: true });
-  } else {
-    // Skill structure: skill/ subdirectory with workflows
+  } else if (type === "skill") {
     await mkdir(join(targetDir, "skill", "workflows"), { recursive: true });
     await mkdir(join(targetDir, "src", "lib"), { recursive: true });
+  } else if (type === "agent") {
+    await mkdir(join(targetDir, "agent"), { recursive: true });
+  } else if (type === "prompt") {
+    await mkdir(join(targetDir, "prompt"), { recursive: true });
   }
 
-  // pai-manifest.yaml
-  const manifestContent = isTool
-    ? `# pai-manifest.yaml — PAI capability declaration
-name: ${skillName}
+  // ── pai-manifest.yaml ───────────────────────────────────────────────────
+
+  let manifestContent: string;
+
+  if (type === "tool") {
+    manifestContent = `# pai-manifest.yaml — PAI capability declaration
+name: ${name}
 version: 1.0.0
 type: tool
 tier: custom
@@ -70,11 +78,12 @@ capabilities:
   bash:
     allowed: false
   secrets: []
-`
-    : `# pai-manifest.yaml — PAI capability declaration
+`;
+  } else if (type === "skill") {
+    manifestContent = `# pai-manifest.yaml — PAI capability declaration
 # Schema: pai-pkg DESIGN.md §2 (pai-manifest.yaml)
 
-name: ${skillName}
+name: ${name}
 version: 1.0.0
 type: skill
 tier: custom
@@ -103,33 +112,75 @@ capabilities:
     allowed: false
   secrets: []
 `;
+  } else if (type === "agent") {
+    manifestContent = `# pai-manifest.yaml — PAI capability declaration
+name: ${name}
+version: 1.0.0
+type: agent
+tier: custom
+
+author:
+  name: ${authorName}
+  github: ${authorName}
+
+capabilities:
+  filesystem:
+    read:
+      - agent/
+  network: []
+  bash:
+    allowed: false
+  secrets: []
+`;
+  } else {
+    // prompt
+    manifestContent = `# pai-manifest.yaml — PAI capability declaration
+name: ${name}
+version: 1.0.0
+type: prompt
+tier: custom
+
+author:
+  name: ${authorName}
+  github: ${authorName}
+
+capabilities:
+  filesystem:
+    read: []
+    write: []
+  network: []
+  bash:
+    allowed: false
+  secrets: []
+`;
+  }
 
   await Bun.write(join(targetDir, "pai-manifest.yaml"), manifestContent);
   files.push("pai-manifest.yaml");
 
-  if (isTool) {
-    // Tool entry point
+  // ── Type-specific files ─────────────────────────────────────────────────
+
+  if (type === "tool") {
     const toolContent = `#!/usr/bin/env bun
 
 /**
- * ${skillName} — PAI tool
+ * ${name} — PAI tool
  */
 
-console.log("${skillName} tool");
+console.log("${name} tool");
 `;
     await Bun.write(join(targetDir, `${lowerName}.ts`), toolContent);
     files.push(`${lowerName}.ts`);
-  } else {
-    // SKILL.md
+  } else if (type === "skill") {
     const skillMdContent = `---
-name: ${skillName}
+name: ${name}
 description: |
   [Describe what this skill does]
 
   USE WHEN user says "[trigger phrase]"
 ---
 
-# ${skillName}
+# ${name}
 
 [Instructions for the AI agent]
 
@@ -139,11 +190,9 @@ description: |
 |---------|----------|
 | [trigger] | \`Workflows/Main.md\` |
 `;
-
     await Bun.write(join(targetDir, "skill", "SKILL.md"), skillMdContent);
     files.push("skill/SKILL.md");
 
-    // Workflow template
     const workflowContent = `# Main Workflow
 
 ## Steps
@@ -151,19 +200,86 @@ description: |
 1. [Step 1]
 2. [Step 2]
 `;
-
     await Bun.write(
       join(targetDir, "skill", "workflows", "Main.md"),
       workflowContent
     );
     files.push("skill/workflows/Main.md");
+  } else if (type === "agent") {
+    const agentMdContent = `---
+name: ${name}
+description: "[Describe what this agent does]"
+model: sonnet
+
+persona:
+  name: "${name}"
+  title: "[Agent title or role]"
+  background: |
+    [Describe the agent's background, expertise, and personality]
+---
+
+# ${name}
+
+[Detailed instructions for how this agent should behave]
+
+## Capabilities
+
+- [Capability 1]
+- [Capability 2]
+
+## Constraints
+
+- [Constraint 1]
+- [Constraint 2]
+`;
+    await Bun.write(join(targetDir, "agent", `${lowerName}.md`), agentMdContent);
+    files.push(`agent/${lowerName}.md`);
+  } else if (type === "prompt") {
+    const promptMdContent = `---
+name: ${name}
+description: "[Describe what this prompt does]"
+version: 1.0.0
+---
+
+# ${name}
+
+## System
+
+[System-level instructions or context for the model]
+
+## User Template
+
+[The prompt template. Use {{variable}} for placeholders.]
+
+## Variables
+
+| Variable | Description | Required |
+|----------|-------------|----------|
+| {{variable}} | [Description] | yes |
+
+## Example
+
+**Input:**
+\`\`\`
+[Example input]
+\`\`\`
+
+**Output:**
+\`\`\`
+[Expected output]
+\`\`\`
+`;
+    await Bun.write(join(targetDir, "prompt", `${lowerName}.md`), promptMdContent);
+    files.push(`prompt/${lowerName}.md`);
   }
 
-  // package.json
+  // ── package.json ────────────────────────────────────────────────────────
+
+  const typeLabel = type.charAt(0).toUpperCase() + type.slice(1);
   const packageJson = {
     name: `${prefix}-${lowerName}`,
     version: "1.0.0",
-    description: `PAI ${skillName} ${isTool ? "Tool" : "Skill"}`,
+    description: `PAI ${name} ${typeLabel}`,
     type: "module",
     scripts: {
       test: "bun test",
@@ -177,9 +293,12 @@ description: |
   );
   files.push("package.json");
 
-  // README.md
-  const readmeContent = isTool
-    ? `# ${skillName}
+  // ── README.md ───────────────────────────────────────────────────────────
+
+  let readmeContent: string;
+
+  if (type === "tool") {
+    readmeContent = `# ${name}
 
 PAI tool — [brief description].
 
@@ -200,8 +319,9 @@ bun install
 ## License
 
 MIT
-`
-    : `# ${skillName}
+`;
+  } else if (type === "skill") {
+    readmeContent = `# ${name}
 
 PAI skill — [brief description].
 
@@ -216,18 +336,63 @@ bun install
 ## Integration
 
 \`\`\`bash
-ln -sfn ~/Developer/${prefix}-${lowerName}/skill ~/.claude/skills/${skillName}
+ln -sfn ~/Developer/${prefix}-${lowerName}/skill ~/.claude/skills/${name}
 \`\`\`
 
 ## License
 
 MIT
 `;
+  } else if (type === "agent") {
+    readmeContent = `# ${name}
+
+PAI agent — [brief description].
+
+## Setup
+
+\`\`\`bash
+git clone [repo-url] ~/Developer/${prefix}-${lowerName}/
+\`\`\`
+
+## Integration
+
+\`\`\`bash
+ln -sfn ~/Developer/${prefix}-${lowerName}/agent ~/.claude/agents/${name}
+\`\`\`
+
+## License
+
+MIT
+`;
+  } else {
+    // prompt
+    readmeContent = `# ${name}
+
+PAI prompt — [brief description].
+
+## Setup
+
+\`\`\`bash
+git clone [repo-url] ~/Developer/${prefix}-${lowerName}/
+\`\`\`
+
+## Integration
+
+\`\`\`bash
+ln -sfn ~/Developer/${prefix}-${lowerName}/prompt ~/.claude/prompts/${name}
+\`\`\`
+
+## License
+
+MIT
+`;
+  }
 
   await Bun.write(join(targetDir, "README.md"), readmeContent);
   files.push("README.md");
 
-  // .gitignore
+  // ── .gitignore ──────────────────────────────────────────────────────────
+
   const gitignoreContent = `node_modules/
 .env
 *.env

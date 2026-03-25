@@ -170,6 +170,26 @@ export async function upgradeCore(
     }
   }
 
+  // 2b. Detect skill customizations that may be affected by upgrade
+  const customizationsDir = join(newReleaseDir, "PAI", "USER", "SKILLCUSTOMIZATIONS");
+  if (existsSync(customizationsDir)) {
+    try {
+      const customDirs = readdirSync(customizationsDir).filter(
+        (d) => !d.startsWith(".") && d !== "README.md"
+      );
+      if (customDirs.length > 0) {
+        steps.push({
+          action: "customization-warning",
+          target: "SKILLCUSTOMIZATIONS",
+          status: "ok",
+          detail: `${customDirs.length} customized skill(s): ${customDirs.join(", ")}. Verify compatibility after upgrade.`,
+        });
+      }
+    } catch {
+      // Can't read — not critical
+    }
+  }
+
   // 3. Re-symlink all installed skills from packages.db
   const skills = listSkills(db);
   const activeSkills = skills.filter((s) => s.status === "active");
@@ -514,6 +534,8 @@ function formatActionLabel(action: string): string {
       return "📁 Config symlinks";
     case "main-symlink":
       return "🔄 Main symlink swap";
+    case "customization-warning":
+      return "⚠️  Customizations";
     case "validate":
       return "✅ Validation";
     default:

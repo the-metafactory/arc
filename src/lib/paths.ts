@@ -14,6 +14,8 @@ export function createPaths(overrides?: Partial<PaiPaths>): PaiPaths {
   return {
     claudeRoot,
     skillsDir: overrides?.skillsDir ?? join(claudeRoot, "skills"),
+    agentsDir: overrides?.agentsDir ?? join(claudeRoot, "agents"),
+    promptsDir: overrides?.promptsDir ?? join(claudeRoot, "commands"),
     binDir: overrides?.binDir ?? join(claudeRoot, "bin"),
     reposDir: overrides?.reposDir ?? join(configRoot, "pkg", "repos"),
     dbPath: overrides?.dbPath ?? join(configRoot, "packages.db"),
@@ -27,6 +29,12 @@ export function createPaths(overrides?: Partial<PaiPaths>): PaiPaths {
     registryPath:
       overrides?.registryPath ??
       join(import.meta.dir, "..", "..", "registry.yaml"),
+    sourcesPath:
+      overrides?.sourcesPath ??
+      join(configRoot, "sources.yaml"),
+    cachePath:
+      overrides?.cachePath ??
+      join(configRoot, "pkg", "cache"),
   };
 }
 
@@ -36,6 +44,8 @@ export function createPaths(overrides?: Partial<PaiPaths>): PaiPaths {
 export async function ensureDirectories(paths: PaiPaths): Promise<void> {
   const dirs = [
     paths.skillsDir,
+    paths.agentsDir,
+    paths.promptsDir,
     paths.binDir,
     paths.reposDir,
     paths.configRoot,

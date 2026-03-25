@@ -27,6 +27,7 @@ export async function loadRegistry(
     parsed.registry.skills ??= [];
     parsed.registry.agents ??= [];
     parsed.registry.prompts ??= [];
+    parsed.registry.tools ??= [];
 
     return parsed;
   } catch (err: any) {
@@ -49,6 +50,7 @@ export function searchRegistry(
     { entries: config.registry.skills, type: "skill" },
     { entries: config.registry.agents, type: "agent" },
     { entries: config.registry.prompts, type: "prompt" },
+    { entries: config.registry.tools, type: "tool" },
   ];
 
   for (const { entries, type } of sections) {
@@ -80,6 +82,9 @@ export function findRegistryEntry(
   }
   for (const entry of config.registry.prompts) {
     if (entry.name === name) return { entry, artifactType: "prompt" };
+  }
+  for (const entry of config.registry.tools) {
+    if (entry.name === name) return { entry, artifactType: "tool" };
   }
   return null;
 }
@@ -123,7 +128,9 @@ export function addFromRegistry(
       ? catalog.catalog.skills
       : found.artifactType === "agent"
         ? catalog.catalog.agents
-        : catalog.catalog.prompts;
+        : found.artifactType === "tool"
+          ? catalog.catalog.tools
+          : catalog.catalog.prompts;
 
   section.push(catalogEntry);
 

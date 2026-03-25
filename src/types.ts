@@ -53,6 +53,7 @@ export interface RegistryConfig {
     skills: RegistryEntry[];
     agents: RegistryEntry[];
     prompts: RegistryEntry[];
+    tools: RegistryEntry[];
   };
 }
 
@@ -125,8 +126,8 @@ export interface SkillTrigger {
 export interface PaiManifest {
   name: string;
   version: string;
-  type: "skill" | "system" | "tool";
-  tier?: "official" | "custom" | "community";
+  type: "skill" | "system" | "tool" | "agent" | "prompt";
+  tier?: PackageTier;
   author: {
     name: string;
     github: string;
@@ -144,6 +145,30 @@ export interface PaiManifest {
   capabilities: Capabilities;
 }
 
+/** Trust tier for installed packages */
+export type PackageTier = "official" | "community" | "custom";
+
+/** A configured registry source (apt-get style) */
+export interface RegistrySource {
+  name: string;
+  url: string;
+  tier: PackageTier;
+  enabled: boolean;
+}
+
+/** Top-level sources.yaml structure */
+export interface SourcesConfig {
+  sources: RegistrySource[];
+}
+
+/** A search result annotated with its source */
+export interface SourcedSearchResult {
+  entry: RegistryEntry;
+  artifactType: ArtifactType;
+  sourceName: string;
+  sourceTier: PackageTier;
+}
+
 /** Installed package record in packages.db (skills and tools) */
 export interface InstalledSkill {
   name: string;
@@ -153,6 +178,9 @@ export interface InstalledSkill {
   skill_dir: string;
   status: "active" | "disabled";
   artifact_type: ArtifactType;
+  tier: PackageTier;
+  customization_path: string | null;
+  install_source: string | null;
   installed_at: string;
   updated_at: string;
 }
@@ -182,6 +210,10 @@ export interface PaiPaths {
   claudeRoot: string;
   /** Skills directory (~/.claude/skills/) */
   skillsDir: string;
+  /** Agents directory (~/.claude/agents/) */
+  agentsDir: string;
+  /** Prompts/commands directory (~/.claude/commands/) */
+  promptsDir: string;
   /** Bin directory (~/.claude/bin/) */
   binDir: string;
   /** Package repos (~/.config/pai/pkg/repos/) */
@@ -200,4 +232,8 @@ export interface PaiPaths {
   catalogPath: string;
   /** Registry file path (repo-root/registry.yaml) */
   registryPath: string;
+  /** Sources config path (~/.config/pai/sources.yaml) */
+  sourcesPath: string;
+  /** Remote registry cache directory (~/.config/pai/pkg/cache/) */
+  cachePath: string;
 }

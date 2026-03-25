@@ -36,6 +36,8 @@ export async function createTestEnv(): Promise<TestEnv> {
     claudeRoot: join(root, ".claude"),
     configRoot: join(root, ".config", "pai"),
     skillsDir: join(root, ".claude", "skills"),
+    agentsDir: join(root, ".claude", "agents"),
+    promptsDir: join(root, ".claude", "commands"),
     binDir: join(root, ".claude", "bin"),
     reposDir: join(root, ".config", "pai", "pkg", "repos"),
     dbPath: join(root, ".config", "pai", "packages.db"),
@@ -43,6 +45,8 @@ export async function createTestEnv(): Promise<TestEnv> {
     runtimeDir: join(root, ".config", "pai", "skills"),
     catalogPath: join(root, "catalog.yaml"),
     registryPath: join(root, "registry.yaml"),
+    sourcesPath: join(root, ".config", "pai", "sources.yaml"),
+    cachePath: join(root, ".config", "pai", "pkg", "cache"),
   });
 
   await ensureDirectories(paths);
@@ -76,6 +80,8 @@ export async function createMockSkillRepo(
     name: string;
     version?: string;
     author?: string;
+    /** Artifact type: skill (default), tool, agent, prompt */
+    type?: "skill" | "tool" | "agent" | "prompt";
     withCli?: boolean;
     withoutManifest?: boolean;
     capabilities?: {
@@ -87,34 +93,72 @@ export async function createMockSkillRepo(
   }
 ): Promise<MockSkillRepo> {
   const repoDir = join(root, `mock-${opts.name}`);
+  const artifactType = opts.type ?? "skill";
 
-  // Create skill directory
-  const skillDir = join(repoDir, "skill");
-  await Bun.write(
-    join(skillDir, "SKILL.md"),
-    `---\nname: ${opts.name}\ndescription: Mock skill for testing\n---\n\n# ${opts.name}\n\nTest skill.\n`
-  );
+  if (artifactType === "skill") {
+    // Create skill directory
+    const skillDir = join(repoDir, "skill");
+    await Bun.write(
+      join(skillDir, "SKILL.md"),
+      `---\nname: ${opts.name}\ndescription: Mock skill for testing\n---\n\n# ${opts.name}\n\nTest skill.\n`
+    );
 
-  await Bun.write(
-    join(skillDir, "workflows", "Main.md"),
-    `# Main Workflow\n\n1. Do the thing\n`
-  );
+    await Bun.write(
+      join(skillDir, "workflows", "Main.md"),
+      `# Main Workflow\n\n1. Do the thing\n`
+    );
+  } else if (artifactType === "tool") {
+    // Tools: CLI entry point at root
+    await Bun.write(
+      join(repoDir, "src", "tool.ts"),
+      `#!/usr/bin/env bun\nconsole.log("${opts.name} CLI tool");\n`
+    );
+    await Bun.write(
+      join(repoDir, "package.json"),
+      JSON.stringify(
+        {
+          name: `pai-tool-${opts.name.toLowerCase()}`,
+          version: opts.version ?? "1.0.0",
+          type: "module",
+        },
+        null,
+        2
+      ) + "\n"
+    );
+  } else if (artifactType === "agent") {
+    // Agents: single markdown file in agent/ subdir
+    const agentDir = join(repoDir, "agent");
+    await Bun.write(
+      join(agentDir, `${opts.name}.md`),
+      `---\nname: ${opts.name}\ndescription: Mock agent for testing\nmodel: sonnet\n---\n\n# ${opts.name}\n\nTest agent persona.\n`
+    );
+  } else if (artifactType === "prompt") {
+    // Prompts: single markdown file in prompt/ subdir
+    const promptDir = join(repoDir, "prompt");
+    await Bun.write(
+      join(promptDir, `${opts.name}.md`),
+      `---\nname: ${opts.name}\ndescription: Mock prompt for testing\n---\n\n# ${opts.name}\n\nTest prompt/command.\n`
+    );
+  }
 
   // Create pai-manifest.yaml (unless testing without it)
   if (!opts.withoutManifest) {
     const caps = opts.capabilities ?? {};
+    const isTool = artifactType === "tool";
     const manifest = {
       name: opts.name,
       version: opts.version ?? "1.0.0",
-      type: "skill",
+      type: artifactType,
       tier: "custom",
       author: {
         name: opts.author ?? "testuser",
         github: opts.author ?? "testuser",
       },
       provides: {
-        skill: [{ trigger: opts.name.replace(/^_/, "").toLowerCase() }],
-        ...(opts.withCli
+        ...(artifactType === "skill"
+          ? { skill: [{ trigger: opts.name.replace(/^_/, "").toLowerCase() }] }
+          : {}),
+        ...(opts.withCli || isTool
           ? { cli: [{ command: `bun src/tool.ts`, name: opts.name.replace(/^_/, "").toLowerCase() }] }
           : {}),
       },
@@ -132,8 +176,8 @@ export async function createMockSkillRepo(
     await Bun.write(join(repoDir, "pai-manifest.yaml"), yaml);
   }
 
-  // Create src/ if CLI tool
-  if (opts.withCli) {
+  // Create src/ if CLI tool (for skills with CLI)
+  if (opts.withCli && artifactType === "skill") {
     await Bun.write(
       join(repoDir, "src", "tool.ts"),
       `#!/usr/bin/env bun\nconsole.log("${opts.name} CLI tool");\n`

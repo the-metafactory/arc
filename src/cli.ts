@@ -34,6 +34,18 @@ import {
   formatRegistrySearch,
 } from "./lib/registry.js";
 import { loadCatalog, saveCatalog } from "./lib/catalog.js";
+import {
+  loadSources,
+  saveSources,
+  addSource,
+  removeSource,
+  formatSourceList,
+} from "./lib/sources.js";
+import {
+  searchAllSources,
+  formatSourcedSearch,
+} from "./lib/remote-registry.js";
+import type { RegistrySource, PackageTier } from "../types.js";
 import { homedir } from "os";
 import { join } from "path";
 
@@ -213,27 +225,51 @@ program
 
 program
   .command("init <name>")
-  .description("Scaffold a new skill or tool repo")
+  .description("Scaffold a new skill, tool, agent, or prompt repo")
   .option("-d, --dir <path>", "Target directory")
   .option("-a, --author <name>", "Author GitHub username")
-  .option("--tool", "Scaffold a tool instead of a skill")
-  .action(async (name: string, opts: { dir?: string; author?: string; tool?: boolean }) => {
-    const prefix = opts.tool ? "pai-tool" : "pai-skill";
-    const targetDir =
-      opts.dir ?? `./${`${prefix}-${name.replace(/^_/, "").toLowerCase()}`}`;
-    const result = await init(targetDir, name, opts.author, opts.tool);
+  .option(
+    "--type <type>",
+    "Artifact type: skill, tool, agent, prompt (default: skill)"
+  )
+  .action(
+    async (
+      name: string,
+      opts: { dir?: string; author?: string; type?: string }
+    ) => {
+      const validTypes = ["skill", "tool", "agent", "prompt"] as const;
+      type ArtifactInitType = (typeof validTypes)[number];
 
-    if (result.success) {
-      console.log(`\n✅ Scaffolded skill at ${result.path}`);
-      console.log(`\nFiles created:`);
-      for (const f of result.files!) {
-        console.log(`  ${f}`);
+      const artifactType: ArtifactInitType =
+        opts.type && (validTypes as readonly string[]).includes(opts.type)
+          ? (opts.type as ArtifactInitType)
+          : "skill";
+
+      if (opts.type && !(validTypes as readonly string[]).includes(opts.type)) {
+        console.error(
+          `\n❌ Unknown type "${opts.type}". Valid types: ${validTypes.join(", ")}`
+        );
+        process.exit(1);
       }
-    } else {
-      console.error(`\n❌ ${result.error}`);
-      process.exit(1);
+
+      const prefix = `pai-${artifactType}`;
+      const targetDir =
+        opts.dir ??
+        `./${prefix}-${name.replace(/^_/, "").toLowerCase()}`;
+      const result = await init(targetDir, name, opts.author, artifactType);
+
+      if (result.success) {
+        console.log(`\n✅ Scaffolded ${artifactType} at ${result.path}`);
+        console.log(`\nFiles created:`);
+        for (const f of result.files!) {
+          console.log(`  ${f}`);
+        }
+      } else {
+        console.error(`\n❌ ${result.error}`);
+        process.exit(1);
+      }
     }
-  });
+  );
 
 program
   .command("upgrade-core <version>")
@@ -286,17 +322,85 @@ program
 
 program
   .command("search <keyword>")
-  .description("Search the community registry for skills, agents, and prompts")
-  .action(async (keyword: string) => {
+  .description("Search all configured sources for skills, agents, and prompts")
+  .option("--local", "Search local registry only")
+  .action(async (keyword: string, opts: { local?: boolean }) => {
     const paths = createPaths();
-    const registry = await loadRegistry(paths.registryPath);
-    if (!registry) {
-      console.error("Error: No registry.yaml found");
-      process.exit(1);
+
+    if (opts.local) {
+      const registry = await loadRegistry(paths.registryPath);
+      if (!registry) {
+        console.error("Error: No registry.yaml found");
+        process.exit(1);
+      }
+      const results = searchRegistry(registry, keyword);
+      console.log(formatRegistrySearch(results));
+      return;
     }
 
-    const results = searchRegistry(registry, keyword);
-    console.log(formatRegistrySearch(results));
+    const sources = await loadSources(paths.sourcesPath);
+    const results = await searchAllSources(
+      sources,
+      keyword,
+      paths.cachePath,
+      paths.registryPath
+    );
+    console.log(formatSourcedSearch(results));
+  });
+
+// ── Source commands ─────────────────────────────────────────
+
+const source = program
+  .command("source")
+  .description("Manage registry sources (apt-get style)");
+
+source
+  .command("list")
+  .description("List configured registry sources")
+  .action(async () => {
+    const paths = createPaths();
+    const config = await loadSources(paths.sourcesPath);
+    console.log(formatSourceList(config));
+  });
+
+source
+  .command("add <name> <url>")
+  .description("Add a new registry source")
+  .option("-t, --tier <tier>", "Trust tier (official|community|custom)", "community")
+  .action(async (name: string, url: string, opts: { tier: string }) => {
+    const paths = createPaths();
+    const config = await loadSources(paths.sourcesPath);
+
+    try {
+      addSource(config, {
+        name,
+        url,
+        tier: opts.tier as PackageTier,
+        enabled: true,
+      });
+      await saveSources(paths.sourcesPath, config);
+      console.log(`Added source "${name}" [${opts.tier}]`);
+    } catch (err: any) {
+      console.error(`Error: ${err.message}`);
+      process.exit(1);
+    }
+  });
+
+source
+  .command("remove <name>")
+  .description("Remove a registry source")
+  .action(async (name: string) => {
+    const paths = createPaths();
+    const config = await loadSources(paths.sourcesPath);
+
+    try {
+      removeSource(config, name);
+      await saveSources(paths.sourcesPath, config);
+      console.log(`Removed source "${name}"`);
+    } catch (err: any) {
+      console.error(`Error: ${err.message}`);
+      process.exit(1);
+    }
   });
 
 // ── Catalog commands ────────────────────────────────────────

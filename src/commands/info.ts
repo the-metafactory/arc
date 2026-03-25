@@ -38,10 +38,16 @@ export function formatInfo(result: InfoResult): string {
   const lines: string[] = [
     `${skill.name} v${skill.version}`,
     `  Status: ${skill.status}`,
+    `  Tier: ${skill.tier || "custom"}`,
+    `  Source: ${skill.install_source || "direct"}`,
     `  Repo: ${skill.repo_url}`,
     `  Path: ${skill.install_path}`,
     `  Installed: ${skill.installed_at}`,
   ];
+
+  if (skill.customization_path) {
+    lines.push(`  Customizations: ${skill.customization_path}`);
+  }
 
   if (manifest) {
     const risk = assessRisk(manifest);

@@ -1,6 +1,6 @@
 import { join } from "path";
 import { existsSync } from "fs";
-import type { PaiPaths, PaiManifest } from "../types.js";
+import type { PaiPaths, PaiManifest, PackageTier } from "../types.js";
 import type { Database } from "bun:sqlite";
 import { readManifest, assessRisk, formatCapabilities } from "../lib/manifest.js";
 import { recordInstall, getSkill } from "../lib/db.js";
@@ -12,6 +12,10 @@ export interface InstallOptions {
   repoUrl: string;
   /** Skip capability display confirmation (for non-interactive / test use) */
   yes?: boolean;
+  /** Source this package is being installed from */
+  sourceName?: string;
+  /** Trust tier of the source */
+  sourceTier?: PackageTier;
 }
 
 export interface InstallResult {
@@ -139,17 +143,31 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
   const capLines = formatCapabilities(manifest);
 
   if (!opts.yes) {
+    const tier = opts.sourceTier ?? manifest.tier ?? "custom";
+
+    if (tier === "custom" || !opts.sourceName) {
+      console.log(`\n⚠️  UNKNOWN SOURCE — review capabilities carefully`);
+    } else if (tier === "community") {
+      console.log(`\n📦 Community source: ${opts.sourceName}`);
+    }
+
     console.log(`\nInstall: ${manifest.name} v${manifest.version}`);
     console.log(`Author: ${manifest.author.name} (${manifest.author.github})`);
+    console.log(`Source: ${opts.sourceName ?? "direct URL"} [${tier}]`);
     console.log(`Risk: ${risk.toUpperCase()}`);
-    console.log(`\nCapabilities:`);
-    for (const line of capLines) {
-      console.log(line);
+
+    if (tier !== "official") {
+      console.log(`\nCapabilities:`);
+      for (const line of capLines) {
+        console.log(line);
+      }
     }
   }
 
   // 4. Create symlinks based on artifact type
   const isTool = manifest.type === "tool";
+  const isAgent = manifest.type === "agent";
+  const isPrompt = manifest.type === "prompt";
 
   if (isTool) {
     // Tools: symlink repo root to binDir (no skill/ subdirectory)
@@ -158,6 +176,34 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
 
     // Create PATH-accessible shim
     await createCliShim(paths.shimDir, paths.binDir, manifest);
+  } else if (isAgent) {
+    // Agents: symlink the .md file directly into agentsDir for Claude auto-discovery
+    const agentSourceDir = join(installPath, "agent");
+    const sourceDir = existsSync(agentSourceDir) ? agentSourceDir : installPath;
+    const mdFile = `${manifest.name}.md`;
+    const sourcePath = join(sourceDir, mdFile);
+    const linkPath = join(paths.agentsDir, mdFile);
+
+    if (existsSync(sourcePath)) {
+      await createSymlink(sourcePath, linkPath);
+    } else {
+      // Fallback: symlink directory if .md file not found by convention name
+      await createSymlink(sourceDir, join(paths.agentsDir, manifest.name));
+    }
+  } else if (isPrompt) {
+    // Prompts: symlink the .md file directly into promptsDir for Claude auto-discovery
+    const promptSourceDir = join(installPath, "prompt");
+    const sourceDir = existsSync(promptSourceDir) ? promptSourceDir : installPath;
+    const mdFile = `${manifest.name}.md`;
+    const sourcePath = join(sourceDir, mdFile);
+    const linkPath = join(paths.promptsDir, mdFile);
+
+    if (existsSync(sourcePath)) {
+      await createSymlink(sourcePath, linkPath);
+    } else {
+      // Fallback: symlink directory if .md file not found by convention name
+      await createSymlink(sourceDir, join(paths.promptsDir, manifest.name));
+    }
   } else {
     // Skills: symlink skill/ subdirectory (or root) to skillsDir
     const skillSourceDir = join(installPath, "skill");
@@ -190,7 +236,11 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
 
   // 7. Record in database
   const now = new Date().toISOString();
-  const skillSourceDir = isTool ? installPath : join(installPath, "skill");
+  const artifactType = isTool ? "tool" : isAgent ? "agent" : isPrompt ? "prompt" : "skill";
+  const artifactSourceDir = isTool ? installPath
+    : isAgent ? join(installPath, "agent")
+    : isPrompt ? join(installPath, "prompt")
+    : join(installPath, "skill");
   recordInstall(
     db,
     {
@@ -198,9 +248,12 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
       version: manifest.version,
       repo_url: repoUrl,
       install_path: installPath,
-      skill_dir: isTool ? installPath : skillSourceDir,
+      skill_dir: existsSync(artifactSourceDir) ? artifactSourceDir : installPath,
       status: "active",
-      artifact_type: isTool ? "tool" : "skill",
+      artifact_type: artifactType,
+      tier: opts.sourceTier ?? manifest.tier ?? "custom",
+      customization_path: null,
+      install_source: opts.sourceName ?? null,
       installed_at: now,
       updated_at: now,
     },

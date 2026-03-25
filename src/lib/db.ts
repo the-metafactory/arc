@@ -35,6 +35,23 @@ export function openDatabase(dbPath: string): Database {
     // Column already exists — expected for new or already-migrated databases
   }
 
+  // Migration: add tier and customization_path columns
+  try {
+    db.exec(`ALTER TABLE skills ADD COLUMN tier TEXT NOT NULL DEFAULT 'custom'`);
+  } catch {
+    // Column already exists
+  }
+  try {
+    db.exec(`ALTER TABLE skills ADD COLUMN customization_path TEXT`);
+  } catch {
+    // Column already exists
+  }
+  try {
+    db.exec(`ALTER TABLE skills ADD COLUMN install_source TEXT`);
+  } catch {
+    // Column already exists
+  }
+
   db.exec(`
     CREATE TABLE IF NOT EXISTS capabilities (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -60,8 +77,8 @@ export function recordInstall(
   const now = new Date().toISOString();
 
   const insertSkill = db.prepare(`
-    INSERT INTO skills (name, version, repo_url, install_path, skill_dir, status, artifact_type, installed_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO skills (name, version, repo_url, install_path, skill_dir, status, artifact_type, tier, customization_path, install_source, installed_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   insertSkill.run(
@@ -72,6 +89,9 @@ export function recordInstall(
     skill.skill_dir,
     skill.status,
     skill.artifact_type || "skill",
+    skill.tier || manifest.tier || "custom",
+    skill.customization_path || null,
+    skill.install_source || null,
     skill.installed_at || now,
     skill.updated_at || now
   );

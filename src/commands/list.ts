@@ -30,7 +30,9 @@ export function formatList(result: ListResult): string {
     lines.push(`Installed skills (${skills.length}):`, "");
     for (const s of skills) {
       const statusBadge = s.status === "active" ? "✅" : "⏸️";
-      lines.push(`  ${statusBadge} ${s.name} v${s.version} [${s.status}]`);
+      const tierBadge = s.tier === "official" ? " (official)" : s.tier === "community" ? " (community)" : "";
+      const customBadge = s.customization_path ? " *" : "";
+      lines.push(`  ${statusBadge} ${s.name} v${s.version} [${s.status}]${tierBadge}${customBadge}`);
     }
   }
 
@@ -39,8 +41,13 @@ export function formatList(result: ListResult): string {
     lines.push(`Installed tools (${tools.length}):`, "");
     for (const t of tools) {
       const statusBadge = t.status === "active" ? "✅" : "⏸️";
-      lines.push(`  ${statusBadge} ${t.name} v${t.version} [${t.status}]`);
+      const tierBadge = t.tier === "official" ? " (official)" : t.tier === "community" ? " (community)" : "";
+      lines.push(`  ${statusBadge} ${t.name} v${t.version} [${t.status}]${tierBadge}`);
     }
+  }
+
+  if (result.skills.some((s) => s.customization_path)) {
+    lines.push("", "  * = has local customizations");
   }
 
   return lines.join("\n");
