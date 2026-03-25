@@ -407,6 +407,12 @@ source
     const paths = createPaths();
     const config = await loadSources(paths.sourcesPath);
 
+    // Validate URL format
+    if (!url.startsWith("https://") && !url.startsWith("http://") && !url.startsWith("file://")) {
+      console.error(`Error: Invalid URL "${url}". Must start with https://, http://, or file://`);
+      process.exit(1);
+    }
+
     try {
       addSource(config, {
         name,

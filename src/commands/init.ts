@@ -38,7 +38,6 @@ export async function init(
     await mkdir(join(targetDir, "lib"), { recursive: true });
   } else if (type === "skill") {
     await mkdir(join(targetDir, "skill", "workflows"), { recursive: true });
-    await mkdir(join(targetDir, "src", "lib"), { recursive: true });
   } else if (type === "agent") {
     await mkdir(join(targetDir, "agent"), { recursive: true });
   } else if (type === "prompt") {

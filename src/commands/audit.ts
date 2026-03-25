@@ -12,6 +12,8 @@ export interface AuditResult {
     bash: number;
     secret: number;
   };
+  /** Per-skill capability breakdown */
+  bySkill: Map<string, CapabilityRecord[]>;
   warnings: AuditWarning[];
   /** Warnings only between skills of different tiers/authors */
   crossTierWarnings: AuditWarning[];
@@ -41,6 +43,14 @@ export function audit(db: Database): AuditResult {
     secret: caps.filter((c) => c.type === "secret").length,
   };
 
+  // Group capabilities by skill
+  const bySkill = new Map<string, CapabilityRecord[]>();
+  for (const cap of caps) {
+    const existing = bySkill.get(cap.skill_name) ?? [];
+    existing.push(cap);
+    bySkill.set(cap.skill_name, existing);
+  }
+
   // Detect dangerous combinations
   const warnings = detectDangerousCombinations(caps);
 
@@ -54,6 +64,7 @@ export function audit(db: Database): AuditResult {
     totalSkills: allSkills.length,
     activeSkills: activeSkills.length,
     surface,
+    bySkill,
     warnings,
     crossTierWarnings,
   };
@@ -137,6 +148,25 @@ export function formatAudit(result: AuditResult, verbose = false): string {
   ];
 
   if (verbose) {
+    // Per-skill capability breakdown
+    lines.push(``);
+    lines.push(`Per-skill capabilities:`);
+    for (const [name, caps] of result.bySkill) {
+      const types = caps.map((c) => c.type);
+      const summary: string[] = [];
+      const reads = caps.filter((c) => c.type === "fs_read").length;
+      const writes = caps.filter((c) => c.type === "fs_write").length;
+      const nets = caps.filter((c) => c.type === "network").length;
+      const bashes = caps.filter((c) => c.type === "bash").length;
+      const secrets = caps.filter((c) => c.type === "secret").length;
+      if (reads) summary.push(`${reads} read`);
+      if (writes) summary.push(`${writes} write`);
+      if (nets) summary.push(`${nets} network`);
+      if (bashes) summary.push(`${bashes} bash`);
+      if (secrets) summary.push(`${secrets} secret`);
+      lines.push(`  ${name}: ${summary.join(", ") || "none"}`);
+    }
+
     // Full pairwise list
     if (result.warnings.length > 0) {
       lines.push(``);
