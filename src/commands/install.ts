@@ -78,6 +78,8 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
         error: `Skill '${existingByPath.name}' is already installed (status: ${existingByPath.status})`,
       };
     }
+    // Clean up stale clone from a previous failed install
+    Bun.spawnSync(["rm", "-rf", installPath], { stdout: "pipe", stderr: "pipe" });
   }
 
   const cloneResult = Bun.spawnSync(["git", "clone", repoUrl, installPath], {
@@ -106,6 +108,13 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
   // 2b. Install package dependencies (other pai-pkg packages)
   if (manifest.depends_on?.packages?.length) {
     for (const dep of manifest.depends_on.packages) {
+      if (!dep.repo) {
+        if (!opts.yes) {
+          console.log(`  Skipping dependency ${dep.name}: no repo URL specified`);
+        }
+        continue;
+      }
+
       const existing = db
         .prepare("SELECT name, status FROM skills WHERE name = ?")
         .get(dep.name) as { name: string; status: string } | null;
