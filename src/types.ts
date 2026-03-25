@@ -104,6 +104,12 @@ export interface ToolDependency {
   reason?: string;
 }
 
+/** Package dependency — another pai-pkg managed package */
+export interface PackageDependency {
+  name: string;
+  repo: string;
+}
+
 /** CLI tool provided by a skill */
 export interface CliProvider {
   command: string;
@@ -133,6 +139,7 @@ export interface PaiManifest {
   depends_on?: {
     skills?: SkillDependency[];
     tools?: ToolDependency[];
+    packages?: PackageDependency[];
   };
   capabilities: Capabilities;
 }

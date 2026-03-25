@@ -89,6 +89,41 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
     };
   }
 
+  // 2b. Install package dependencies (other pai-pkg packages)
+  if (manifest.depends_on?.packages?.length) {
+    for (const dep of manifest.depends_on.packages) {
+      const existing = db
+        .prepare("SELECT name, status FROM skills WHERE name = ?")
+        .get(dep.name) as { name: string; status: string } | null;
+
+      if (existing && existing.status === "active") {
+        continue; // Already installed
+      }
+
+      if (!opts.yes) {
+        console.log(`\nInstalling dependency: ${dep.name} (${dep.repo})`);
+      }
+
+      const depResult = await install({
+        paths,
+        db,
+        repoUrl: dep.repo,
+        yes: opts.yes,
+      });
+
+      if (!depResult.success) {
+        return {
+          success: false,
+          error: `Failed to install dependency '${dep.name}': ${depResult.error}`,
+        };
+      }
+
+      if (!opts.yes) {
+        console.log(`  ✓ ${dep.name} v${depResult.version}`);
+      }
+    }
+  }
+
   // 3. Display capabilities
   const risk = assessRisk(manifest);
   const capLines = formatCapabilities(manifest);
