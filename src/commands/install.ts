@@ -41,6 +41,16 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
   const repoName = extractRepoName(repoUrl);
   const installPath = join(paths.reposDir, repoName);
 
+  // S2: Path traversal guard — ensure installPath stays inside reposDir
+  const normalizedInstall = join(installPath); // resolves ../ segments
+  const normalizedRepos = join(paths.reposDir);
+  if (!normalizedInstall.startsWith(normalizedRepos + "/") && normalizedInstall !== normalizedRepos) {
+    return {
+      success: false,
+      error: `Refusing to install: repo name "${repoName}" would escape repos directory`,
+    };
+  }
+
   // Check if already installed in DB (by repo name or by scanning all skills)
   const allSkills = db
     .prepare("SELECT * FROM skills")

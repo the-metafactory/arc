@@ -298,9 +298,29 @@ export async function catalogPush(
       await cp(localPath, targetFile);
     }
 
+    // Verify the remote URL matches the expected source before pushing
+    const remoteResult = Bun.spawnSync(
+      ["git", "remote", "get-url", "origin"],
+      { cwd: tmpDir, stdout: "pipe", stderr: "pipe" }
+    );
+    const actualRemote = remoteResult.stdout.toString().trim();
+    const expectedRemotes = [
+      resolved.cloneUrl,
+      `git@github.com:${resolved.org}/${resolved.repo}.git`,
+    ];
+    if (!expectedRemotes.some((u) => actualRemote === u)) {
+      return {
+        success: false,
+        error: `Push target mismatch: remote is "${actualRemote}" but expected "${resolved.cloneUrl}". Refusing to push.`,
+      };
+    }
+
     // Stage, commit, push
     const pathInRepo = resolved.parentPath === "." ? "." : resolved.parentPath;
-    Bun.spawnSync(["git", "add", pathInRepo], { cwd: tmpDir, stdout: "pipe", stderr: "pipe" });
+    const addResult = Bun.spawnSync(["git", "add", pathInRepo], { cwd: tmpDir, stdout: "pipe", stderr: "pipe" });
+    if (addResult.exitCode !== 0) {
+      return { success: false, error: `git add failed: ${addResult.stderr.toString().trim()}` };
+    }
 
     const commitResult = Bun.spawnSync(
       ["git", "commit", "-m", `pai-pkg: update ${name}`],
@@ -455,8 +475,15 @@ async function installSkillEntry(
 ): Promise<EntryInstallResult> {
   const resolved = resolveSource(entry.source);
   const isCli = entry.has_cli || entry.bundle;
-  const installDir = join(isCli ? paths.reposDir : paths.skillsDir, entry.name);
+  const baseDir = isCli ? paths.reposDir : paths.skillsDir;
+  const installDir = join(baseDir, entry.name);
   const skillLinkDir = join(paths.skillsDir, entry.name);
+
+  // Path traversal guard — ensure installDir stays inside the target directory
+  if (!join(installDir).startsWith(join(baseDir) + "/")) {
+    return { success: false, error: `Refusing to install: name "${entry.name}" would escape install directory` };
+  }
+
   const isRefresh = getSkill(db, entry.name) !== null;
 
   if (resolved.type === "local") {
