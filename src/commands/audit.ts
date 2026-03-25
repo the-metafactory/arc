@@ -13,6 +13,8 @@ export interface AuditResult {
     secret: number;
   };
   warnings: AuditWarning[];
+  /** Warnings only between skills of different tiers/authors */
+  crossTierWarnings: AuditWarning[];
 }
 
 /**
@@ -23,6 +25,12 @@ export function audit(db: Database): AuditResult {
   const allSkills = listSkills(db);
   const activeSkills = allSkills.filter((s) => s.status === "active");
   const caps = getAllActiveCapabilities(db);
+
+  // Build tier lookup from installed skills
+  const tierBySkill = new Map<string, string>();
+  for (const s of activeSkills) {
+    tierBySkill.set(s.name, s.tier || "custom");
+  }
 
   // Count capability surface
   const surface = {
@@ -36,11 +44,18 @@ export function audit(db: Database): AuditResult {
   // Detect dangerous combinations
   const warnings = detectDangerousCombinations(caps);
 
+  // Filter to cross-tier warnings only
+  const crossTierWarnings = warnings.filter((w) => {
+    const [a, b] = w.skills;
+    return tierBySkill.get(a) !== tierBySkill.get(b);
+  });
+
   return {
     totalSkills: allSkills.length,
     activeSkills: activeSkills.length,
     surface,
     warnings,
+    crossTierWarnings,
   };
 }
 
@@ -106,8 +121,10 @@ function detectDangerousCombinations(
 
 /**
  * Format audit results for console display.
+ * Default: summary with cross-tier warnings only.
+ * Verbose: full pairwise list of all warnings.
  */
-export function formatAudit(result: AuditResult): string {
+export function formatAudit(result: AuditResult, verbose = false): string {
   const lines: string[] = [
     `Installed skills: ${result.totalSkills} (${result.activeSkills} active)`,
     ``,
@@ -119,15 +136,58 @@ export function formatAudit(result: AuditResult): string {
     `  Secrets:          ${result.surface.secret} keys`,
   ];
 
-  if (result.warnings.length > 0) {
-    lines.push(``);
-    lines.push(`⚠️  Capability combination warnings:`);
-    for (const w of result.warnings) {
-      lines.push(`  - ${w.description}`);
+  if (verbose) {
+    // Full pairwise list
+    if (result.warnings.length > 0) {
+      lines.push(``);
+      lines.push(`⚠️  All capability combination warnings (${result.warnings.length}):`);
+      for (const w of result.warnings) {
+        lines.push(`  - ${w.description}`);
+      }
+    } else {
+      lines.push(``);
+      lines.push(`No capability combination warnings.`);
     }
   } else {
+    // Summary mode — group by pattern, show cross-tier only
+    const downloadWrite = result.warnings.filter((w) =>
+      w.capabilities.includes("fs_write") && w.capabilities.includes("network")
+    );
+    const exfiltration = result.warnings.filter((w) =>
+      w.capabilities.includes("secret") && w.capabilities.includes("fs_read")
+    );
+
     lines.push(``);
-    lines.push(`No capability combination warnings.`);
+    lines.push(`Capability composition:`);
+    if (downloadWrite.length > 0) {
+      const netSkills = new Set(downloadWrite.map((w) => w.skills[0]));
+      const writeSkills = new Set(downloadWrite.map((w) => w.skills[1]));
+      lines.push(`  ${netSkills.size} network skills × ${writeSkills.size} file-write skills = ${downloadWrite.length} download-and-write paths`);
+    }
+    if (exfiltration.length > 0) {
+      const netSkills = new Set(exfiltration.map((w) => w.skills[0]));
+      const readSkills = new Set(exfiltration.map((w) => w.skills[1]));
+      lines.push(`  ${netSkills.size} network+secret skills × ${readSkills.size} file-read skills = ${exfiltration.length} potential exfiltration paths`);
+    }
+
+    if (result.crossTierWarnings.length > 0) {
+      lines.push(``);
+      lines.push(`⚠️  Cross-tier warnings (${result.crossTierWarnings.length}):`);
+      for (const w of result.crossTierWarnings) {
+        lines.push(`  - ${w.description}`);
+      }
+    } else if (result.warnings.length > 0) {
+      lines.push(``);
+      lines.push(`All ${result.warnings.length} composition warnings are between same-tier skills (expected).`);
+    } else {
+      lines.push(``);
+      lines.push(`No capability combination warnings.`);
+    }
+
+    if (result.warnings.length > 0) {
+      lines.push(``);
+      lines.push(`Run with --verbose to see all ${result.warnings.length} pairwise warnings.`);
+    }
   }
 
   return lines.join("\n");

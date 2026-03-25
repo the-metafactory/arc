@@ -139,11 +139,12 @@ program
 program
   .command("audit")
   .description("Audit total capability surface of installed skills")
-  .action(() => {
+  .option("--verbose", "Show all pairwise capability warnings")
+  .action((opts: { verbose?: boolean }) => {
     const paths = createPaths();
     const db = openDatabase(paths.dbPath);
     const result = audit(db);
-    console.log(formatAudit(result));
+    console.log(formatAudit(result, opts.verbose));
     db.close();
   });
 

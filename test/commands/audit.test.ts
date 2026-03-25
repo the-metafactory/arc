@@ -106,5 +106,29 @@ describe("audit command", () => {
 
     const result = audit(env.db);
     expect(result.warnings.length).toBe(0);
+    expect(result.crossTierWarnings.length).toBe(0);
+  });
+
+  test("same-tier warnings are excluded from crossTierWarnings", async () => {
+    // Both skills are custom tier (default for mock repos)
+    const repoA = await createMockSkillRepo(env.root, {
+      name: "CustomNet",
+      capabilities: {
+        network: [{ domain: "api.example.com", reason: "API" }],
+      },
+    });
+    const repoB = await createMockSkillRepo(env.root, {
+      name: "CustomWrite",
+      capabilities: {
+        filesystem: { write: ["~/output/"] },
+      },
+    });
+
+    await install({ paths: env.paths, db: env.db, repoUrl: repoA.url, yes: true });
+    await install({ paths: env.paths, db: env.db, repoUrl: repoB.url, yes: true });
+
+    const result = audit(env.db);
+    expect(result.warnings.length).toBeGreaterThan(0);
+    expect(result.crossTierWarnings.length).toBe(0);
   });
 });
