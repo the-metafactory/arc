@@ -1,63 +1,156 @@
-# pai-pkg
+<p align="center">
+  <strong>📦 pai-pkg</strong>
+</p>
 
-**Package management for PAI skills.** Install, publish, and share skills with cryptographic trust and tiered governance.
+<p align="center">
+  <img src="https://img.shields.io/badge/version-0.1.0-blue" alt="Version: 0.1.0" />
+  <img src="https://img.shields.io/badge/status-alpha-orange" alt="Status: Alpha" />
+  <img src="https://img.shields.io/badge/tests-169%20passing-brightgreen" alt="Tests: 169 passing" />
+  <img src="https://img.shields.io/badge/runtime-Bun-f472b6" alt="Runtime: Bun" />
+  <img src="https://img.shields.io/badge/license-MIT-green" alt="License: MIT" />
+  <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey" alt="Platform: macOS | Linux" />
+</p>
 
-```bash
-pai-pkg install extract-wisdom        # Install a skill
-pai-pkg search security               # Search across all tiers
-pai-pkg publish ./my-skill            # Share your skill
-```
+<h1 align="center">pai-pkg</h1>
+<p align="center"><strong>Package management for PAI.</strong></p>
+<p align="center">Install, discover, and share skills, tools, agents, and prompts<br/>with capability-based trust and multi-source registries.</p>
 
-**New here?** Start with the [Quickstart Guide](QUICKSTART.md) — zero to installing skills in 5 minutes.
+---
 
-## Setup
+## Your Agent Needs More Skills
 
-```bash
-# Clone and install
-git clone git@github.com:mellanon/pai-pkg.git ~/Developer/pai-pkg
-cd ~/Developer/pai-pkg
-bun install
+[PAI](https://github.com/danielmiessler/PAI) skills are powerful but non-distributable. Each user's skill directory is a local collection with no mechanism for discovery, installation, or sharing between users.
 
-# Add to PATH (creates ~/.bun/bin/pai-pkg)
-bun link
-
-# Verify
-pai-pkg --version
-```
-
-### Available Commands
+**pai-pkg is `apt install` for PAI.** It manages the full lifecycle — search a registry, review capabilities, install with one command, audit what's running.
 
 ```bash
-# Package management
-pai-pkg install <name-or-url> # Install from registry or git URL
-pai-pkg list                  # List installed skills
-pai-pkg info <name>           # Show skill details and capabilities
-pai-pkg audit                 # Audit total capability surface
-pai-pkg disable <name>        # Disable a skill (preserves repo)
-pai-pkg enable <name>         # Re-enable a disabled skill
-pai-pkg remove <name>         # Completely uninstall a skill
-pai-pkg verify <name>         # Verify integrity of installed skill
-pai-pkg init <name>           # Scaffold a new skill repo
-pai-pkg upgrade-core <ver>    # Upgrade PAI core version
-
-# Discovery (multi-source)
-pai-pkg search <keyword>      # Search all configured sources
-pai-pkg search --local <kw>   # Search local registry only
-
-# Source management (apt-get style)
-pai-pkg source list           # Show configured registry sources
-pai-pkg source add <n> <url>  # Add a new source (--tier official|community|custom)
-pai-pkg source remove <name>  # Remove a registry source
-
-# Catalog
-pai-pkg catalog list          # List catalog with install status
-pai-pkg catalog use <name>    # Install from catalog (resolves deps)
-pai-pkg catalog sync          # Re-pull all installed catalog entries
+pai-pkg search doc                # Find packages across all sources
+pai-pkg install _DOC              # Install with capability review
+pai-pkg audit                     # See your total attack surface
 ```
 
-### Multi-Source Registry
+### What It Installs
 
-pai-pkg supports multiple registry sources, similar to apt-get's sources.list. Each source points to a `REGISTRY.yaml` hosted on GitHub (or any raw URL).
+pai-pkg handles all four PAI artifact types:
+
+| Type | Installed To | What It Is |
+|------|-------------|------------|
+| **Skill** | `~/.claude/skills/{name}/` | Directory with SKILL.md + workflows |
+| **Tool** | `~/.claude/bin/{name}` + PATH shim | CLI command you can run directly |
+| **Agent** | `~/.claude/agents/{name}.md` | Persona file — auto-discovered as `subagent_type` |
+| **Prompt** | `~/.claude/commands/{name}.md` | Slash command template |
+
+---
+
+## Quick Start
+
+```bash
+# Install
+git clone https://github.com/mellanon/pai-pkg.git
+cd pai-pkg && bun install && bun link
+
+# Search the community registry
+pai-pkg search doc
+
+# Install a skill
+pai-pkg install _DOC
+```
+
+Requires [Bun](https://bun.sh/) (v1.0+) and Git. See [QUICKSTART.md](QUICKSTART.md) for the full walkthrough.
+
+---
+
+## Commands
+
+### Package Management
+
+```bash
+pai-pkg install <name-or-url>     # Install from registry or git URL
+pai-pkg list                      # List installed packages
+pai-pkg info <name>               # Show details and capabilities
+pai-pkg audit                     # Audit total capability surface
+pai-pkg disable <name>            # Disable (preserves repo)
+pai-pkg enable <name>             # Re-enable a disabled package
+pai-pkg remove <name>             # Completely uninstall
+pai-pkg verify <name>             # Verify integrity
+```
+
+### Discovery
+
+```bash
+pai-pkg search <keyword>          # Search all configured sources
+pai-pkg search --local <keyword>  # Search local registry only
+```
+
+### Source Management
+
+```bash
+pai-pkg source list               # Show configured registry sources
+pai-pkg source add <n> <url>      # Add a source (--tier official|community|custom)
+pai-pkg source remove <name>      # Remove a source
+```
+
+### Scaffolding
+
+```bash
+pai-pkg init my-skill             # Scaffold a new skill repo
+pai-pkg init my-tool --type tool  # Scaffold a tool
+pai-pkg init my-agent --type agent
+pai-pkg init my-prompt --type prompt
+```
+
+### Catalog
+
+```bash
+pai-pkg catalog list              # List catalog with install status
+pai-pkg catalog use <name>        # Install from catalog (resolves deps)
+pai-pkg catalog sync              # Re-pull all installed catalog entries
+```
+
+---
+
+## How It Works
+
+```
+    Community Registry              pai-pkg                    Your Machine
+    ──────────────────              ───────                    ────────────
+           │                           │                           │
+           │  REGISTRY.yaml            │                           │
+           │  (skills, tools,          │                           │
+           │   agents, prompts)        │                           │
+           │◄──────────────────────────│  search "doc"             │
+           │                           │                           │
+           │  source: github.com/...   │                           │
+           │──────────────────────────►│                           │
+           │                           │                           │
+           │                           │  git clone → repos/       │
+           │                           │──────────────────────────►│
+           │                           │                           │
+           │                           │  read pai-manifest.yaml   │
+           │                           │  display capabilities     │
+           │                           │  user confirms            │
+           │                           │                           │
+           │                           │  symlink → skills/        │
+           │                           │  record in packages.db    │
+           │                           │──────────────────────────►│
+           │                           │                           │
+```
+
+**The flow:**
+1. `pai-pkg search` queries cached registry files from configured sources
+2. `pai-pkg install` clones the source repo via git
+3. Reads `pai-manifest.yaml` — the capability declaration
+4. Displays capabilities and risk level for user approval
+5. Creates symlinks to the appropriate Claude directory
+6. Records metadata in SQLite (`packages.db`)
+
+No npm. No Docker. Just git clone, symlinks, and a manifest.
+
+---
+
+## Multi-Source Registry
+
+pai-pkg supports multiple registry sources, like apt's sources.list:
 
 ```yaml
 # ~/.config/pai/sources.yaml (auto-created on first run)
@@ -71,300 +164,133 @@ sources:
 Add additional sources:
 
 ```bash
-pai-pkg source add miessler-hub https://raw.githubusercontent.com/danielmiessler/pai/main/REGISTRY.yaml --tier official
-pai-pkg source add jcfischer-tools https://raw.githubusercontent.com/jcfischer/pai-tools/main/REGISTRY.yaml --tier community
+pai-pkg source add my-team https://raw.githubusercontent.com/my-org/registry/main/REGISTRY.yaml --tier community
 ```
 
-`pai-pkg search` aggregates results across all enabled sources, showing the source name and trust tier for each match.
+Search aggregates results across all enabled sources, showing the source name and trust tier for each match.
 
-### Trust Tiers
+---
+
+## Trust Model
 
 Trust flows from the **source**, not the package:
 
-| Tier | Behavior | Example |
-|------|----------|---------|
+| Tier | Install Behavior | Example Source |
+|------|-----------------|----------------|
 | **official** | Auto-approves, minimal display | Daniel Miessler's upstream PAI |
-| **community** | Shows capabilities, requires confirmation | pai-collab, jcfischer's tools |
-| **custom** | Shows risk warning, full capability review | Unknown/personal sources |
+| **community** | Shows capabilities, requires confirmation | [pai-collab](https://github.com/mellanon/pai-collab) |
+| **custom** | Risk warning, full capability review | Direct git URL installs |
 
-### Running Tests
+### Capability Declarations
 
-```bash
-bun test                      # All tests
-bun test:unit                 # Unit tests
-bun test:commands             # Command tests
-bun test:e2e                  # End-to-end lifecycle test
+Every package declares what it accesses in `pai-manifest.yaml`:
+
+```yaml
+capabilities:
+  filesystem:
+    read: ["~/.claude/MEMORY/"]
+    write: ["~/.claude/MEMORY/WORK/"]
+  network:
+    - domain: "*.atlassian.net"
+      reason: "Jira REST API"
+  bash:
+    allowed: true
+    restricted_to: ["bun src/jira.ts *"]
+  secrets: ["JIRA_URL", "JIRA_API_TOKEN"]
 ```
 
-## The Problem
+`pai-pkg audit` shows your total attack surface across all installed packages — network domains, secrets, filesystem access, bash permissions.
 
-[PAI](https://github.com/danielmiessler/Personal_AI_Infrastructure) skills are powerful but non-distributable. Each user's skill directory is a local collection with no mechanism for discovery, installation, versioning, trust verification, or sharing between users.
-
-**The gap:** there is no `apt install extract-wisdom` equivalent for PAI.
-
-## Architecture: Three Layers
-
-```
-+-------------------------------------------------------------+
-|  Layer 3: GOVERNANCE                                        |
-|  Trust tiers, review gates, author verification             |
-|  (Debian FTP Masters model)                                 |
-+-------------------------------------------------------------+
-|  Layer 2: TRUST                                             |
-|  Cryptographic signing, capability declarations,            |
-|  verification hooks                                         |
-|  (SkillSeal + pai-manifest.yaml)                            |
-+-------------------------------------------------------------+
-|  Layer 1: TRANSPORT                                         |
-|  Package format, registry, versioning, dependencies         |
-|  (npm + pai-pkg CLI wrapper)                                |
-+-------------------------------------------------------------+
-```
-
-**Key decisions:**
-1. **npm as transport, not as trust** -- npm provides versioning, dependency resolution, and a registry. We layer our own trust on top.
-2. **[SkillSeal](https://github.com/mcyork/skillseal) as signing primitive** -- integrates Ian McCutcheon's cryptographic signing framework rather than reinventing. See [Acknowledgments](#acknowledgments).
-3. **Scoped packages for tiers** -- `@pai-official/extract-wisdom`, `@pai-community/my-skill`, unscoped for universe.
-4. **`pai-pkg` CLI wraps npm** -- users never run npm directly.
-
-## Repository Trust Model
-
-Inspired by Debian's main/universe/multiverse:
-
-| Tier | npm Scope | Trust Level | Review Required | Signing Required |
-|------|-----------|-------------|-----------------|------------------|
-| **Official** | `@pai-official/*` | Highest | Automated + 2 human reviewers | Author GPG/SSH + repo countersign |
-| **Community** | `@pai-community/*` | Medium | Automated + 1 reviewer attestation | Author GPG/SSH signature |
-| **Universe** | `@pai-universe/*` | Low | Automated checks only | Optional (flagged if unsigned) |
-| **Private** | Any private scope | User-controlled | None | Optional |
-
-### Promotion Path
-
-```
-Universe --[automated checks]--> Community review eligible
-Community --[2 human reviews]--> Official eligible
-Official --[regression/CVE]--> demoted
-```
+---
 
 ## Package Format
 
-A skill package wraps the existing PAI skill structure -- no changes to existing skills required:
+A package is a git repo with `pai-manifest.yaml` at root:
 
 ```
-@pai-official/extract-wisdom/
-  package.json              # npm transport metadata
-  pai-manifest.yaml         # PAI capabilities + trust declarations
-  SKILL.md                  # Standard PAI skill (UNCHANGED)
-  Tools/                    # TypeScript CLI tools (UNCHANGED)
-  Workflows/                # Workflow files (UNCHANGED)
-  MANIFEST.json             # SkillSeal integrity manifest
-  TRUST.json                # SkillSeal author identity
-  SIGNATURES/               # Cryptographic signatures
-  ATTESTATIONS/             # Third-party review attestations
+pai-skill-example/
+├── pai-manifest.yaml       # Capability declaration (required)
+├── skill/                  # Skill directory (skills)
+│   ├── SKILL.md
+│   └── workflows/
+├── agent/                  # Agent directory (agents)
+│   └── AgentName.md
+├── prompt/                 # Prompt directory (prompts)
+│   └── prompt-name.md
+├── src/                    # Source code (tools, skills with CLI)
+│   └── tool.ts
+├── package.json            # Bun dependencies (optional)
+└── README.md
 ```
 
-### pai-manifest.yaml (Capability Declarations)
-
-Adapted from [SpecFlow's pai-deps manifest pattern](https://github.com/jcfischer/specflow-bundle):
+### pai-manifest.yaml
 
 ```yaml
-name: ExtractWisdom
-version: 2.1.0
-type: skill
-tier: official
+name: _DOC
+version: 1.0.0
+type: skill                 # skill | tool | agent | prompt
+tier: community
 
 author:
-  name: danielmiessler
-  github: danielmiessler
-  verified: true
+  name: mellanon
+  github: mellanon
 
 provides:
   skill:
-    - trigger: "extract wisdom"
-    - trigger: "analyze video"
+    - trigger: "doc"
   cli:
-    - command: "bun Tools/ExtractWisdom.ts"
+    - command: "bun src/doc.ts"
+      name: "doc"
 
 depends_on:
-  skills:
-    - name: Parser
-      version: ">=1.0.0"
   tools:
     - name: bun
       version: ">=1.0.0"
 
 capabilities:
   filesystem:
-    read: ["~/.claude/skills/PAI/USER/"]
-    write: ["~/.claude/MEMORY/WORK/"]
-  network:
-    - domain: "api.openai.com"
-      reason: "AI inference"
+    read: []
+    write: ["**/*.html"]
+  network: []
   bash:
-    allowed: true
-    restricted_to: ["bun Tools/*.ts"]
-  secrets: ["OPENAI_API_KEY"]
+    allowed: false
+  secrets: []
 ```
 
-## Cryptographic Signing
+---
 
-Built on [SkillSeal](https://github.com/mcyork/skillseal) by [Ian McCutcheon](https://github.com/mcyork):
-
-### Signing Flow
-```
-Author develops skill
-  -> pai-pkg sign (calls skillseal sign)
-  -> MANIFEST.json + SIGNATURES/ + TRUST.json generated
-  -> pai-pkg publish (validates + publishes to npm)
-```
-
-### Verification Flow
-```
-pai-pkg install extract-wisdom
-  -> Download to staging
-  -> Verify MANIFEST.json integrity (SHA-256)
-  -> Verify signatures against author keys (GitHub key discovery)
-  -> Check trust policy (tier requirements)
-  -> Display capabilities for user approval
-  -> Install to ~/.claude/skills/
-```
-
-### Runtime Enforcement
-
-SkillSeal's PreToolUse hook re-verifies signatures on every skill invocation. Tampered files = blocked execution. Fail-closed by default.
-
-## Capability/Permission Model
-
-Like Android permissions for PAI skills:
-
-| Category | Controls | Example |
-|----------|---------|---------|
-| **filesystem** | Read/write paths | `read: ["~/.claude/MEMORY/"]` |
-| **network** | External access | `domain: "api.openai.com"` |
-| **bash** | Shell execution | `restricted_to: ["bun Tools/*.ts"]` |
-| **secrets** | Env var access | `["OPENAI_API_KEY"]` |
-| **skills** | Other skill invocation | `["Parser", "Browser"]` |
-| **hooks** | Hook installation | `["PreToolUse"]` |
-
-## Governance
-
-### Roles
-
-| Role | Responsibility |
-|------|---------------|
-| **Author** | Creates and signs skills |
-| **Reviewer** | Attests to quality/safety (Community tier) |
-| **Maintainer** | Manages Official tier promotions |
-| **Auditor** | Security review, can issue destatements |
-
-### Automated Quality Checks (all tiers)
-
-- Structure validation (SKILL.md, frontmatter, directory layout)
-- Capability honesty (declared vs actual)
-- Dependency resolution
-- Signature validity
-- Path sanitization (no hardcoded user paths)
-- Secret scanning
-- SKILL.md validity (USE WHEN triggers, workflow routing)
-
-## CLI
+## Running Tests
 
 ```bash
-# Discovery
-pai-pkg search <query>              # Search across all tiers
-pai-pkg info <skill>                # Metadata, capabilities, trust
-pai-pkg browse                      # Interactive TUI browser
-
-# Installation
-pai-pkg install <skill>             # Install with trust + capability review
-pai-pkg remove <skill>              # Uninstall
-pai-pkg update [skill]              # Update one or all
-pai-pkg list                        # List installed with versions
-
-# Authoring
-pai-pkg init <name>                 # Scaffold new package
-pai-pkg sign <path>                 # Sign with SkillSeal
-pai-pkg lint <path>                 # Run quality checks
-pai-pkg publish <path>              # Publish to tier
-
-# Repository Management
-pai-pkg sources list                # Show configured repos
-pai-pkg sources add <url>           # Add npm registry
-
-# Trust Management
-pai-pkg trust list                  # Show trusted authors
-pai-pkg trust add <github-user>     # Trust an author
-pai-pkg trust policy                # Show/edit policies
-
-# Review
-pai-pkg review <skill>              # Download for review
-pai-pkg attest <skill>              # Positive attestation
-pai-pkg destate <skill>             # Negative attestation
+bun test                    # All 169 tests
+bun test:unit               # Unit tests only
+bun test:commands           # Command tests
+bun test:e2e                # End-to-end lifecycle tests
 ```
 
-## Backward Compatibility
+Tests run in isolated temp directories — never touch real `~/.claude/` or `~/.config/`.
 
-**Zero-change guarantee:** Existing skills continue working without modification. The package system is opt-in for distribution, not mandatory for use.
+---
 
-| Existing Skill State | What Happens |
-|---------------------|--------------|
-| No package.json, no manifest | Works as before. Local only. |
-| Underscore-prefixed (_COUPA) | Works as before. Private by convention. |
+## Publishing
 
-## Trusted Author Identity
+To add your package to a community registry, see the [pai-collab publishing guide](https://github.com/mellanon/pai-collab/blob/main/sops/skill-publishing.md).
 
-| Level | Requirements | Capabilities |
-|-------|-------------|-------------|
-| **Unverified** | npm account | Universe only |
-| **Verified** | GitHub linked + GPG/SSH key | Community |
-| **Trusted** | 3+ attested skills, 6+ months | Nominate reviewers |
-| **Maintainer** | PAI team endorsement | Manage Official tier |
+**Requirements:**
+- Public GitHub repo with `pai-manifest.yaml`
+- All capabilities honestly declared
+- License file (MIT, Apache-2.0, BSD-2-Clause, BSD-3-Clause)
+- Open a PR adding your entry to the registry's `REGISTRY.yaml`
 
-## Implementation Roadmap (Revised per Community Council Review)
-
-### Phase 1: Security Spine (MVP)
-- `pai-pkg` CLI skeleton (Bun + Commander)
-- Flat tarball distribution with SkillSeal signing
-- Single `pai-manifest.yaml` as sole authority
-- Visual risk hierarchy in install flow (green/amber/red)
-- Default-deny for unsigned skills
-- `init`, `install`, `sign`, `verify`, `lint` commands
-
-### Phase 2: Standards Evaluation (after real usage)
-- Evaluate AAIF, MCP Registry, Agent Skills convergence
-- Decide transport: emerging standard vs npm-as-blob-store
-- Author verification levels
-- Capability approval refinement from user feedback
-
-### Phase 3: Governance (if ecosystem warrants)
-- Community review queue
-- `review` / `attest` / `destate` workflows
-- Tier promotion with automated, transparent criteria
-
-### Phase 4: Ecosystem
-- Registry integration (aligned with winning standard)
-- Interactive TUI browser
-- Auto-update for official tier
-- PAI installer integration
+---
 
 ## Acknowledgments
 
-This project builds on the work of several open-source projects and their authors:
-
-- **[SkillSeal](https://github.com/mcyork/skillseal)** by [Ian McCutcheon](https://github.com/mcyork) -- Cryptographic signing and verification framework for Claude Code skills. pai-pkg integrates SkillSeal as its trust layer rather than reinventing signing. SkillSeal provides the MANIFEST.json integrity chain, GPG/SSH signature verification, GitHub-based key discovery, attestation/destatement system, and fail-closed PreToolUse hook enforcement. MIT licensed.
-
-- **[SpecFlow](https://github.com/jcfischer/specflow-bundle)** by [Jens-Christian Fischer](https://github.com/jcfischer) -- Spec-driven development orchestration. The `pai-manifest.yaml` capability declaration format is adapted from SpecFlow's `pai-deps` manifest schema pattern (provides/depends_on/capabilities).
-
-- **[PAI (Personal AI Infrastructure)](https://github.com/danielmiessler/Personal_AI_Infrastructure)** by [Daniel Miessler](https://github.com/danielmiessler) -- The skill system that this package manager extends. PAI's SKILL.md format, skill directory conventions, and Algorithm execution model are the foundation.
-
-- **Debian Project** -- The three-tier repository trust model (Official/Community/Universe) is directly inspired by Debian's main/contrib/non-free architecture and its FTP Masters governance process.
-
-## Related Projects
-
-- [SkillSeal](https://github.com/mcyork/skillseal) -- Signing and verification (Layer 2 primitive)
-- [PAI](https://github.com/danielmiessler/Personal_AI_Infrastructure) -- The skill platform
-- [MCP Registry](https://github.com/modelcontextprotocol/registry) -- Emerging standard for MCP server discovery
-- [Anthropic Agent Skills](https://agentskills.io/) -- Cross-platform skill standard
+- **[PAI](https://github.com/danielmiessler/PAI)** by [Daniel Miessler](https://github.com/danielmiessler) — The skill system that this package manager extends
+- **[SkillSeal](https://github.com/mcyork/skillseal)** by [Ian McCutcheon](https://github.com/mcyork) — Cryptographic signing framework for Claude Code skills (future integration)
+- **[SpecFlow](https://github.com/jcfischer/specflow-bundle)** by [Jens-Christian Fischer](https://github.com/jcfischer) — The `pai-manifest.yaml` capability format is adapted from SpecFlow's manifest schema
+- **[pai-collab](https://github.com/mellanon/pai-collab)** — Community coordination hub and package registry
+- **Debian Project** — The multi-tier trust model is inspired by Debian's main/contrib/non-free architecture
 
 ## License
 
