@@ -74,17 +74,18 @@ export function findRegistryEntry(
   config: RegistryConfig,
   name: string
 ): { entry: RegistryEntry; artifactType: ArtifactType } | null {
+  const lower = name.toLowerCase();
   for (const entry of config.registry.skills) {
-    if (entry.name === name) return { entry, artifactType: "skill" };
+    if (entry.name.toLowerCase() === lower) return { entry, artifactType: "skill" };
   }
   for (const entry of config.registry.agents) {
-    if (entry.name === name) return { entry, artifactType: "agent" };
+    if (entry.name.toLowerCase() === lower) return { entry, artifactType: "agent" };
   }
   for (const entry of config.registry.prompts) {
-    if (entry.name === name) return { entry, artifactType: "prompt" };
+    if (entry.name.toLowerCase() === lower) return { entry, artifactType: "prompt" };
   }
   for (const entry of config.registry.tools) {
-    if (entry.name === name) return { entry, artifactType: "tool" };
+    if (entry.name.toLowerCase() === lower) return { entry, artifactType: "tool" };
   }
   return null;
 }
