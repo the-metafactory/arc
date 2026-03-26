@@ -375,12 +375,12 @@ program
 // ── Registry search (top-level) ─────────────────────────────
 
 program
-  .command("search <keyword>")
-  .description("Search all configured sources for skills, agents, and prompts")
-  .action(async (keyword: string) => {
+  .command("search [keyword]")
+  .description("Search all configured sources (omit keyword to list all)")
+  .action(async (keyword?: string) => {
     const paths = createPaths();
     const sources = await loadSources(paths.sourcesPath);
-    const results = await searchAllSources(sources, keyword, paths.cachePath);
+    const results = await searchAllSources(sources, keyword ?? "", paths.cachePath);
     console.log(formatSourcedSearch(results));
   });
 
@@ -480,11 +480,11 @@ catalog
   });
 
 catalog
-  .command("search <keyword>")
-  .description("Search catalog by name or description")
-  .action(async (keyword: string) => {
+  .command("search [keyword]")
+  .description("Search catalog (omit keyword to list all)")
+  .action(async (keyword?: string) => {
     const paths = createPaths();
-    const result = await catalogSearch(paths, keyword);
+    const result = await catalogSearch(paths, keyword ?? "");
     console.log(formatCatalogSearch(result));
   });
 

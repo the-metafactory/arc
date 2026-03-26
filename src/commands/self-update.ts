@@ -4,6 +4,7 @@ export interface SelfUpdateResult {
   success: boolean;
   oldVersion: string;
   newVersion: string;
+  commitsPulled: number;
   error?: string;
 }
 
@@ -21,8 +22,13 @@ export async function selfUpdate(): Promise<SelfUpdateResult> {
     const pkg = await Bun.file(pkgJsonPath).json();
     oldVersion = pkg.version;
   } catch {
-    return { success: false, oldVersion: "unknown", newVersion: "unknown", error: "Could not read package.json" };
+    return { success: false, oldVersion: "unknown", newVersion: "unknown", commitsPulled: 0, error: "Could not read package.json" };
   }
+
+  // Capture HEAD before pull
+  const headBefore = Bun.spawnSync(["git", "rev-parse", "HEAD"], {
+    cwd: pkgRoot, stdout: "pipe", stderr: "pipe",
+  }).stdout.toString().trim();
 
   // git pull --ff-only
   const pull = Bun.spawnSync(["git", "pull", "--ff-only"], {
@@ -37,8 +43,26 @@ export async function selfUpdate(): Promise<SelfUpdateResult> {
       success: false,
       oldVersion,
       newVersion: oldVersion,
+      commitsPulled: 0,
       error: `git pull failed: ${stderr}`,
     };
+  }
+
+  // Count commits pulled
+  let commitsPulled = 0;
+  const headAfter = Bun.spawnSync(["git", "rev-parse", "HEAD"], {
+    cwd: pkgRoot, stdout: "pipe", stderr: "pipe",
+  }).stdout.toString().trim();
+  if (headBefore && headAfter && headBefore !== headAfter) {
+    const countResult = Bun.spawnSync(
+      ["git", "rev-list", "--count", `${headBefore}..${headAfter}`],
+      { cwd: pkgRoot, stdout: "pipe", stderr: "pipe" }
+    );
+    if (countResult.exitCode === 0) {
+      commitsPulled = parseInt(countResult.stdout.toString().trim(), 10) || 0;
+    } else {
+      commitsPulled = 1; // at least one commit changed
+    }
   }
 
   // bun install (in case deps changed)
@@ -54,6 +78,7 @@ export async function selfUpdate(): Promise<SelfUpdateResult> {
       success: false,
       oldVersion,
       newVersion: oldVersion,
+      commitsPulled,
       error: `bun install failed: ${stderr}`,
     };
   }
@@ -69,7 +94,7 @@ export async function selfUpdate(): Promise<SelfUpdateResult> {
     newVersion = oldVersion;
   }
 
-  return { success: true, oldVersion, newVersion };
+  return { success: true, oldVersion, newVersion, commitsPulled };
 }
 
 export interface SelfUpdateCheck {
@@ -155,9 +180,13 @@ export function formatSelfUpdate(result: SelfUpdateResult): string {
     return `Self-update failed: ${result.error}`;
   }
 
-  if (result.oldVersion === result.newVersion) {
-    return `pai-pkg is already up to date (v${result.newVersion}).`;
+  if (result.oldVersion !== result.newVersion) {
+    return `pai-pkg updated: v${result.oldVersion} → v${result.newVersion}`;
   }
 
-  return `pai-pkg updated: v${result.oldVersion} → v${result.newVersion}`;
+  if (result.commitsPulled > 0) {
+    return `pai-pkg updated (v${result.newVersion}, pulled ${result.commitsPulled} new commit${result.commitsPulled === 1 ? "" : "s"}).`;
+  }
+
+  return `pai-pkg is already up to date (v${result.newVersion}).`;
 }
