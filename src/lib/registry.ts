@@ -28,6 +28,7 @@ export async function loadRegistry(
     parsed.registry.agents ??= [];
     parsed.registry.prompts ??= [];
     parsed.registry.tools ??= [];
+    parsed.registry.components ??= [];
 
     return parsed;
   } catch (err: any) {
@@ -51,6 +52,7 @@ export function searchRegistry(
     { entries: config.registry.agents, type: "agent" },
     { entries: config.registry.prompts, type: "prompt" },
     { entries: config.registry.tools, type: "tool" },
+    { entries: config.registry.components ?? [], type: "component" },
   ];
 
   for (const { entries, type } of sections) {
@@ -86,6 +88,9 @@ export function findRegistryEntry(
   }
   for (const entry of config.registry.tools) {
     if (entry.name.toLowerCase() === lower) return { entry, artifactType: "tool" };
+  }
+  for (const entry of config.registry.components ?? []) {
+    if (entry.name.toLowerCase() === lower) return { entry, artifactType: "component" };
   }
   return null;
 }
@@ -131,7 +136,9 @@ export function addFromRegistry(
         ? catalog.catalog.agents
         : found.artifactType === "tool"
           ? catalog.catalog.tools
-          : catalog.catalog.prompts;
+          : found.artifactType === "component"
+            ? (catalog.catalog.components ??= [])
+            : catalog.catalog.prompts;
 
   section.push(catalogEntry);
 

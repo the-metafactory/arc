@@ -1,5 +1,7 @@
-import { join } from "path";
+import { join, dirname } from "path";
 import { existsSync } from "fs";
+import { mkdir } from "fs/promises";
+import { homedir } from "os";
 import type { PaiPaths, PaiManifest, PackageTier } from "../types.js";
 import type { Database } from "bun:sqlite";
 import { readManifest, assessRisk, formatCapabilities } from "../lib/manifest.js";
@@ -177,8 +179,18 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
   const isTool = manifest.type === "tool";
   const isAgent = manifest.type === "agent";
   const isPrompt = manifest.type === "prompt";
+  const isComponent = manifest.type === "component";
 
-  if (isTool) {
+  if (isComponent) {
+    // Components: symlink each provides.files entry from repo source to expanded target
+    const files = manifest.provides?.files ?? [];
+    for (const file of files) {
+      const sourcePath = join(installPath, file.source);
+      const targetPath = file.target.replace(/^~/, homedir());
+      await mkdir(dirname(targetPath), { recursive: true });
+      await createSymlink(sourcePath, targetPath);
+    }
+  } else if (isTool) {
     // Tools: symlink repo root to binDir (no skill/ subdirectory)
     const binLinkPath = join(paths.binDir, manifest.name);
     await createSymlink(installPath, binLinkPath);
@@ -245,8 +257,9 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
 
   // 7. Record in database
   const now = new Date().toISOString();
-  const artifactType = isTool ? "tool" : isAgent ? "agent" : isPrompt ? "prompt" : "skill";
-  const artifactSourceDir = isTool ? installPath
+  const artifactType = isComponent ? "component" : isTool ? "tool" : isAgent ? "agent" : isPrompt ? "prompt" : "skill";
+  const artifactSourceDir = isComponent ? installPath
+    : isTool ? installPath
     : isAgent ? join(installPath, "agent")
     : isPrompt ? join(installPath, "prompt")
     : join(installPath, "skill");

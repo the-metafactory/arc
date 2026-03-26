@@ -1,9 +1,12 @@
 import { existsSync } from "fs";
-import { join } from "path";
+import { join, dirname } from "path";
+import { mkdir } from "fs/promises";
+import { homedir } from "os";
 import type { PaiPaths, InstalledSkill, SourcesConfig } from "../types.js";
 import type { Database } from "bun:sqlite";
 import { listSkills, getSkill } from "../lib/db.js";
 import { readManifest } from "../lib/manifest.js";
+import { createSymlink } from "../lib/symlinks.js";
 import { loadSources } from "../lib/sources.js";
 import { findInAllSources } from "../lib/remote-registry.js";
 
@@ -131,6 +134,16 @@ export async function upgradePackage(
 
   if (compareSemver(oldVersion, newVersion) >= 0) {
     return { success: true, name, oldVersion, newVersion: oldVersion };
+  }
+
+  // Re-symlink component files if this is a component
+  if (manifest.type === "component" && manifest.provides?.files?.length) {
+    for (const file of manifest.provides.files) {
+      const sourcePath = join(installPath, file.source);
+      const targetPath = file.target.replace(/^~/, homedir());
+      await mkdir(dirname(targetPath), { recursive: true });
+      await createSymlink(sourcePath, targetPath);
+    }
   }
 
   // Run bun install if package.json exists (dependencies may have changed)

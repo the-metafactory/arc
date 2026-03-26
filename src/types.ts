@@ -3,7 +3,7 @@
 // ── Catalog types ──────────────────────────────────────────────
 
 /** Artifact types in the catalog */
-export type ArtifactType = "skill" | "agent" | "prompt" | "tool";
+export type ArtifactType = "skill" | "agent" | "prompt" | "tool" | "component";
 
 /** Catalog entry type — controls trust level and install behavior */
 export type CatalogEntryType = "builtin" | "community" | "system" | "custom";
@@ -25,6 +25,7 @@ export interface CatalogDefaults {
   agents_dir: string;
   prompts_dir: string;
   tools_dir: string;
+  components_dir?: string;
 }
 
 /** Top-level catalog.yaml structure */
@@ -35,6 +36,7 @@ export interface CatalogConfig {
     agents: CatalogEntry[];
     prompts: CatalogEntry[];
     tools: CatalogEntry[];
+    components?: CatalogEntry[];
   };
 }
 
@@ -55,6 +57,7 @@ export interface RegistryConfig {
     agents: RegistryEntry[];
     prompts: RegistryEntry[];
     tools: RegistryEntry[];
+    components?: RegistryEntry[];
   };
 }
 
@@ -127,7 +130,7 @@ export interface SkillTrigger {
 export interface PaiManifest {
   name: string;
   version: string;
-  type: "skill" | "system" | "tool" | "agent" | "prompt";
+  type: "skill" | "system" | "tool" | "agent" | "prompt" | "component";
   tier?: PackageTier;
   author: {
     name: string;
@@ -137,6 +140,7 @@ export interface PaiManifest {
   provides?: {
     skill?: SkillTrigger[];
     cli?: CliProvider[];
+    files?: Array<{ source: string; target: string }>;
   };
   depends_on?: {
     skills?: SkillDependency[];
