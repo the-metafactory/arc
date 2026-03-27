@@ -103,6 +103,7 @@ export function recordInstall(
   `);
 
   const caps = manifest.capabilities;
+  if (!caps) return;
 
   if (caps.filesystem?.read) {
     for (const p of caps.filesystem.read) {

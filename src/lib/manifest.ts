@@ -17,9 +17,15 @@ export async function readManifest(
     const content = await readFile(manifestPath, "utf-8");
     const parsed = YAML.parse(content) as PaiManifest;
 
-    if (!parsed.name || !parsed.version || !parsed.capabilities) {
+    if (!parsed.name || !parsed.version) {
       throw new Error(
-        `Invalid pai-manifest.yaml: missing required fields (name, version, capabilities)`
+        `Invalid pai-manifest.yaml: missing required fields (name, version)`
+      );
+    }
+    // capabilities optional for component type, required for others
+    if (!parsed.capabilities && parsed.type !== "component") {
+      throw new Error(
+        `Invalid pai-manifest.yaml: missing required field 'capabilities' (only optional for type: component)`
       );
     }
 
@@ -37,7 +43,8 @@ export async function readManifest(
  * - low: filesystem only, or restricted bash
  */
 export function assessRisk(manifest: PaiManifest): RiskLevel {
-  const caps = manifest.capabilities;
+  const caps = manifest.capabilities ?? {};
+  if (!manifest.capabilities) return "low";
   const hasNetwork = (caps.network?.length ?? 0) > 0;
   const hasFileWrite = (caps.filesystem?.write?.length ?? 0) > 0;
   const hasSecrets = (caps.secrets?.length ?? 0) > 0;
@@ -61,7 +68,8 @@ export function assessRisk(manifest: PaiManifest): RiskLevel {
  */
 export function formatCapabilities(manifest: PaiManifest): string[] {
   const lines: string[] = [];
-  const caps = manifest.capabilities;
+  const caps = manifest.capabilities ?? {};
+  if (!manifest.capabilities) return lines;
 
   if (caps.filesystem?.read?.length) {
     for (const p of caps.filesystem.read) {

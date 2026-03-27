@@ -147,7 +147,10 @@ export interface PaiManifest {
     tools?: ToolDependency[];
     packages?: PackageDependency[];
   };
-  capabilities: Capabilities;
+  capabilities?: Capabilities;
+  scripts?: {
+    postinstall?: string;
+  };
 }
 
 /** Trust tier for installed packages */

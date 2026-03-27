@@ -255,6 +255,28 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
     });
   }
 
+  // 6b. Run postinstall script if declared
+  if (manifest.scripts?.postinstall) {
+    const scriptPath = join(installPath, manifest.scripts.postinstall);
+    if (existsSync(scriptPath)) {
+      if (!opts.yes) {
+        console.log(`\nRunning postinstall: ${manifest.scripts.postinstall}`);
+      }
+      const postResult = Bun.spawnSync(["bash", scriptPath], {
+        cwd: installPath,
+        stdout: "inherit",
+        stderr: "inherit",
+        env: { ...process.env, GROVE_DIR: installPath },
+      });
+      if (postResult.exitCode !== 0) {
+        return {
+          success: false,
+          error: `Postinstall script failed (exit ${postResult.exitCode})`,
+        };
+      }
+    }
+  }
+
   // 7. Record in database
   const now = new Date().toISOString();
   const artifactType = isComponent ? "component" : isTool ? "tool" : isAgent ? "agent" : isPrompt ? "prompt" : "skill";
