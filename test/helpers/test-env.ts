@@ -80,8 +80,8 @@ export async function createMockSkillRepo(
     name: string;
     version?: string;
     author?: string;
-    /** Artifact type: skill (default), tool, agent, prompt */
-    type?: "skill" | "tool" | "agent" | "prompt";
+    /** Artifact type: skill (default), tool, agent, prompt, component */
+    type?: "skill" | "tool" | "agent" | "prompt" | "component";
     withCli?: boolean;
     withoutManifest?: boolean;
     capabilities?: {
@@ -89,6 +89,13 @@ export async function createMockSkillRepo(
       filesystem?: { read?: string[]; write?: string[] };
       bash?: { allowed: boolean; restricted_to?: string[] };
       secrets?: string[];
+    };
+    /** Lifecycle scripts to declare in the manifest and create on disk */
+    scripts?: {
+      preinstall?: { path: string; content: string };
+      postinstall?: { path: string; content: string };
+      preupgrade?: { path: string; content: string };
+      postupgrade?: { path: string; content: string };
     };
   }
 ): Promise<MockSkillRepo> {
@@ -141,6 +148,16 @@ export async function createMockSkillRepo(
     );
   }
 
+  // Create lifecycle script files if declared
+  if (opts.scripts) {
+    for (const [, script] of Object.entries(opts.scripts)) {
+      const scriptAbsPath = join(repoDir, script.path);
+      await Bun.write(scriptAbsPath, script.content);
+      // Make executable
+      Bun.spawnSync(["chmod", "+x", scriptAbsPath], { stdout: "pipe", stderr: "pipe" });
+    }
+  }
+
   // Create pai-manifest.yaml (unless testing without it)
   if (!opts.withoutManifest) {
     const caps = opts.capabilities ?? {};
@@ -169,6 +186,11 @@ export async function createMockSkillRepo(
         bash: caps.bash ?? { allowed: false },
         secrets: caps.secrets ?? [],
       },
+      ...(opts.scripts ? {
+        scripts: Object.fromEntries(
+          Object.entries(opts.scripts).map(([hook, s]) => [hook, s.path])
+        ),
+      } : {}),
     };
 
     // Write as YAML manually (avoid dependency on yaml in test helper)

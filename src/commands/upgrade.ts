@@ -9,6 +9,7 @@ import { readManifest } from "../lib/manifest.js";
 import { createSymlink } from "../lib/symlinks.js";
 import { loadSources } from "../lib/sources.js";
 import { findInAllSources } from "../lib/remote-registry.js";
+import { runScript } from "../lib/scripts.js";
 
 export interface UpgradeCheckResult {
   name: string;
@@ -136,6 +137,19 @@ export async function upgradePackage(
     return { success: true, name, oldVersion, newVersion: oldVersion };
   }
 
+  // Run preupgrade script if declared
+  if (manifest.scripts?.preupgrade) {
+    const preResult = runScript({
+      installPath,
+      scriptPath: manifest.scripts.preupgrade,
+      hookName: "preupgrade",
+      env: { PAI_OLD_VERSION: oldVersion, PAI_NEW_VERSION: newVersion },
+    });
+    if (!preResult.success && !preResult.skipped) {
+      return { success: false, name, oldVersion, error: `Preupgrade script failed (exit ${preResult.exitCode})` };
+    }
+  }
+
   // Re-symlink component files if this is a component
   if (manifest.type === "component" && manifest.provides?.files?.length) {
     for (const file of manifest.provides.files) {
@@ -156,6 +170,21 @@ export async function upgradePackage(
     });
   }
 
+  // Run postupgrade script if declared (falls back to postinstall)
+  const postHook = manifest.scripts?.postupgrade ?? manifest.scripts?.postinstall;
+  const postHookName = manifest.scripts?.postupgrade ? "postupgrade" : "postinstall";
+  if (postHook) {
+    const postResult = runScript({
+      installPath,
+      scriptPath: postHook,
+      hookName: postHookName,
+      env: { PAI_OLD_VERSION: oldVersion, PAI_NEW_VERSION: newVersion },
+    });
+    if (!postResult.success && !postResult.skipped) {
+      return { success: false, name, oldVersion, error: `${postHookName} script failed (exit ${postResult.exitCode})` };
+    }
+  }
+
   // Update DB
   const now = new Date().toISOString();
   db.prepare(
@@ -169,20 +198,22 @@ export async function upgradePackage(
     "INSERT INTO capabilities (skill_name, type, value, reason) VALUES (?, ?, ?, ?)"
   );
   const caps = manifest.capabilities;
-  if (caps.filesystem?.read) {
-    for (const p of caps.filesystem.read) insertCap.run(name, "fs_read", p, "");
-  }
-  if (caps.filesystem?.write) {
-    for (const p of caps.filesystem.write) insertCap.run(name, "fs_write", p, "");
-  }
-  if (caps.network) {
-    for (const n of caps.network) insertCap.run(name, "network", n.domain, n.reason);
-  }
-  if (caps.bash?.restricted_to) {
-    for (const b of caps.bash.restricted_to) insertCap.run(name, "bash", b, "");
-  }
-  if (caps.secrets) {
-    for (const s of caps.secrets) insertCap.run(name, "secret", s, "");
+  if (caps) {
+    if (caps.filesystem?.read) {
+      for (const p of caps.filesystem.read) insertCap.run(name, "fs_read", p, "");
+    }
+    if (caps.filesystem?.write) {
+      for (const p of caps.filesystem.write) insertCap.run(name, "fs_write", p, "");
+    }
+    if (caps.network) {
+      for (const n of caps.network) insertCap.run(name, "network", n.domain, n.reason);
+    }
+    if (caps.bash?.restricted_to) {
+      for (const b of caps.bash.restricted_to) insertCap.run(name, "bash", b, "");
+    }
+    if (caps.secrets) {
+      for (const s of caps.secrets) insertCap.run(name, "secret", s, "");
+    }
   }
 
   return { success: true, name, oldVersion, newVersion };

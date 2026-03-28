@@ -7,6 +7,7 @@ import type { Database } from "bun:sqlite";
 import { readManifest, assessRisk, formatCapabilities } from "../lib/manifest.js";
 import { recordInstall, getSkill } from "../lib/db.js";
 import { createSymlink, createCliShim, extractCliInfo } from "../lib/symlinks.js";
+import { runScript } from "../lib/scripts.js";
 
 export interface InstallOptions {
   paths: PaiPaths;
@@ -175,6 +176,22 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
     }
   }
 
+  // 3b. Run preinstall script if declared
+  if (manifest.scripts?.preinstall) {
+    const preResult = runScript({
+      installPath,
+      scriptPath: manifest.scripts.preinstall,
+      hookName: "preinstall",
+      quiet: opts.yes,
+    });
+    if (!preResult.success && !preResult.skipped) {
+      return {
+        success: false,
+        error: `Preinstall script failed (exit ${preResult.exitCode})`,
+      };
+    }
+  }
+
   // 4. Create symlinks based on artifact type
   const isTool = manifest.type === "tool";
   const isAgent = manifest.type === "agent";
@@ -257,23 +274,17 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
 
   // 6b. Run postinstall script if declared
   if (manifest.scripts?.postinstall) {
-    const scriptPath = join(installPath, manifest.scripts.postinstall);
-    if (existsSync(scriptPath)) {
-      if (!opts.yes) {
-        console.log(`\nRunning postinstall: ${manifest.scripts.postinstall}`);
-      }
-      const postResult = Bun.spawnSync(["bash", scriptPath], {
-        cwd: installPath,
-        stdout: "inherit",
-        stderr: "inherit",
-        env: { ...process.env, GROVE_DIR: installPath },
-      });
-      if (postResult.exitCode !== 0) {
-        return {
-          success: false,
-          error: `Postinstall script failed (exit ${postResult.exitCode})`,
-        };
-      }
+    const postResult = runScript({
+      installPath,
+      scriptPath: manifest.scripts.postinstall,
+      hookName: "postinstall",
+      quiet: opts.yes,
+    });
+    if (!postResult.success && !postResult.skipped) {
+      return {
+        success: false,
+        error: `Postinstall script failed (exit ${postResult.exitCode})`,
+      };
     }
   }
 

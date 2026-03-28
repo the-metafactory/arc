@@ -149,7 +149,10 @@ export interface PaiManifest {
   };
   capabilities?: Capabilities;
   scripts?: {
+    preinstall?: string;
     postinstall?: string;
+    preupgrade?: string;
+    postupgrade?: string;
   };
 }
 

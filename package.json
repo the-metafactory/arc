@@ -1,6 +1,6 @@
 {
   "name": "pai-pkg",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "PAI skill package manager — install, manage, and distribute AI agent skills",
   "type": "module",
   "bin": {
