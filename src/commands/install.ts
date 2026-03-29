@@ -8,6 +8,7 @@ import { readManifest, assessRisk, formatCapabilities } from "../lib/manifest.js
 import { recordInstall, getSkill } from "../lib/db.js";
 import { createSymlink, createCliShim, extractCliInfo } from "../lib/symlinks.js";
 import { runScript } from "../lib/scripts.js";
+import { registerHooks } from "../lib/hooks.js";
 
 export interface InstallOptions {
   paths: PaiPaths;
@@ -262,6 +263,28 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
     }
   }
 
+  // 5b. Register hooks (if declared, with consent gating)
+  if (manifest.provides?.hooks?.length) {
+    const tier = opts.sourceTier ?? manifest.tier ?? "custom";
+    const approved = await promptHookConsent(
+      manifest.name,
+      tier,
+      manifest.provides.hooks,
+      opts.yes,
+    );
+    if (approved) {
+      const settingsPath = join(homedir(), ".claude", "settings.json");
+      await registerHooks(manifest.name, manifest.provides.hooks, settingsPath);
+      if (!opts.yes) {
+        console.log("  \u2713 Hooks registered in settings.json");
+      }
+    } else {
+      if (!opts.yes) {
+        console.log("  \u2298 Hook registration declined");
+      }
+    }
+  }
+
   // 6. Run bun install if package.json exists
   const packageJsonPath = join(installPath, "package.json");
   if (existsSync(packageJsonPath)) {
@@ -321,6 +344,58 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
     version: manifest.version,
     manifest,
   };
+}
+
+/**
+ * Consent gate for hook registration based on trust tier.
+ *
+ * - official/sponsored tier: auto-approve (silent for --yes)
+ * - community/custom tier: show hooks and prompt for approval
+ * - --yes flag: auto-approve regardless of tier
+ */
+async function promptHookConsent(
+  packageName: string,
+  tier: string,
+  hooks: Array<{ event: string; command: string; matcher?: string }>,
+  autoApprove?: boolean,
+): Promise<boolean> {
+  // Auto-approve for --yes flag or trusted tiers
+  if (autoApprove) return true;
+  if (tier === "official") return true;
+
+  // Show hook details
+  console.log(`\n\u{1F4CB} ${packageName} wants to register hooks:`);
+  for (const hook of hooks) {
+    const matcherLabel = hook.matcher ? ` (${hook.matcher})` : "";
+    console.log(`  \u2022 ${hook.event}${matcherLabel} \u2192 ${hook.command}`);
+  }
+  console.log("");
+  console.log("Hooks run during Claude Code sessions.");
+
+  // Community/custom: ask for approval
+  if (tier === "community" || tier === "custom") {
+    process.stdout.write("Allow? [y/N] ");
+    const response = await readLine();
+    return response.trim().toLowerCase() === "y";
+  }
+
+  // Other trusted tiers: auto-approve
+  return true;
+}
+
+/**
+ * Read a single line from stdin.
+ */
+function readLine(): Promise<string> {
+  return new Promise((resolve) => {
+    const stdin = process.stdin;
+    stdin.setEncoding("utf-8");
+    stdin.resume();
+    stdin.once("data", (data: string) => {
+      stdin.pause();
+      resolve(data);
+    });
+  });
 }
 
 /**

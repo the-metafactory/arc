@@ -63,6 +63,9 @@ provides:
   cli:
     - command: "bun ${lowerName}.ts"
       name: "${lowerName}"
+  # hooks:
+  #   - event: PostToolUse
+  #     command: "\${PAI_DIR}/hooks/MyHook.hook.ts"
 
 depends_on:
   tools:
@@ -96,6 +99,9 @@ provides:
     - trigger: "${lowerName}"
   # cli:
   #   - command: "bun src/tool.ts"
+  # hooks:
+  #   - event: PostToolUse
+  #     command: "\${PAI_DIR}/hooks/MyHook.hook.ts"
 
 depends_on:
   tools:

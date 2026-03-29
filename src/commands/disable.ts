@@ -1,8 +1,11 @@
 import { join } from "path";
+import { homedir } from "os";
 import type { Database } from "bun:sqlite";
 import type { PaiPaths } from "../types.js";
 import { getSkill, updateSkillStatus } from "../lib/db.js";
 import { removeSymlink, removeCliShim } from "../lib/symlinks.js";
+import { readManifest } from "../lib/manifest.js";
+import { removeHooks } from "../lib/hooks.js";
 
 export interface DisableResult {
   success: boolean;
@@ -64,6 +67,13 @@ export async function disable(
   if (!isAgent && !isPrompt) {
     const shimName = isTool ? name.toLowerCase() : name.replace(/^_/, "").toLowerCase();
     await removeCliShim(paths.shimDir, shimName);
+  }
+
+  // Remove hooks from settings.json
+  const manifest = await readManifest(skill.install_path);
+  if (manifest?.provides?.hooks?.length) {
+    const settingsPath = join(homedir(), ".claude", "settings.json");
+    await removeHooks(name, settingsPath);
   }
 
   // Update database

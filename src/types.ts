@@ -141,6 +141,11 @@ export interface PaiManifest {
     skill?: SkillTrigger[];
     cli?: CliProvider[];
     files?: Array<{ source: string; target: string }>;
+    hooks?: Array<{
+      event: string;
+      command: string;
+      matcher?: string;
+    }>;
   };
   depends_on?: {
     skills?: SkillDependency[];

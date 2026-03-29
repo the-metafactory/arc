@@ -1,10 +1,12 @@
 import { join } from "path";
 import { rm } from "fs/promises";
+import { homedir } from "os";
 import type { Database } from "bun:sqlite";
 import type { PaiPaths } from "../types.js";
 import { getSkill, removeSkill } from "../lib/db.js";
 import { removeSymlink, removeCliShim } from "../lib/symlinks.js";
 import { readManifest } from "../lib/manifest.js";
+import { removeHooks } from "../lib/hooks.js";
 
 export interface RemoveResult {
   success: boolean;
@@ -59,12 +61,21 @@ export async function remove(
     await removeSymlink(binLink);
   }
 
+  // Read manifest before removal (needed for CLI shim name and hooks cleanup)
+  const manifest = await readManifest(skill.install_path);
+
   // Remove CLI shim from PATH (only for skills and tools)
   if (!isAgent && !isPrompt) {
     const shimName = isTool
-      ? (await readManifest(skill.install_path))?.provides?.cli?.[0]?.name ?? name.toLowerCase()
+      ? manifest?.provides?.cli?.[0]?.name ?? name.toLowerCase()
       : name.replace(/^_/, "").toLowerCase();
     await removeCliShim(paths.shimDir, shimName);
+  }
+
+  // Remove hooks from settings.json (before deleting repo)
+  if (manifest?.provides?.hooks?.length) {
+    const settingsPath = join(homedir(), ".claude", "settings.json");
+    await removeHooks(name, settingsPath);
   }
 
   // Remove repo directory

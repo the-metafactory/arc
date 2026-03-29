@@ -1,10 +1,12 @@
 import { join } from "path";
 import { existsSync } from "fs";
+import { homedir } from "os";
 import type { Database } from "bun:sqlite";
 import type { PaiPaths } from "../types.js";
 import { getSkill, updateSkillStatus } from "../lib/db.js";
 import { readManifest } from "../lib/manifest.js";
 import { createSymlink, createCliShim } from "../lib/symlinks.js";
+import { registerHooks } from "../lib/hooks.js";
 
 export interface EnableResult {
   success: boolean;
@@ -89,6 +91,12 @@ export async function enable(
       await createSymlink(skill.install_path, binLinkPath);
       await createCliShim(paths.shimDir, paths.binDir, manifest);
     }
+  }
+
+  // Re-register hooks when enabling (consent was given at install time)
+  if (manifest?.provides?.hooks?.length) {
+    const settingsPath = join(homedir(), ".claude", "settings.json");
+    await registerHooks(name, manifest.provides.hooks, settingsPath);
   }
 
   // Update database
