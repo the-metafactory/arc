@@ -56,8 +56,8 @@ const pkg = require("../package.json");
 const program = new Command();
 
 program
-  .name("pai-pkg")
-  .description("PAI skill package manager")
+  .name("arc")
+  .description("Agentic component package manager")
   .version(pkg.version);
 
 program
@@ -89,7 +89,7 @@ program
       const found = await findInAllSources(sources, nameOrUrl, paths.cachePath);
 
       if (!found) {
-        console.error(`❌ "${nameOrUrl}" not found in any source. Try: pai-pkg search <keyword>`);
+        console.error(`❌ "${nameOrUrl}" not found in any source. Try: arc search <keyword>`);
         process.exit(1);
       }
 
@@ -228,7 +228,7 @@ program
       const checks = await checkUpgrades(db, paths);
 
       if (opts.check) {
-        // Also check if pai-pkg itself has an update
+        // Also check if arc itself has an update
         const selfCheck = checkSelfUpdate();
         const selfMsg = formatSelfUpdateCheck(selfCheck);
         if (selfMsg) console.log(selfMsg + "\n");
@@ -365,7 +365,7 @@ program
 
 program
   .command("self-update")
-  .description("Update pai-pkg itself (git pull + bun install)")
+  .description("Update arc itself (git pull + bun install)")
   .action(async () => {
     const result = await selfUpdate();
     console.log(formatSelfUpdate(result));

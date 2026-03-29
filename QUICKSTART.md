@@ -1,4 +1,4 @@
-# pai-pkg Quickstart
+# arc Quickstart
 
 Get from zero to installing and publishing skills in 5 minutes.
 
@@ -8,27 +8,27 @@ Get from zero to installing and publishing skills in 5 minutes.
 - Git
 - A PAI installation (`~/.claude/skills/` directory exists)
 
-## Install pai-pkg
+## Install arc
 
 ```bash
-git clone git@github.com:mellanon/pai-pkg.git ~/Developer/pai-pkg
-cd ~/Developer/pai-pkg
+git clone git@github.com:mellanon/arc.git ~/Developer/arc
+cd ~/Developer/arc
 bun install
 bun link
 ```
 
-Verify: `pai-pkg --version`
+Verify: `arc --version`
 
 ## Discover Skills
 
-pai-pkg comes pre-configured with the [pai-collab](https://github.com/mellanon/pai-collab) community hub as a source.
+arc comes pre-configured with the [pai-collab](https://github.com/mellanon/pai-collab) community hub as a source.
 
 ```bash
 # See configured sources
-pai-pkg source list
+arc source list
 
 # Search across all sources
-pai-pkg search doc
+arc search doc
 ```
 
 Example output:
@@ -43,13 +43,13 @@ Found 1 match(es) across sources:
 
 ```bash
 # Install by name (from registry)
-pai-pkg install _DOC
+arc install _DOC
 
 # Or install directly from a git URL
-pai-pkg install git@github.com:mellanon/pai-skill-doc.git
+arc install git@github.com:mellanon/pai-skill-doc.git
 ```
 
-pai-pkg will:
+arc will:
 1. Clone the repo to `~/.config/pai/pkg/repos/`
 2. Show you what capabilities the skill requests
 3. Create a symlink in `~/.claude/skills/`
@@ -58,13 +58,13 @@ pai-pkg will:
 ## Manage Installed Skills
 
 ```bash
-pai-pkg list                  # See what's installed
-pai-pkg info _DOC             # Show details and capabilities
-pai-pkg audit                 # Audit total capability surface
-pai-pkg disable _DOC          # Temporarily disable
-pai-pkg enable _DOC           # Re-enable
-pai-pkg remove _DOC           # Completely uninstall
-pai-pkg verify _DOC           # Check integrity
+arc list                  # See what's installed
+arc info _DOC             # Show details and capabilities
+arc audit                 # Audit total capability surface
+arc disable _DOC          # Temporarily disable
+arc enable _DOC           # Re-enable
+arc remove _DOC           # Completely uninstall
+arc verify _DOC           # Check integrity
 ```
 
 ## Add More Sources
@@ -73,15 +73,15 @@ Add other community hubs to discover skills from different authors:
 
 ```bash
 # Add a source
-pai-pkg source add jcfischer-tools \
+arc source add jcfischer-tools \
   https://raw.githubusercontent.com/jcfischer/pai-tools/main/REGISTRY.yaml \
   --tier community
 
 # Search now includes both sources
-pai-pkg search security
+arc search security
 
 # Remove a source
-pai-pkg source remove jcfischer-tools
+arc source remove jcfischer-tools
 ```
 
 ## Publish Your Own Skill
@@ -90,7 +90,7 @@ pai-pkg source remove jcfischer-tools
 
 ```bash
 # Scaffold a new skill
-pai-pkg init MySkill --author your-github-handle
+arc init MySkill --author your-github-handle
 cd pai-skill-myskill
 ```
 
@@ -174,7 +174,7 @@ Skills installed from pai-collab get **community** tier. Direct git URL installs
 
 ## What's Next
 
-- `pai-pkg search` to explore what's available
-- `pai-pkg audit` to review your total capability surface
-- `pai-pkg init` to scaffold your own skill
+- `arc search` to explore what's available
+- `arc audit` to review your total capability surface
+- `arc init` to scaffold your own skill
 - Read the [full README](README.md) for advanced usage

@@ -91,7 +91,7 @@ arbor://agent/spawn          → Agent tool (spawning subagents)
 
 ### 3.1 Core Insight
 
-The key first-principles insight: **the SecurityValidator doesn't need to know which skill is active.** It enforces the UNION of all policies. When `pai-pkg install` runs, it reads the skill's `pai-manifest.yaml` capabilities and merges them into the global `patterns.yaml` as a skill-contributed policy section. When `pai-pkg disable` runs, it removes them.
+The key first-principles insight: **the SecurityValidator doesn't need to know which skill is active.** It enforces the UNION of all policies. When `arc install` runs, it reads the skill's `pai-manifest.yaml` capabilities and merges them into the global `patterns.yaml` as a skill-contributed policy section. When `arc disable` runs, it removes them.
 
 ```
 Install = add policy rules
@@ -114,8 +114,8 @@ The union model means every installed skill operates within the combined capabil
 
 **Mitigations (all shipping in Phase 1):**
 1. **Zero declared = zero granted.** A skill that declares no capabilities in its `pai-manifest.yaml` gets no implicit permissions from the union. This prevents the "free-rider" attack where a minimal skill exploits the union surface.
-2. **Capability delta display.** `pai-pkg install` shows what NEW combined capabilities this install creates, not just the skill's own capabilities.
-3. **Expanded composition warnings.** `pai-pkg audit` flags all dangerous compositions including `secrets + network` (data exfiltration), not just `network + write`.
+2. **Capability delta display.** `arc install` shows what NEW combined capabilities this install creates, not just the skill's own capabilities.
+3. **Expanded composition warnings.** `arc audit` flags all dangerous compositions including `secrets + network` (data exfiltration), not just `network + write`.
 4. **Publish-time SKILL.md analysis** (Phase 2). Registry-side static analysis scans SKILL.md for tool references inconsistent with declared capabilities (e.g., skill declares no network but references `curl`).
 
 **Gate for revisiting:** If Claude Code exposes skill-level tool attribution in its hook payload, per-skill isolation becomes feasible and should be implemented. Track: [Anthropic hook API evolution].
@@ -151,7 +151,7 @@ base:
       - "~/.claude/hooks/"                    # Security hooks are immutable
       - "~/.claude/PAI/USER/PAISECURITYSYSTEM/"  # Security policy is immutable
 
-# ── Skill Policies (managed by pai-pkg install/disable) ──
+# ── Skill Policies (managed by arc install/disable) ──
 skills:
   ExtractWisdom:
     installed: "2026-03-18"
@@ -258,7 +258,7 @@ function evaluateToolCall(tool: string, input: ToolInput): Decision {
 
 ### 3.4 Install-Time Policy Generation
 
-When `pai-pkg install skill-name` runs:
+When `arc install skill-name` runs:
 
 ```
 1. Download skill package to staging directory
@@ -293,7 +293,7 @@ When `pai-pkg install skill-name` runs:
 ### 3.5 Kill Switch
 
 ```bash
-pai-pkg disable skill-name
+arc disable skill-name
 ```
 
 This does exactly two things:
@@ -305,7 +305,7 @@ The hook enforces immediately on the next tool call — no restart needed, becau
 To re-enable:
 
 ```bash
-pai-pkg enable skill-name
+arc enable skill-name
 ```
 
 Restores the policy section and moves files back.
@@ -335,7 +335,7 @@ The union model already handles this correctly at the enforcement boundary. The 
 
 **Mitigation:**
 
-1. **Capability budget warning** — `pai-pkg install` shows the TOTAL capability surface after adding the new skill, not just the new skill's capabilities. If the union creates a new risk class (e.g., first skill with both network AND write access), flag it:
+1. **Capability budget warning** — `arc install` shows the TOTAL capability surface after adding the new skill, not just the new skill's capabilities. If the union creates a new risk class (e.g., first skill with both network AND write access), flag it:
 
 ```
 ⚠️  Warning: Installing Parser alongside Research creates a
@@ -346,7 +346,7 @@ The union model already handles this correctly at the enforcement boundary. The 
     [Install anyway] [Review details] [Cancel]
 ```
 
-2. **Composition audit** — `pai-pkg audit` command that scans the total installed capability surface and flags dangerous combinations.
+2. **Composition audit** — `arc audit` command that scans the total installed capability surface and flags dangerous combinations.
 
 ---
 
@@ -512,7 +512,7 @@ Integration with Arbor's observability patterns — specifically the dual-emit m
 | Level | What | When |
 |-------|------|------|
 | **L1: Event logging** | Individual security events to MEMORY/SECURITY/ | **Today (shipped)** |
-| **L2: Skill-scoped policies** | patterns.yaml skill sections, install/disable | **Phase 1 of pai-pkg** |
+| **L2: Skill-scoped policies** | patterns.yaml skill sections, install/disable | **Phase 1 of arc** |
 | **L3: Behavioral anomaly detection** | Dual-hook session audit (PreToolUse blocks, PostToolUse records) | **Phase 2** |
 | **L4: Cross-session correlation** | Persistent event store with trend analysis | **Phase 3** |
 | **L5: Real-time dashboard** | Integration with ivy-blackboard for live monitoring | **Phase 4** |
@@ -533,7 +533,7 @@ Integration with Arbor's observability patterns — specifically the dual-emit m
 │  │  SecurityValidator.hook.ts ←── patterns.yaml                │ │
 │  │   • Base security rules     │   • Base rules (always)      │ │
 │  │   • Skill-scoped policies   │   • Skill policies (additive)│ │
-│  │   • <10ms per call          │   • Managed by pai-pkg CLI   │ │
+│  │   • <10ms per call          │   • Managed by arc CLI   │ │
 │  │                             │                               │ │
 │  │  ContentFilter hooks ←── pai-content-filter patterns        │ │
 │  │   • Inbound prompt injection detection (34 patterns)        │ │
@@ -556,7 +556,7 @@ Integration with Arbor's observability patterns — specifically the dual-emit m
 │  └─────────────────────────────────────────────────────────────┘ │
 │                                                                  │
 │  ┌─────────────────────────────────────────────────────────────┐ │
-│  │  SKILL LIFECYCLE (pai-pkg CLI)                              │ │
+│  │  SKILL LIFECYCLE (arc CLI)                              │ │
 │  │                                                             │ │
 │  │  install ──→ verify signature ──→ display capabilities      │ │
 │  │          ──→ user approves ──→ merge into patterns.yaml     │ │
@@ -600,21 +600,21 @@ The pai-collab spoke repos (pai-secret-scanning, pai-content-filter, skill-enfor
 
 **Current state:** Each spoke repo has its own installation mechanism (shell scripts, manual hook registration). They work individually but aren't composed.
 
-**Target state:** `pai-pkg` serves as the composition layer:
+**Target state:** `arc` serves as the composition layer:
 
 ```bash
-# pai-pkg integrates the security stack as "infrastructure skills"
+# arc integrates the security stack as "infrastructure skills"
 # These aren't regular skills — they're enforcement components
 
-pai-pkg install --system pai-secret-scanning
+arc install --system pai-secret-scanning
 # → Installs gitleaks rules to ~/.config/pai/security/
 # → Registers pre-commit hook
 
-pai-pkg install --system pai-content-filter
+arc install --system pai-content-filter
 # → Installs prompt injection patterns
 # → Registers content-filter hooks (PreToolUse on Read/Glob/Grep)
 
-pai-pkg install --system skill-enforcer
+arc install --system skill-enforcer
 # → Installs skill structure validation
 # → Registers PreToolUse hooks for Skill tool
 ```
@@ -675,26 +675,26 @@ capabilities:
 
 **Collaboration note:** This schema is a starting point proposed by @jcfischer. The first `--system` package (pai-content-filter) will be co-designed with JC to validate the schema against real integration needs.
 
-**How to activate them today (before pai-pkg exists):**
+**How to activate them today (before arc exists):**
 
 1. Clone the spoke repos locally
 2. Run their install scripts
 3. Register their hooks in `settings.json`
 
-This is the current manual process. `pai-pkg install --system` automates it.
+This is the current manual process. `arc install --system` automates it.
 
 ### 6.3 Relationship to the-hive Protocol
 
-The Hive's 7 protocol specs include a **Skill Protocol** that defines how skills are packaged, shared, and installed across a hive of operators. pai-pkg implements this protocol for the PAI context:
+The Hive's 7 protocol specs include a **Skill Protocol** that defines how skills are packaged, shared, and installed across a hive of operators. arc implements this protocol for the PAI context:
 
-| Hive Protocol Concept | pai-pkg Implementation |
+| Hive Protocol Concept | arc Implementation |
 |----------------------|----------------------|
 | Spoke manifest (`.collab/manifest.yaml`) | `pai-manifest.yaml` (capability declarations) |
 | Spoke status (`.collab/status.yaml`) | `packages.db` (installed package state) |
 | Operator identity (Ed25519 signing key) | SkillSeal / Sigstore author signature |
 | Hub trust (allowed-signers) | `sources.yaml` tier policies |
 | Four compliance layers | Install-time verification pipeline |
-| Kill switch | `pai-pkg disable` (policy removal) |
+| Kill switch | `arc disable` (policy removal) |
 
 ---
 
@@ -704,8 +704,8 @@ The Hive's 7 protocol specs include a **Skill Protocol** that defines how skills
 |-------|--------------|-------------|-----|
 | **Tool-call interception** | SecurityValidator.hook.ts intercepts Bash/Read/Write/Edit | Same hook, extended with skill-scoped policies | Schema extension only |
 | **Policy engine** | patterns.yaml with global rules | patterns.yaml v2.0 with base + skill sections | YAML schema migration |
-| **Install-time policy** | N/A (skills installed manually) | `pai-pkg install` reads manifest, merges policy | New CLI command |
-| **Kill switch** | N/A | `pai-pkg disable` removes policy section | New CLI command |
+| **Install-time policy** | N/A (skills installed manually) | `arc install` reads manifest, merges policy | New CLI command |
+| **Kill switch** | N/A | `arc disable` removes policy section | New CLI command |
 | **Inbound protection** | pai-content-filter (shipped, standalone) | Integrated as `--system` package | Packaging wrapper |
 | **Outbound protection** | pai-secret-scanning (shipped, standalone) | Integrated as `--system` package | Packaging wrapper |
 | **Skill validation** | skill-enforcer (shipped, standalone) | Integrated as `--system` package | Packaging wrapper |
@@ -725,13 +725,13 @@ The Hive's 7 protocol specs include a **Skill Protocol** that defines how skills
 
 1. **patterns.yaml v2.0 schema** — Add `skills:` section alongside existing rules
 2. **Policy merge logic** — SecurityValidator loads both base and skill sections
-3. **`pai-pkg install` policy generation** — Read `pai-manifest.yaml`, create skill policy section, merge into `patterns.yaml`
-4. **`pai-pkg disable/enable`** — Remove/restore skill policy sections
+3. **`arc install` policy generation** — Read `pai-manifest.yaml`, create skill policy section, merge into `patterns.yaml`
+4. **`arc disable/enable`** — Remove/restore skill policy sections
 5. **Capability display** — Risk-tiered visual output during install (green/amber/red)
 
 **Deliverables:**
 - Extended `SecurityValidator.hook.ts` (backward compatible — if no `skills:` section, behavior unchanged)
-- `pai-pkg` CLI with `install`, `disable`, `enable`, `list` commands
+- `arc` CLI with `install`, `disable`, `enable`, `list` commands
 - `patterns.yaml` v2.0 schema documented
 
 ### Phase 2: Observability + Composition (Weeks 5-8)
@@ -740,7 +740,7 @@ The Hive's 7 protocol specs include a **Skill Protocol** that defines how skills
 
 1. **Dual-hook Session Audit** — SessionAuditRecorder (PostToolUse, records events) + SessionAuditEnforcer (PreToolUse, blocks dangerous sequences)
 2. **anomaly-rules.yaml** — Sequence and count-based pattern detection with fail mode policy (critical=closed, high/medium=open)
-3. **`pai-pkg audit`** — Scan total installed capability surface for dangerous unions (including secrets+network composition)
+3. **`arc audit`** — Scan total installed capability surface for dangerous unions (including secrets+network composition)
 4. **Composition warnings** — Flag when installing a skill creates new combined capabilities
 5. **Integration of spoke repos** — Package pai-secret-scanning, pai-content-filter, skill-enforcer as `--system` packages using system manifest schema
 6. **Publish-time SKILL.md static analysis** — Registry-side scan for tool references inconsistent with declared capabilities
@@ -748,7 +748,7 @@ The Hive's 7 protocol specs include a **Skill Protocol** that defines how skills
 
 **Deliverables:**
 - Dual-hook SessionAudit shipping with default anomaly rules
-- `pai-pkg audit` command (already built, needs composition expansion)
+- `arc audit` command (already built, needs composition expansion)
 - Three `--system` packages created (co-designed with @jcfischer)
 
 ### Phase 3: Cross-Session Intelligence (Weeks 9-16)
@@ -757,7 +757,7 @@ The Hive's 7 protocol specs include a **Skill Protocol** that defines how skills
 
 1. **Event store** — SQLite database for security events (building on ivy-blackboard's pattern)
 2. **Cross-session anomaly detection** — Persistent state that survives session boundaries. An attacker exfiltrating one file per session over 10 sessions triggers cross-session thresholds.
-3. **Runtime telemetry (opt-in)** — Log which capabilities are actually exercised during skill invocations, so `pai-pkg audit` can distinguish "theoretical risk" from "observed risk." This reduces audit noise for capability combinations that exist in theory but never co-occur in practice.
+3. **Runtime telemetry (opt-in)** — Log which capabilities are actually exercised during skill invocations, so `arc audit` can distinguish "theoretical risk" from "observed risk." This reduces audit noise for capability combinations that exist in theory but never co-occur in practice.
 4. **ivy-blackboard integration** — Security events streamed via SSE to dashboard
 5. **Incident response** — Automated policy tightening on anomaly detection
 
@@ -838,7 +838,7 @@ function isBashAllowedBySkills(
 ### 9.2 Policy Generation from Manifest (Phase 1)
 
 ```typescript
-// pai-pkg install: manifest → policy conversion
+// arc install: manifest → policy conversion
 
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { readFileSync, writeFileSync } from 'fs';
@@ -961,7 +961,7 @@ These principles are derived from Arbor's security philosophy and validated thro
 
 2. **Deterministic evaluation only.** No LLM reasoning in the security path. YAML pattern matching in <10ms. Deterministic outcomes for identical inputs.
 
-3. **Install = policy change.** A skill's capabilities become enforceable the moment `pai-pkg install` merges them into patterns.yaml. No runtime skill attribution needed.
+3. **Install = policy change.** A skill's capabilities become enforceable the moment `arc install` merges them into patterns.yaml. No runtime skill attribution needed.
 
 4. **Base rules are inviolable.** Skill policies are additive — they can only ADD capabilities within the allowed space. They cannot override base security rules (zeroAccess paths, blocked commands).
 
@@ -969,7 +969,7 @@ These principles are derived from Arbor's security philosophy and validated thro
 
 6. **Observe everything, analyze holistically.** Individual events are logged (L1, today). Behavioral patterns across events detect drip-feed attacks (L3, Phase 2). Cross-session trends detect persistent adversaries (L4, Phase 3).
 
-7. **The kill switch must work instantly.** `pai-pkg disable` removes the policy section from patterns.yaml. The very next tool call is evaluated without that skill's capabilities. No restart, no delay.
+7. **The kill switch must work instantly.** `arc disable` removes the policy section from patterns.yaml. The very next tool call is evaluated without that skill's capabilities. No restart, no delay.
 
 8. **The security policy must be self-protecting.** `patterns.yaml`, `SecurityValidator.hook.ts`, and `settings.json` are in the `readOnly` paths of the base security rules. Modifications require explicit user confirmation. The hook verifies its own configuration integrity (manifest hash check) on every load.
 

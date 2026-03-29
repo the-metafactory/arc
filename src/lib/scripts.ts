@@ -1,5 +1,5 @@
 /**
- * Lifecycle script runner for pai-pkg.
+ * Lifecycle script runner for arc.
  *
  * Executes manifest-declared scripts (preinstall, postinstall, preupgrade, postupgrade)
  * with standardized env vars and error handling.

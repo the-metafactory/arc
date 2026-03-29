@@ -2,7 +2,7 @@
  * Hook registration for Claude Code settings.json.
  *
  * Manages the `hooks` section of ~/.claude/settings.json, allowing
- * pai-pkg packages to declaratively register event hooks. Each hook
+ * arc packages to declaratively register event hooks. Each hook
  * entry is tagged with `_pai_pkg` for provenance tracking and clean removal.
  */
 

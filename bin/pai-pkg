@@ -1,0 +1,4 @@
+#!/bin/bash
+echo "Warning: pai-pkg has been renamed to arc. Please use 'arc' instead." >&2
+echo "   This compatibility shim will be removed in a future release." >&2
+exec arc "$@"

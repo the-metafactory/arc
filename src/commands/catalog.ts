@@ -323,7 +323,7 @@ export async function catalogPush(
     }
 
     const commitResult = Bun.spawnSync(
-      ["git", "commit", "-m", `pai-pkg: update ${name}`],
+      ["git", "commit", "-m", `arc: update ${name}`],
       { cwd: tmpDir, stdout: "pipe", stderr: "pipe" }
     );
     if (commitResult.exitCode !== 0) {

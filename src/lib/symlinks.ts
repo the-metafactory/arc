@@ -17,8 +17,8 @@ export async function createSymlink(
     if (stat.isSymbolicLink()) {
       await unlink(linkPath);
     } else if (stat.isDirectory()) {
-      // Back up existing directory (e.g., manually-installed skill being replaced by pai-pkg)
-      await rename(linkPath, linkPath + ".pre-pai-pkg");
+      // Back up existing directory (e.g., manually-installed skill being replaced by arc)
+      await rename(linkPath, linkPath + ".pre-arc");
     } else if (stat.isFile()) {
       await unlink(linkPath);
     }

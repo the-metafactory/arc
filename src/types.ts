@@ -1,4 +1,4 @@
-// pai-pkg core types
+// arc core types
 
 // ── Catalog types ──────────────────────────────────────────────
 
@@ -109,7 +109,7 @@ export interface ToolDependency {
   reason?: string;
 }
 
-/** Package dependency — another pai-pkg managed package */
+/** Package dependency — another arc managed package */
 export interface PackageDependency {
   name: string;
   repo: string;

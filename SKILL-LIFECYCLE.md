@@ -42,8 +42,8 @@ This document defines the unified lifecycle that connects all of these.
 |----------|---------|-----------|-------------|
 | **Built-in** | Research, Thinking, Media | PAI release | PAI version upgrade (symlink swap) |
 | **Custom** | _JIRA, _COUPA, _CONTEXT | Standalone repo (`pai-skill-*`) | `git pull` in repo |
-| **Community** | (future) Third-party skills | `pai-pkg install` | `pai-pkg update` |
-| **System** | pai-content-filter, pai-secret-scanning | `pai-pkg install --system` | `pai-pkg update --system` |
+| **Community** | (future) Third-party skills | `arc install` | `arc update` |
+| **System** | pai-content-filter, pai-secret-scanning | `arc install --system` | `arc update --system` |
 
 All four categories converge on the same integration pattern: **symlinks from `~/.claude/skills/` into the skill's source directory.** The skill's actual files never live as flat copies in the release tree.
 
@@ -66,14 +66,14 @@ Each phase maps to specific infrastructure:
 | Phase | Infrastructure | What Happens |
 |-------|---------------|-------------|
 | **Author** | Git repo + skill/ + src/ | Developer creates SKILL.md, workflows, CLI tools |
-| **Package** | pai-manifest.yaml + pai-pkg CLI | `pai-pkg init` scaffolds manifest; `pai-pkg sign` signs |
-| **Publish** | Git registry + curated list | `pai-pkg publish` pushes to git; PR to curated list for Community tier |
-| **Discover** | Curated list + `pai-pkg search` | Users browse/search available skills |
-| **Install** | pai-pkg CLI + SecurityValidator | Verify → display caps → merge policy → symlink → record |
+| **Package** | pai-manifest.yaml + arc CLI | `arc init` scaffolds manifest; `arc sign` signs |
+| **Publish** | Git registry + curated list | `arc publish` pushes to git; PR to curated list for Community tier |
+| **Discover** | Curated list + `arc search` | Users browse/search available skills |
+| **Install** | arc CLI + SecurityValidator | Verify → display caps → merge policy → symlink → record |
 | **Enforce** | SecurityValidator + patterns.yaml | Every tool call evaluated against skill-scoped policies |
-| **Update** | pai-pkg CLI | `pai-pkg update` re-verifies, re-merges policy |
-| **Disable** | pai-pkg CLI | Remove policy, move to `.disabled/` |
-| **Retire** | pai-pkg CLI + curated list | `pai-pkg remove`, destatement if malicious |
+| **Update** | arc CLI | `arc update` re-verifies, re-merges policy |
+| **Disable** | arc CLI | Remove policy, move to `.disabled/` |
+| **Retire** | arc CLI + curated list | `arc remove`, destatement if malicious |
 
 ---
 
@@ -93,7 +93,7 @@ pai-skill-{name}/
 ├── src/                            # CLI tool source (optional)
 │   ├── {tool}.ts                   # Main CLI entry point
 │   └── lib/                        # Library modules
-├── pai-manifest.yaml               # Capability declarations (for pai-pkg)
+├── pai-manifest.yaml               # Capability declarations (for arc)
 ├── package.json                    # Bun/npm dependencies
 ├── README.md
 ├── LICENSE
@@ -200,10 +200,10 @@ ln -sfn ~/Developer/pai-skill-jira ~/.claude/bin/jira
 # Link profiles from pai-personal-data
 ```
 
-### 4.2 Community Skills (Future, via pai-pkg)
+### 4.2 Community Skills (Future, via arc)
 
 ```bash
-pai-pkg install extract-wisdom
+arc install extract-wisdom
 
 # What happens internally:
 # 1. RESOLVE: extract-wisdom → git repo URL from curated list
@@ -225,10 +225,10 @@ pai-pkg install extract-wisdom
 # 8. RECORD: write to ~/.config/pai/packages.db
 ```
 
-### 4.3 System Packages (Future, via pai-pkg --system)
+### 4.3 System Packages (Future, via arc --system)
 
 ```bash
-pai-pkg install --system pai-content-filter
+arc install --system pai-content-filter
 
 # System packages are different:
 # - Install hooks into settings.json (not just skill symlinks)
@@ -246,7 +246,7 @@ Built-in skills ship with the PAI release tree. On upgrade:
 git checkout v4.1.0 -- Releases/v4.1.0/
 
 # Recreate symlinks (scripted, not manual)
-pai-pkg upgrade-core v4.1.0
+arc upgrade-core v4.1.0
 # Internally:
 # 1. Create all persistent symlinks (.env, CLAUDE.md, MEMORY, profiles, secrets, PAI/USER)
 # 2. Re-symlink all installed custom/community skill repos
@@ -284,10 +284,10 @@ How security layers compose from bottom to top:
 │ Quarantine for external content, fail-open design                     │
 │ PreToolUse: ContentFilter hooks on Read/Glob/Grep                     │
 ├───────────────────────────────────────────────────────────────────────┤
-│ Layer 2: INSTALL-TIME VERIFICATION (pai-pkg)                          │
+│ Layer 2: INSTALL-TIME VERIFICATION (arc)                          │
 │ Signature verification, capability display, policy generation         │
 │ Risk visualization (green/amber/red), user approval gate              │
-│ CLI: pai-pkg install                                                  │
+│ CLI: arc install                                                  │
 ├───────────────────────────────────────────────────────────────────────┤
 │ Layer 1: OUTBOUND PROTECTION (pai-secret-scanning)                    │
 │ Pre-commit: 8 custom gitleaks rules block secret leakage              │
@@ -304,11 +304,11 @@ How security layers compose from bottom to top:
 
 | Arbor Concept | PAI Equivalent | Status |
 |---------------|---------------|--------|
-| Ed25519 agent identity | Git commit signing + SkillSeal author keys | Partial (signing exists, not integrated with pai-pkg) |
+| Ed25519 agent identity | Git commit signing + SkillSeal author keys | Partial (signing exists, not integrated with arc) |
 | Resource URI scheme (`arbor://fs/read`) | patterns.yaml path patterns | Shipped (SecurityValidator) |
 | Capability store (ETS) | patterns.yaml skill sections | Designed (SECURITY-ARCHITECTURE.md) |
 | Constraint enforcement (rate limits) | Hook-based counters | Future |
-| Trust-capability sync | `pai-pkg install` generates policy from manifest | Designed |
+| Trust-capability sync | `arc install` generates policy from manifest | Designed |
 | Consensus escalation | Human review for Community tier | Designed (pai-collab SOP) |
 | Security event dual-emit | MEMORY/SECURITY/ + ivy-blackboard SSE | Partial (logging exists, SSE future) |
 | Reflex system | Claude Code hooks (PreToolUse/PostToolUse) | Shipped |
@@ -325,14 +325,14 @@ The migration doc (v3.0 → v4.0) identified these pain points:
 | Custom skills lost on upgrade | Flat files in release tree | Standalone repos + symlinks |
 | Secrets stranded in old version | Flat files in `~/.claude/secrets/` | Tier 1: `~/.config/pai/secrets/` |
 | Config lost on `cp -r` | Symlinks dereferenced by copy | Three-tier persistence + `cp -a` |
-| Manual symlink recreation | No upgrade automation | `pai-pkg upgrade-core` command |
+| Manual symlink recreation | No upgrade automation | `arc upgrade-core` command |
 | 20-line shell script per upgrade | Each upgrade is bespoke | Scripted: symlinks computed from installed packages |
 
 ### Target Upgrade Flow
 
 ```bash
 # 1. Download new PAI release
-pai-pkg upgrade-core v4.1.0
+arc upgrade-core v4.1.0
 
 # That single command:
 # a) Checks out new release directory
@@ -401,7 +401,7 @@ Before a skill enters the curated list (Community tier):
 4. **Human reviewer** evaluates using pai-collab review SOP:
    - 4-role council: Architect, Engineer, Security, Researcher
    - Structured review output following `sops/review-format.md`
-5. **If approved**: Merged to curated list, available via `pai-pkg install`
+5. **If approved**: Merged to curated list, available via `arc install`
 6. **If rejected**: Feedback via PR comments, skill stays in author's repo (Universe tier)
 
 ### Trust Zones
@@ -432,7 +432,7 @@ depends_on:
       version: ">=2.0.0"
 ```
 
-On `pai-pkg install`:
+On `arc install`:
 - Check if dependencies are installed
 - If not: prompt to install them first
 - If version mismatch: warn and offer upgrade
@@ -440,10 +440,10 @@ On `pai-pkg install`:
 
 ### 8.2 Skill Composition Security
 
-When multiple skills are installed, the capability surface is the UNION of all policies. `pai-pkg audit` scans for dangerous combinations:
+When multiple skills are installed, the capability surface is the UNION of all policies. `arc audit` scans for dangerous combinations:
 
 ```bash
-$ pai-pkg audit
+$ arc audit
 
 Installed skills: 4
 Total capability surface:
@@ -471,11 +471,11 @@ git tag v1.2.0
 git push origin v1.2.0
 
 # Users update
-pai-pkg update jira
+arc update jira
 # Fetches latest tag, re-verifies, re-merges policy if capabilities changed
 ```
 
-If capabilities change between versions (new network access, new secret needed), `pai-pkg update` shows the diff and requires re-approval:
+If capabilities change between versions (new network access, new secret needed), `arc update` shows the diff and requires re-approval:
 
 ```
 Updating: _JIRA v1.1.0 → v1.2.0
@@ -489,7 +489,7 @@ Capability changes:
 
 ### 8.4 Offline / Air-Gapped Operation
 
-Skills are git repos. Once cloned, they work offline. `pai-pkg` does not require a network connection for:
+Skills are git repos. Once cloned, they work offline. `arc` does not require a network connection for:
 - `list` (reads local packages.db)
 - `audit` (reads local patterns.yaml)
 - `disable/enable` (modifies local patterns.yaml)
@@ -507,11 +507,11 @@ Network required only for:
 
 ### Phase 1: Core Lifecycle (Months 1-2)
 
-**Goal:** `pai-pkg install/disable/enable/list/audit` working for custom skills.
+**Goal:** `arc install/disable/enable/list/audit` working for custom skills.
 
 | Deliverable | Description |
 |------------|-------------|
-| `pai-pkg` CLI skeleton | Bun + Commander, TypeScript |
+| `arc` CLI skeleton | Bun + Commander, TypeScript |
 | `install` command | Git clone → verify → display caps → merge policy → symlink |
 | `disable/enable` commands | Policy removal/restoration + file move |
 | `list` command | Show installed skills with versions and capabilities |
@@ -546,7 +546,7 @@ Network required only for:
 | `review/attest/destate` | Reviewer attestation commands |
 | Cross-session analysis | Persistent security event store with trend rules |
 | ivy-blackboard integration | Security events on dashboard |
-| `pai-pkg upgrade-core` hardening | Rollback support, pre-upgrade validation |
+| `arc upgrade-core` hardening | Rollback support, pre-upgrade validation |
 
 ### Phase 4: Ecosystem (Month 9+)
 
@@ -555,9 +555,9 @@ Network required only for:
 | Deliverable | Description |
 |------------|-------------|
 | Standards alignment | Evaluate AAIF/MCP Registry convergence, adopt if stable |
-| Interactive TUI browser | `pai-pkg browse` for discovering skills |
+| Interactive TUI browser | `arc browse` for discovering skills |
 | Auto-update for trusted tiers | Background update check + notification |
-| Skill templates | `pai-pkg init` with templates for common skill patterns |
+| Skill templates | `arc init` with templates for common skill patterns |
 | Web-based skill directory | Public browsable catalog |
 
 ---
@@ -577,7 +577,7 @@ Network required only for:
 | pai-collab governance | ✅ Active | `mellanon/pai-collab` | Working, SOPs defined |
 | Hive protocol specs | ✅ Draft/Review | `mellanon/the-hive` | Specs exist, implementation partial |
 | Arbor security kernel | ✅ 8/9 phases | `~/Developer/arbor/` | Reference only — patterns, not dependency |
-| **pai-pkg CLI** | ✅ Built | `mellanon/pai-pkg` | 10 commands, 64 tests, 202 assertions |
+| **arc CLI** | ✅ Built | `mellanon/arc` | 10 commands, 64 tests, 202 assertions |
 | **Curated skill list** | ❌ Not built | — | Needed for discovery |
 | **SessionAudit hook** | ❌ Not built | — | Needed for drip-feed detection |
 | **packages.db** | ✅ Built | `~/.config/pai/packages.db` | SQLite via bun:sqlite, WAL mode |

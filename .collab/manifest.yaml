@@ -1,9 +1,9 @@
 # Spoke manifest — identity, security reflexes, hub projection
 # See: spoke-protocol.md
 schemaVersion: "1.0"
-name: pai-pkg
+name: arc
 hub: mellanon/pai-collab
-project: pai-pkg
+project: arc
 maintainer: mellanon
 license: MIT
 identity:

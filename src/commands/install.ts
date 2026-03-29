@@ -109,7 +109,7 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
     };
   }
 
-  // 2b. Install package dependencies (other pai-pkg packages)
+  // 2b. Install package dependencies (other arc packages)
   if (manifest.depends_on?.packages?.length) {
     for (const dep of manifest.depends_on.packages) {
       if (!dep.repo) {

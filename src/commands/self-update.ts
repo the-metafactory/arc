@@ -9,7 +9,7 @@ export interface SelfUpdateResult {
 }
 
 /**
- * Update pai-pkg itself by pulling latest from git and reinstalling deps.
+ * Update arc itself by pulling latest from git and reinstalling deps.
  */
 export async function selfUpdate(): Promise<SelfUpdateResult> {
   // This file is at src/commands/self-update.ts — root is two levels up
@@ -104,7 +104,7 @@ export interface SelfUpdateCheck {
 }
 
 /**
- * Check if a newer version of pai-pkg is available.
+ * Check if a newer version of arc is available.
  * Compares local package.json against the latest GitHub Release tag.
  */
 export function checkSelfUpdate(): SelfUpdateCheck {
@@ -122,7 +122,7 @@ export function checkSelfUpdate(): SelfUpdateCheck {
   // Check latest release tag via gh CLI
   try {
     const result = Bun.spawnSync(
-      ["gh", "release", "view", "--repo", "mellanon/pai-pkg", "--json", "tagName", "--jq", ".tagName"],
+      ["gh", "release", "view", "--repo", "the-metafactory/arc", "--json", "tagName", "--jq", ".tagName"],
       { stdout: "pipe", stderr: "pipe", timeout: 5000 }
     );
     if (result.exitCode === 0) {
@@ -170,9 +170,9 @@ export function checkSelfUpdate(): SelfUpdateCheck {
 export function formatSelfUpdateCheck(check: SelfUpdateCheck): string {
   if (!check.updateAvailable) return "";
   if (check.latestVersion) {
-    return `pai-pkg update available: v${check.currentVersion} → v${check.latestVersion} (run \`pai-pkg self-update\`)`;
+    return `arc update available: v${check.currentVersion} → v${check.latestVersion} (run \`arc self-update\`)`;
   }
-  return `pai-pkg update available (run \`pai-pkg self-update\`)`;
+  return `arc update available (run \`arc self-update\`)`;
 }
 
 export function formatSelfUpdate(result: SelfUpdateResult): string {
@@ -181,12 +181,12 @@ export function formatSelfUpdate(result: SelfUpdateResult): string {
   }
 
   if (result.oldVersion !== result.newVersion) {
-    return `pai-pkg updated: v${result.oldVersion} → v${result.newVersion}`;
+    return `arc updated: v${result.oldVersion} → v${result.newVersion}`;
   }
 
   if (result.commitsPulled > 0) {
-    return `pai-pkg updated (v${result.newVersion}, pulled ${result.commitsPulled} new commit${result.commitsPulled === 1 ? "" : "s"}).`;
+    return `arc updated (v${result.newVersion}, pulled ${result.commitsPulled} new commit${result.commitsPulled === 1 ? "" : "s"}).`;
   }
 
-  return `pai-pkg is already up to date (v${result.newVersion}).`;
+  return `arc is already up to date (v${result.newVersion}).`;
 }
