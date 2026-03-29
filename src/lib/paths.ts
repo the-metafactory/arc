@@ -4,14 +4,17 @@ import { homedir } from "os";
 import type { PaiPaths } from "../types.js";
 
 /**
- * Migrate ~/.config/pai/ to ~/.config/arc/ if needed.
- * - If old path exists and new path does not: rename (move) the directory.
- * - If both exist: skip (user may have both intentionally).
- * - Logs to stderr what happened.
+ * Migrate ~/.config/pai/ to ~/.config/arc/ if needed (one-shot).
+ * Writes a sentinel file after migration so subsequent calls skip filesystem checks.
  */
 function migrateConfigPaths(home: string): void {
-  const oldPath = join(home, ".config", "pai");
   const newPath = join(home, ".config", "arc");
+  const sentinel = join(newPath, ".migrated");
+
+  // Skip if already migrated
+  if (existsSync(sentinel)) return;
+
+  const oldPath = join(home, ".config", "pai");
 
   if (existsSync(oldPath) && !existsSync(newPath)) {
     try {
@@ -19,7 +22,17 @@ function migrateConfigPaths(home: string): void {
       process.stderr.write(`arc: migrated config ${oldPath} → ${newPath}\n`);
     } catch (err: any) {
       process.stderr.write(`arc: config migration failed (${oldPath} → ${newPath}): ${err.message}\n`);
+      return;
     }
+  }
+
+  // Write sentinel (create dir if it doesn't exist yet)
+  try {
+    const { mkdirSync, writeFileSync } = require("fs");
+    mkdirSync(newPath, { recursive: true });
+    writeFileSync(sentinel, new Date().toISOString());
+  } catch {
+    // Non-fatal — migration still happened
   }
 }
 

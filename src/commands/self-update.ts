@@ -122,7 +122,7 @@ export function checkSelfUpdate(): SelfUpdateCheck {
   // Check latest release tag via gh CLI
   try {
     const result = Bun.spawnSync(
-      ["gh", "release", "view", "--repo", "the-metafactory/arc", "--json", "tagName", "--jq", ".tagName"],
+      ["gh", "release", "view", "--repo", "mellanon/pai-pkg", "--json", "tagName", "--jq", ".tagName"],
       { stdout: "pipe", stderr: "pipe", timeout: 5000 }
     );
     if (result.exitCode === 0) {
