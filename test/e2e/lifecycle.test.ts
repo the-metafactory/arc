@@ -94,7 +94,7 @@ describe("Full lifecycle: install → list → info → audit → disable → en
     const infoResult = await info(env.db, "_JIRA");
     expect(infoResult.skill).not.toBeNull();
     expect(infoResult.manifest).not.toBeNull();
-    expect(infoResult.manifest!.author.name).toBe("mellanon");
+    expect(infoResult.manifest!.author?.name).toBe("mellanon");
 
     // --- VERIFY ---
     const verifyResult = await verify(env.db, env.paths, "_JIRA");
