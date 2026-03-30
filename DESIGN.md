@@ -25,7 +25,7 @@ The system is composed of three distinct layers:
 +-------------------------------------------------------------+
 |  Layer 1: TRANSPORT                                         |
 |  Package format, registry, versioning, dependencies         |
-|  (npm + pai-pkg CLI wrapper)                                |
+|  (npm + arc CLI wrapper)                                |
 +-------------------------------------------------------------+
 ```
 
@@ -33,7 +33,7 @@ The system is composed of three distinct layers:
 1. **npm as transport, not as trust** -- npm gives us versioning, dependency resolution, and a registry. We layer our own trust on top.
 2. **[SkillSeal](https://github.com/mcyork/skillseal) as signing primitive** -- integrate [Ian McCutcheon's](https://github.com/mcyork) cryptographic signing framework rather than reinventing.
 3. **Scoped packages for tiers** -- `@pai-official/extract-wisdom`, `@pai-community/my-skill`, unscoped for universe.
-4. **`pai-pkg` CLI wraps npm** -- users never run npm directly. `pai-pkg install extract-wisdom` handles fetch + verify + review + place.
+4. **`arc` CLI wraps npm** -- users never run npm directly. `arc install extract-wisdom` handles fetch + verify + review + place.
 
 ---
 
@@ -171,14 +171,14 @@ Rather than building a signing system, we integrate [SkillSeal](https://github.c
 ### Signing Flow (Author publishes)
 
 1. Author develops skill locally
-2. `pai-pkg init MySkill` -- generates pai-manifest.yaml + package.json templates
+2. `arc init MySkill` -- generates pai-manifest.yaml + package.json templates
 3. Author fills in manifests
-4. `pai-pkg sign MySkill` -- calls `skillseal sign` internally (MANIFEST.json, SIGNATURES/, TRUST.json)
-5. `pai-pkg publish MySkill` -- validates signature, runs quality checks, publishes to npm
+4. `arc sign MySkill` -- calls `skillseal sign` internally (MANIFEST.json, SIGNATURES/, TRUST.json)
+5. `arc publish MySkill` -- validates signature, runs quality checks, publishes to npm
 
 ### Verification Flow (User installs)
 
-1. `pai-pkg install extract-wisdom` -- resolves and downloads from npm to staging
+1. `arc install extract-wisdom` -- resolves and downloads from npm to staging
 2. **Trust verification** (before any files touch ~/.claude/skills/):
    - Check MANIFEST.json integrity (SHA-256 of all files)
    - Verify SIGNATURES/ against TRUST.json author keys
@@ -241,13 +241,13 @@ OFFICIAL: Author signs -> automated checks -> official queue -> 2 maintainer rev
 
 | Check | Tool | What It Catches |
 |-------|------|-----------------|
-| Structure validation | `pai-pkg lint` | Missing SKILL.md, bad frontmatter, wrong layout |
-| Capability honesty | `pai-pkg audit-capabilities` | SKILL.md references undeclared capabilities |
+| Structure validation | `arc lint` | Missing SKILL.md, bad frontmatter, wrong layout |
+| Capability honesty | `arc audit-capabilities` | SKILL.md references undeclared capabilities |
 | Dependency resolution | `npm install --dry-run` | Broken or circular dependencies |
 | Signature validity | `skillseal verify` | Unsigned, tampered, or revoked-key packages |
-| Path sanitization | `pai-pkg check-paths` | Hardcoded user paths |
-| Secret scan | `pai-pkg check-secrets` | Embedded API keys or credentials |
-| SKILL.md validity | `pai-pkg validate-skill` | Missing USE WHEN trigger, missing routing |
+| Path sanitization | `arc check-paths` | Hardcoded user paths |
+| Secret scan | `arc check-secrets` | Embedded API keys or credentials |
+| SKILL.md validity | `arc validate-skill` | Missing USE WHEN trigger, missing routing |
 
 ### Community Review Process
 
@@ -255,7 +255,7 @@ Reviewers use [SkillSeal's](https://github.com/mcyork/skillseal) attestation sys
 
 ```bash
 # Reviewer clones and inspects the skill
-pai-pkg review @pai-community/some-skill
+arc review @pai-community/some-skill
 
 # If satisfied, attest
 skillseal attest ./SomeSkill/ --scope security-audit
@@ -266,40 +266,40 @@ skillseal attest ./SomeSkill/ --reject --reason "Exfiltrates env vars"
 
 ---
 
-## 6. CLI Design (pai-pkg)
+## 6. CLI Design (arc)
 
 ```bash
 # Discovery
-pai-pkg search <query>              # Search across all tiers
-pai-pkg info <skill>                # Metadata, capabilities, trust
-pai-pkg browse                      # Interactive TUI browser
+arc search <query>              # Search across all tiers
+arc info <skill>                # Metadata, capabilities, trust
+arc browse                      # Interactive TUI browser
 
 # Installation
-pai-pkg install <skill>             # Install with trust + capability review
-pai-pkg remove <skill>              # Uninstall
-pai-pkg update [skill]              # Update one or all
-pai-pkg list                        # List installed with versions
+arc install <skill>             # Install with trust + capability review
+arc remove <skill>              # Uninstall
+arc update [skill]              # Update one or all
+arc list                        # List installed with versions
 
 # Authoring
-pai-pkg init <name>                 # Scaffold new package
-pai-pkg sign <path>                 # Sign with SkillSeal
-pai-pkg lint <path>                 # Run quality checks
-pai-pkg publish <path>              # Publish to tier
+arc init <name>                 # Scaffold new package
+arc sign <path>                 # Sign with SkillSeal
+arc lint <path>                 # Run quality checks
+arc publish <path>              # Publish to tier
 
 # Repository Management
-pai-pkg sources list                # Show configured repos
-pai-pkg sources add <url>           # Add npm registry
-pai-pkg sources trust <scope>       # Trust a scope
+arc sources list                # Show configured repos
+arc sources add <url>           # Add npm registry
+arc sources trust <scope>       # Trust a scope
 
 # Trust Management
-pai-pkg trust list                  # Show trusted authors
-pai-pkg trust add <github-user>     # Trust an author
-pai-pkg trust policy                # Show/edit policies
+arc trust list                  # Show trusted authors
+arc trust add <github-user>     # Trust an author
+arc trust policy                # Show/edit policies
 
 # Review
-pai-pkg review <skill>              # Download for review
-pai-pkg attest <skill>              # Positive attestation
-pai-pkg destate <skill>             # Negative attestation
+arc review <skill>              # Download for review
+arc attest <skill>              # Positive attestation
+arc destate <skill>             # Negative attestation
 ```
 
 ### Sources Configuration (~/.config/pai/sources.yaml)
@@ -350,13 +350,13 @@ tier_policies:
 | Trust (open-publish) | Layered governance (Section 5) |
 | Capabilities | pai-manifest.yaml (Section 4) |
 | Signing | SkillSeal (Section 3) |
-| Placement | pai-pkg post-install copies to ~/.claude/skills/ |
+| Placement | arc post-install copies to ~/.claude/skills/ |
 | Semantics | `pai` field in package.json + pai-manifest.yaml |
 
 ### The Install Flow
 
 ```
-pai-pkg install extract-wisdom
+arc install extract-wisdom
   1. Resolve: extract-wisdom -> @pai-official/extract-wisdom
   2. Fetch: npm pack to staging directory
   3. Verify: skillseal verify (signatures, integrity)
@@ -381,10 +381,10 @@ pai-pkg install extract-wisdom
 ### Migration Path (Opt-In)
 
 ```bash
-pai-pkg init ~/.claude/skills/ExtractWisdom    # Scaffold packaging
+arc init ~/.claude/skills/ExtractWisdom    # Scaffold packaging
 # Author fills in pai-manifest.yaml capabilities
-pai-pkg sign ~/.claude/skills/ExtractWisdom    # Sign
-pai-pkg publish ~/.claude/skills/ExtractWisdom # Publish
+arc sign ~/.claude/skills/ExtractWisdom    # Sign
+arc publish ~/.claude/skills/ExtractWisdom # Publish
 ```
 
 ---
@@ -406,7 +406,7 @@ pai-pkg publish ~/.claude/skills/ExtractWisdom # Publish
 |--------|-----|------|----------|
 | Private npm scope | `@mycompany/*` on npmjs.com | $7/mo | Organizations |
 | Verdaccio | Self-hosted npm registry | Free | Privacy-conscious |
-| Git-based | `pai-pkg install git+ssh://...` | Free | Small teams |
+| Git-based | `arc install git+ssh://...` | Free | Small teams |
 
 ---
 
@@ -443,7 +443,7 @@ The council findings don't invalidate the three-layer architecture -- they reseq
 ## 12. Implementation Roadmap (Revised)
 
 ### Phase 1: Security Spine (MVP)
-- ✅ `pai-pkg` CLI skeleton (Bun + Commander) — 10 commands, 64 tests
+- ✅ `arc` CLI skeleton (Bun + Commander) — 10 commands, 64 tests
 - Git-based distribution (Phase 1 = `git clone`, no npm)
 - ✅ Single `pai-manifest.yaml` as sole authority — added to all 7 custom skill repos
 - SkillSeal signing and verification at install time

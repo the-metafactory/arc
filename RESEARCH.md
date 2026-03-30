@@ -106,7 +106,7 @@ Three contemporary sources provide critical framing for the security layer:
 
 ## 3. Architecture: Three Layers
 
-The pai-pkg architecture comprises three distinct layers, each addressing a different aspect of the distribution problem:
+The arc architecture comprises three distinct layers, each addressing a different aspect of the distribution problem:
 
 ```
 +-------------------------------------------------------------+
@@ -162,16 +162,16 @@ capabilities:
 ```
 
 **CLI surface (v1):**
-- `pai-pkg search <query>` — Search the registry
-- `pai-pkg install <name|git-url>` — Fetch, verify, place in `~/.claude/skills/`
-- `pai-pkg remove <name>` — Delete skill directory
-- `pai-pkg list` — Show installed skills with versions and capabilities
-- `pai-pkg disable <name>` — Kill switch (immediate removal from skill resolution)
-- `pai-pkg publish` — Open a PR to the registry index
+- `arc search <query>` — Search the registry
+- `arc install <name|git-url>` — Fetch, verify, place in `~/.claude/skills/`
+- `arc remove <name>` — Delete skill directory
+- `arc list` — Show installed skills with versions and capabilities
+- `arc disable <name>` — Kill switch (immediate removal from skill resolution)
+- `arc publish` — Open a PR to the registry index
 
 ### 3.2 Layer 2: Trust — The Enforcement Boundary
 
-This is where pai-pkg diverges most sharply from traditional package managers.
+This is where arc diverges most sharply from traditional package managers.
 
 **The fundamental problem:** SKILL.md contains natural language instructions that cannot be statically analyzed. A capability declaration in YAML says what the skill *claims* to need. But the SKILL.md can instruct the agent to do anything regardless of what the manifest declares. Without enforcement, capability declarations are "security theater" (Red Team consensus, 8/8 agents).
 
@@ -282,14 +282,14 @@ For AI skills, this problem is amplified: you cannot statically analyze natural 
 
 ## 5. Council Findings
 
-A four-agent council (Registry Architect, Security Researcher, DX Designer, Governance Expert) debated the pai-pkg design across three rounds. Key findings:
+A four-agent council (Registry Architect, Security Researcher, DX Designer, Governance Expert) debated the arc design across three rounds. Key findings:
 
 ### 5.1 Areas of Convergence (4/4 agreement)
 
 1. **Git-based registry** — flat index, Git repos as storage and distribution primitive
 2. **Runtime tool-call enforcement** — declarations without enforcement are security theater
 3. **Curated PR-based inclusion** — Homebrew model with few trusted maintainers
-4. **Kill switch** — `pai-pkg disable` ships in v1
+4. **Kill switch** — `arc disable` ships in v1
 5. **Git commit hash for integrity** — cryptographic signing deferred to v1.1
 6. **Four CLI commands** — search, install, remove, list as the complete v1 surface
 7. **SKILL.md is an attack surface** — must be processed through capability extraction
@@ -354,7 +354,7 @@ This crystallizes why tool-call interception is the essential security boundary.
 
 **Week 1 — Transport:**
 - Git-based flat registry index (JSON file in a GitHub repo)
-- `pai-pkg` CLI: search, install, remove, list, disable
+- `arc` CLI: search, install, remove, list, disable
 - `pai-manifest.yaml` schema (name, version, author, provides, capabilities)
 - PR-based curation with two maintainers
 - Git commit hash pinning for installed skills
@@ -364,7 +364,7 @@ This crystallizes why tool-call interception is the essential security boundary.
 - Capability policy generation from `pai-manifest.yaml`
 - Deterministic YAML policy evaluation for every tool call
 - Behavioral circuit breakers for known attack patterns (read+exfiltrate, time-conditional execution)
-- `pai-pkg disable` kill switch with instant propagation
+- `arc disable` kill switch with instant propagation
 
 ### 7.2 Phase 2: Trust Infrastructure (Month 2-3)
 
@@ -395,7 +395,7 @@ This crystallizes why tool-call interception is the essential security boundary.
 
 ### 8.1 Current Landscape
 
-| Standard | Status (March 2026) | Relevance to pai-pkg |
+| Standard | Status (March 2026) | Relevance to arc |
 |----------|-------------------|---------------------|
 | **MCP Registry** | API freeze v0.1 (Oct 2025), under AAIF | Metaregistry for MCP servers; different scope but compatible |
 | **AAIF** | Formed Dec 2025, pre-1.0 on all specs | Umbrella standard; watch for skill interoperability spec |
@@ -457,7 +457,7 @@ AvaKill already implements this pattern with support for Claude Code. Its design
 - **Sub-millisecond overhead** — no perceptible latency impact
 - **OS-level defense-in-depth** — optional Landlock/sandbox-exec for additional boundary
 
-The integration path: `pai-pkg install` generates a tool-call policy from the skill's `pai-manifest.yaml` capabilities section and registers it with the firewall. The firewall enforces the policy on every tool call while the skill is active.
+The integration path: `arc install` generates a tool-call policy from the skill's `pai-manifest.yaml` capabilities section and registers it with the firewall. The firewall enforces the policy on every tool call while the skill is active.
 
 ---
 
@@ -469,7 +469,7 @@ Our research identified patterns from package ecosystems that failed or struggle
 
 **Premature governance:** Ecosystems that over-engineered governance before they had users created bureaucratic barriers that discouraged the first wave of contributors — the exact people needed to bootstrap the ecosystem. CORBA and SOAP are historical examples of elaborate standards that were replaced by simpler approaches (REST, JSON).
 
-**The one-person problem:** Many critical ecosystems depend on a single maintainer (left-pad, core-js, curl). For pai-pkg, the Homebrew model of "few trusted maintainers with merge rights" is appropriate at current scale, with documented succession planning from the start.
+**The one-person problem:** Many critical ecosystems depend on a single maintainer (left-pad, core-js, curl). For arc, the Homebrew model of "few trusted maintainers with merge rights" is appropriate at current scale, with documented succession planning from the start.
 
 **Key takeaway:** Ship the simplest thing that enables sharing. Add complexity only when current users demand it. Every governance layer added before it's needed becomes a barrier to the contributors who would build the ecosystem.
 

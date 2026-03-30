@@ -264,7 +264,7 @@ export function formatCheckResults(results: UpgradeCheckResult[]): string {
   }
 
   lines.push("");
-  lines.push("Run `pai-pkg upgrade` to upgrade all, or `pai-pkg upgrade <name>` for one.");
+  lines.push("Run `arc upgrade` to upgrade all, or `arc upgrade <name>` for one.");
 
   return lines.join("\n");
 }

@@ -83,7 +83,7 @@ capabilities:
 `;
   } else if (type === "skill") {
     manifestContent = `# pai-manifest.yaml — PAI capability declaration
-# Schema: pai-pkg DESIGN.md §2 (pai-manifest.yaml)
+# Schema: arc DESIGN.md §2 (pai-manifest.yaml)
 
 name: ${name}
 version: 1.0.0
@@ -310,7 +310,7 @@ PAI tool — [brief description].
 ## Setup
 
 \`\`\`bash
-pai-pkg install ${prefix}-${lowerName}
+arc install ${prefix}-${lowerName}
 \`\`\`
 
 ## Manual Setup

@@ -1,4 +1,4 @@
-# pai-pkg Security & Lifecycle Briefing
+# arc Security & Lifecycle Briefing
 
 > For @jcfischer and @Steffen025 — review request context
 
@@ -40,7 +40,7 @@ PAI needs a way for users to share skills like `npm install` or `apt install`. W
 
 **What it lacks:** skill-scoped policies. It enforces global rules but doesn't know about installed skills' capability declarations.
 
-**What we propose:** Extend `patterns.yaml` with a `skills:` section. When `pai-pkg install` runs, it reads the skill's `pai-manifest.yaml` and merges capabilities into `patterns.yaml`. When `pai-pkg disable` runs, it removes them. The hook stays global — no runtime skill attribution needed.
+**What we propose:** Extend `patterns.yaml` with a `skills:` section. When `arc install` runs, it reads the skill's `pai-manifest.yaml` and merges capabilities into `patterns.yaml`. When `arc disable` runs, it removes them. The hook stays global — no runtime skill attribution needed.
 
 ### 2. Signing Proves WHO, Not WHETHER SAFE
 
@@ -66,9 +66,9 @@ A `PostToolUse` SessionAudit hook with behavioral anomaly rules (sequence detect
 
 | Your Project | Role in the Stack | Integration Proposal |
 |-------------|------------------|---------------------|
-| **pai-secret-scanning** (@jcfischer) | Layer 1: Outbound protection | `pai-pkg install --system pai-secret-scanning` |
-| **pai-content-filter** (@jcfischer) | Layer 3: Inbound protection | `pai-pkg install --system pai-content-filter` |
-| **skill-enforcer** (@jcfischer) | Skill structure validation | `pai-pkg install --system skill-enforcer` |
+| **pai-secret-scanning** (@jcfischer) | Layer 1: Outbound protection | `arc install --system pai-secret-scanning` |
+| **pai-content-filter** (@jcfischer) | Layer 3: Inbound protection | `arc install --system pai-content-filter` |
+| **skill-enforcer** (@jcfischer) | Skill structure validation | `arc install --system skill-enforcer` |
 
 The `--system` flag distinguishes infrastructure packages from regular skills. System packages can't be casually disabled, are verified against the hive's allowed-signers, and provide patterns/rules consumed by SecurityValidator rather than SKILL.md instructions.
 
@@ -81,7 +81,7 @@ Layer 6: GOVERNANCE        — pai-collab reviews, trust zones, SOPs
 Layer 5: OBSERVABILITY     — SessionAudit hook, behavioral anomaly detection
 Layer 4: RUNTIME ENFORCE   — SecurityValidator + skill-scoped patterns.yaml
 Layer 3: INBOUND PROTECT   — pai-content-filter (34 patterns, 389 tests)
-Layer 2: INSTALL VERIFY    — pai-pkg (signature check, capability display, user approval)
+Layer 2: INSTALL VERIFY    — arc (signature check, capability display, user approval)
 Layer 1: OUTBOUND PROTECT  — pai-secret-scanning (8 gitleaks rules)
 Layer 0: IDENTITY          — Ed25519 signing + SkillSeal
 ```
@@ -96,7 +96,7 @@ The design adapts Arbor's security kernel patterns without requiring Arbor to ru
 | Capability store (ETS) | patterns.yaml `skills:` section |
 | Reflex system | Claude Code hooks |
 | Taint tracking | pai-content-filter quarantine |
-| Trust-capability sync | `pai-pkg install` generates policy from manifest |
+| Trust-capability sync | `arc install` generates policy from manifest |
 
 ---
 
@@ -116,7 +116,7 @@ The design adapts Arbor's security kernel patterns without requiring Arbor to ru
 
 1. **Layer stack review**: Does the 7-layer model have gaps? Your previous reviews identified "Layer 2 described but not implemented" — the SECURITY-ARCHITECTURE.md addresses this. Is it sufficient?
 
-2. **Composition trust**: Two skills with individually-safe capabilities can compose into a dangerous capability (network + file write = download-and-write). The `pai-pkg audit` command warns about this at install time. Is install-time warning enough, or do we need runtime composition tracking?
+2. **Composition trust**: Two skills with individually-safe capabilities can compose into a dangerous capability (network + file write = download-and-write). The `arc audit` command warns about this at install time. Is install-time warning enough, or do we need runtime composition tracking?
 
 3. **Drip-feed detection**: The anomaly rule format (sequence triggers, count triggers, time windows) — are there attack patterns we're missing? Your CaMeL review expertise is relevant here.
 
@@ -140,7 +140,7 @@ The design adapts Arbor's security kernel patterns without requiring Arbor to ru
 ## How to Submit Your Review
 
 1. **Quick feedback**: Comment on [pai-collab#106](https://github.com/mellanon/pai-collab/issues/106)
-2. **Detailed review**: PR to `pai-collab/projects/pai-pkg/reviews/` following the [review format SOP](https://github.com/mellanon/pai-collab/blob/main/sops/review-format.md)
+2. **Detailed review**: PR to `pai-collab/projects/arc/reviews/` following the [review format SOP](https://github.com/mellanon/pai-collab/blob/main/sops/review-format.md)
 3. **Direct discussion**: Reply to the issue with questions — happy to clarify any design decisions
 
 Thank you both. Your security expertise is what makes this system trustworthy.

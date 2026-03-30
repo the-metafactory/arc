@@ -1,10 +1,10 @@
 {
-  "name": "pai-pkg",
+  "name": "arc",
   "version": "0.5.0",
-  "description": "PAI skill package manager — install, manage, and distribute AI agent skills",
+  "description": "Agentic component package manager — install, manage, and distribute AI agent skills",
   "type": "module",
   "bin": {
-    "pai-pkg": "./src/cli.ts"
+    "arc": "./src/cli.ts"
   },
   "scripts": {
     "start": "bun src/cli.ts",

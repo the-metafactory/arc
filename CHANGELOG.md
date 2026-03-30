@@ -25,8 +25,8 @@
 ## 0.3.0
 
 ### Added
-- `pai-pkg self-update` command
-- `pai-pkg upgrade --check` shows self-update availability
+- `arc self-update` command
+- `arc upgrade --check` shows self-update availability
 - Remote registry sources (apt-get style)
 
 ## 0.2.0

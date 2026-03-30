@@ -457,6 +457,6 @@ describe("Full lifecycle: install → list → info → audit → disable → en
     expect(env.paths.configRoot).not.toContain(
       Bun.env.HOME + "/.config/pai"
     );
-    expect(env.paths.claudeRoot).toContain("pai-pkg-test-");
+    expect(env.paths.claudeRoot).toContain("arc-test-");
   });
 });

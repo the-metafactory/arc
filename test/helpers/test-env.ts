@@ -1,5 +1,5 @@
 /**
- * Test environment helper for pai-pkg.
+ * Test environment helper for arc.
  *
  * Creates isolated temp directories that simulate the PAI directory structure.
  * Every test gets its own fresh environment — no cross-test contamination.
@@ -30,7 +30,7 @@ export interface TestEnv {
  * Call cleanup() when done.
  */
 export async function createTestEnv(): Promise<TestEnv> {
-  const root = await mkdtemp(join(tmpdir(), "pai-pkg-test-"));
+  const root = await mkdtemp(join(tmpdir(), "arc-test-"));
 
   const paths = createPaths({
     claudeRoot: join(root, ".claude"),
