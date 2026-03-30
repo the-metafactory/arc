@@ -46,7 +46,7 @@ arc handles all four PAI artifact types:
 
 ```bash
 # Install arc
-git clone https://github.com/mellanon/arc.git
+git clone https://github.com/the-metafactory/arc.git
 cd arc && bun install && bun link
 
 # Fetch the community registry
