@@ -176,6 +176,12 @@ export interface LibraryArtifactEntry {
   description?: string;
 }
 
+/** Extension declaration in arc-manifest.yaml */
+export interface ExtensionEntry {
+  source: string;
+  name: string;
+}
+
 /** The full arc-manifest.yaml schema (also accepts legacy pai-manifest.yaml) */
 export interface ArcManifest {
   schema?: "arc/v1" | "pai/v1";
@@ -201,6 +207,9 @@ export interface ArcManifest {
     files?: Array<{ source: string; target: string }>;
     templates?: RulesTemplate[];
     hooks?: HooksDeclaration;
+  };
+  extensions?: {
+    statusline?: ExtensionEntry[];
   };
   depends_on?: {
     skills?: SkillDependency[];

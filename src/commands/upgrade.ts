@@ -13,6 +13,7 @@ import { findInAllSources } from "../lib/remote-registry.js";
 import { runScript } from "../lib/scripts.js";
 import { registerHooks, removeHooks, resolveHooksFromManifest } from "../lib/hooks.js";
 import { generateRules } from "../lib/rules.js";
+import { wireExtensions } from "../lib/extensions.js";
 
 export interface UpgradeCheckResult {
   name: string;
@@ -240,6 +241,11 @@ export async function upgradePackage(
     for (const dir of consumerDirs) {
       await generateRules(installPath, manifest.provides.templates, dir);
     }
+  }
+
+  // Re-wire extensions (if declared)
+  if (manifest.extensions) {
+    await wireExtensions(manifest, installPath, paths.claudeRoot);
   }
 
   // Run postupgrade script if declared (falls back to postinstall)

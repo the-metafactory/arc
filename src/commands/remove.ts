@@ -7,6 +7,7 @@ import { removeSymlink, removeCliShim, extractAllCliInfo } from "../lib/symlinks
 import { readManifest } from "../lib/manifest.js";
 import { removeHooks, hasHooks } from "../lib/hooks.js";
 import { findGitRoot } from "../lib/paths.js";
+import { unwireExtensions } from "../lib/extensions.js";
 
 export interface RemoveResult {
   success: boolean;
@@ -88,6 +89,11 @@ export async function remove(
   if (hasHooks(manifest?.provides?.hooks)) {
     const settingsPath = paths.settingsPath;
     await removeHooks(name, settingsPath);
+  }
+
+  // Remove extensions (before deleting repo)
+  if (manifest?.extensions) {
+    await unwireExtensions(manifest, paths.claudeRoot);
   }
 
   // Remove from database (CASCADE deletes capabilities) — before repo removal
