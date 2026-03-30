@@ -85,7 +85,10 @@ export function formatInfo(result: InfoResult): string {
   if (manifest) {
     const risk = assessRisk(manifest);
     lines.push(`  Risk: ${risk.toUpperCase()}`);
-    lines.push(`  Author: ${manifest.author.name} (${manifest.author.github})`);
+    const author = manifest.author ?? manifest.authors?.[0];
+    if (author) {
+      lines.push(`  Author: ${author.name} (${author.github})`);
+    }
     lines.push(`  Capabilities:`);
     lines.push(...formatCapabilities(manifest));
 

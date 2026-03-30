@@ -165,7 +165,10 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
     }
 
     console.log(`\nInstall: ${manifest.name} v${manifest.version}`);
-    console.log(`Author: ${manifest.author.name} (${manifest.author.github})`);
+    const author = manifest.author ?? manifest.authors?.[0];
+    if (author) {
+      console.log(`Author: ${author.name} (${author.github})`);
+    }
     console.log(`Source: ${opts.sourceName ?? "direct URL"} [${tier}]`);
     console.log(`Risk: ${risk.toUpperCase()}`);
 

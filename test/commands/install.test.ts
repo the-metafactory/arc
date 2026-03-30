@@ -127,6 +127,28 @@ describe("install command", () => {
     expect(result.error).toContain("No pai-manifest.yaml");
   });
 
+  test("installs manifest with authors array format", async () => {
+    const repo = await createMockSkillRepo(env.root, {
+      name: "MultiAuthor",
+      authors: [
+        { name: "Jens-Christian Fischer", github: "jcfischer" },
+        { name: "Andreas Aastroem", github: "mellanon" },
+      ],
+    });
+
+    const result = await install({
+      paths: env.paths,
+      db: env.db,
+      repoUrl: repo.url,
+      yes: true,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.manifest!.authors).toHaveLength(2);
+    expect(result.manifest!.authors![0].name).toBe("Jens-Christian Fischer");
+    expect(result.manifest!.author).toBeUndefined();
+  });
+
   test("rejects already-installed skill", async () => {
     const repo = await createMockSkillRepo(env.root, {
       name: "TestSkill",
