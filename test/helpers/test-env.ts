@@ -80,6 +80,8 @@ export async function createMockSkillRepo(
     name: string;
     version?: string;
     author?: string;
+    /** Use authors array format instead of singular author */
+    authors?: Array<{ name: string; github: string }>;
     /** Artifact type: skill (default), tool, agent, prompt, component */
     type?: "skill" | "tool" | "agent" | "prompt" | "component";
     withCli?: boolean;
@@ -167,10 +169,9 @@ export async function createMockSkillRepo(
       version: opts.version ?? "1.0.0",
       type: artifactType,
       tier: "custom",
-      author: {
-        name: opts.author ?? "testuser",
-        github: opts.author ?? "testuser",
-      },
+      ...(opts.authors
+        ? { authors: opts.authors }
+        : { author: { name: opts.author ?? "testuser", github: opts.author ?? "testuser" } }),
       provides: {
         ...(artifactType === "skill"
           ? { skill: [{ trigger: opts.name.replace(/^_/, "").toLowerCase() }] }

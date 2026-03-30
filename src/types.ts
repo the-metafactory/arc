@@ -132,11 +132,16 @@ export interface PaiManifest {
   version: string;
   type: "skill" | "system" | "tool" | "agent" | "prompt" | "component";
   tier?: PackageTier;
-  author: {
+  author?: {
     name: string;
     github: string;
     verified?: boolean;
   };
+  authors?: Array<{
+    name: string;
+    github: string;
+    verified?: boolean;
+  }>;
   provides?: {
     skill?: SkillTrigger[];
     cli?: CliProvider[];
