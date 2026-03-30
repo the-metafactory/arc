@@ -17,7 +17,7 @@ export interface UpgradeConfig {
   branch: string;
   /** Personal data repo (e.g. ~/Developer/pai-personal-data/) */
   personalDataDir: string;
-  /** Config root (e.g. ~/.config/pai/) */
+  /** Config root (e.g. ~/.config/arc/) */
   configRoot: string;
   /** Home directory */
   homeDir: string;

@@ -16,7 +16,7 @@ PAI's skill ecosystem has grown organically into a set of disconnected systems:
 |--------|-------------|----------------|
 | PAI releases (v4.0.3) | Built-in skills (18 upstream) | Release tree (`~/.claude/skills/`) |
 | Custom skill repos | 7 standalone skills (`pai-skill-*`) | `~/Developer/pai-skill-*/` |
-| Three-tier persistence | Secrets, config, runtime state | `~/.config/pai/`, `pai-personal-data/` |
+| Three-tier persistence | Secrets, config, runtime state | `~/.config/arc/`, `pai-personal-data/` |
 | SecurityValidator | Tool-call firewall (YAML policies) | `~/.claude/hooks/` |
 | pai-content-filter | Prompt injection detection | `jcfischer/pai-content-filter` (spoke repo) |
 | pai-secret-scanning | Outbound secret detection | `jcfischer/pai-secret-scanning` (spoke repo) |
@@ -156,7 +156,7 @@ Skills that have configuration or state use the three-tier architecture. Nothing
 
 ```
 Tier 1: Secrets (API tokens)
-  ~/.config/pai/secrets/{skill-name}.env
+  ~/.config/arc/secrets/{skill-name}.env
   → Never in git. Survives all upgrades.
 
 Tier 2: Instance config (URLs, project keys, usernames)
@@ -164,7 +164,7 @@ Tier 2: Instance config (URLs, project keys, usernames)
   → In private git. Survives all upgrades.
 
 Tier 3: Runtime state (cache, rate limits, last-run)
-  ~/.config/pai/skills/{skill-name}/
+  ~/.config/arc/skills/{skill-name}/
   → Not in git. Survives PAI upgrades. Disposable.
 ```
 
@@ -175,7 +175,7 @@ Symlinks bridge these into the skill's working directory:
   → pai-personal-data/profiles/jira/work.env         (Tier 2)
 
 ~/.claude/secrets/jira-work.env
-  → ~/.config/pai/secrets/jira-work.env               (Tier 1)
+  → ~/.config/arc/secrets/jira-work.env               (Tier 1)
 ```
 
 ---
@@ -196,7 +196,7 @@ ln -sfn ~/Developer/pai-skill-jira/skill ~/.claude/skills/_JIRA
 ln -sfn ~/Developer/pai-skill-jira ~/.claude/bin/jira
 
 # Set up persistence (Tier 1 + 2)
-# Copy secrets to ~/.config/pai/secrets/jira-work.env
+# Copy secrets to ~/.config/arc/secrets/jira-work.env
 # Link profiles from pai-personal-data
 ```
 
@@ -207,7 +207,7 @@ arc install extract-wisdom
 
 # What happens internally:
 # 1. RESOLVE: extract-wisdom → git repo URL from curated list
-# 2. FETCH: git clone to ~/.config/pai/pkg/staging/extract-wisdom/
+# 2. FETCH: git clone to ~/.config/arc/pkg/staging/extract-wisdom/
 # 3. VERIFY: check signatures (SkillSeal / Sigstore / git commit hash)
 # 4. REVIEW: display capabilities from pai-manifest.yaml
 #    ┌─────────────────────────────────────────────┐
@@ -222,7 +222,7 @@ arc install extract-wisdom
 # 5. POLICY: merge capabilities into patterns.yaml skill section
 # 6. PLACE: symlink ~/.claude/skills/ExtractWisdom → staging dir
 # 7. WIRE: bun install in src/, create bin symlink if CLI
-# 8. RECORD: write to ~/.config/pai/packages.db
+# 8. RECORD: write to ~/.config/arc/packages.db
 ```
 
 ### 4.3 System Packages (Future, via arc --system)
@@ -323,7 +323,7 @@ The migration doc (v3.0 → v4.0) identified these pain points:
 | Pain Point | Root Cause | Solution |
 |-----------|-----------|---------|
 | Custom skills lost on upgrade | Flat files in release tree | Standalone repos + symlinks |
-| Secrets stranded in old version | Flat files in `~/.claude/secrets/` | Tier 1: `~/.config/pai/secrets/` |
+| Secrets stranded in old version | Flat files in `~/.claude/secrets/` | Tier 1: `~/.config/arc/secrets/` |
 | Config lost on `cp -r` | Symlinks dereferenced by copy | Three-tier persistence + `cp -a` |
 | Manual symlink recreation | No upgrade automation | `arc upgrade-core` command |
 | 20-line shell script per upgrade | Each upgrade is bespoke | Scripted: symlinks computed from installed packages |
@@ -337,12 +337,12 @@ arc upgrade-core v4.1.0
 # That single command:
 # a) Checks out new release directory
 # b) Creates persistent symlinks:
-#    .env → ~/.config/pai/.env
+#    .env → ~/.config/arc/.env
 #    CLAUDE.md → pai-personal-data/CLAUDE.md
-#    MEMORY → ~/.config/pai/MEMORY
+#    MEMORY → ~/.config/arc/MEMORY
 #    profiles → pai-personal-data/profiles
-#    secrets → ~/.config/pai/secrets
-#    PAI/USER → ~/.config/pai/CORE_USER
+#    secrets → ~/.config/arc/secrets
+#    PAI/USER → ~/.config/arc/CORE_USER
 #
 # c) Re-symlinks all installed skills:
 #    For each entry in packages.db:
@@ -567,7 +567,7 @@ Network required only for:
 | Component | Exists? | Where | Gap |
 |-----------|---------|-------|-----|
 | Standalone skill repos | ✅ 7 custom skills | `~/Developer/pai-skill-*/` | Need `pai-manifest.yaml` added to each |
-| Three-tier persistence | ✅ Designed + implemented | `~/.config/pai/`, `pai-personal-data/` | Working for custom skills |
+| Three-tier persistence | ✅ Designed + implemented | `~/.config/arc/`, `pai-personal-data/` | Working for custom skills |
 | SecurityValidator hook | ✅ Shipping | `~/.claude/hooks/SecurityValidator.hook.ts` | Needs skill-scoped policy extension |
 | patterns.yaml | ✅ Shipping | `PAI/USER/PAISECURITYSYSTEM/patterns.yaml` | Needs v2.0 schema with `skills:` section |
 | Security event logging | ✅ Shipping | `MEMORY/SECURITY/` | Needs cross-event analysis |
@@ -580,7 +580,7 @@ Network required only for:
 | **arc CLI** | ✅ Built | `the-metafactory/arc` | 10 commands, 64 tests, 202 assertions |
 | **Curated skill list** | ❌ Not built | — | Needed for discovery |
 | **SessionAudit hook** | ❌ Not built | — | Needed for drip-feed detection |
-| **packages.db** | ✅ Built | `~/.config/pai/packages.db` | SQLite via bun:sqlite, WAL mode |
+| **packages.db** | ✅ Built | `~/.config/arc/packages.db` | SQLite via bun:sqlite, WAL mode |
 | **pai-manifest.yaml in skills** | ✅ Added | All 7 `pai-skill-*/` repos | Capability declarations for all custom skills |
 
 ---

@@ -50,10 +50,10 @@ arc install git@github.com:mellanon/pai-skill-doc.git
 ```
 
 arc will:
-1. Clone the repo to `~/.config/pai/pkg/repos/`
+1. Clone the repo to `~/.config/arc/pkg/repos/`
 2. Show you what capabilities the skill requests
 3. Create a symlink in `~/.claude/skills/`
-4. Record the install in `~/.config/pai/packages.db`
+4. Record the install in `~/.config/arc/packages.db`
 
 ## Manage Installed Skills
 
