@@ -11,7 +11,7 @@ Get from zero to installing and publishing skills in 5 minutes.
 ## Install arc
 
 ```bash
-git clone git@github.com:mellanon/arc.git ~/Developer/arc
+git clone git@github.com:the-metafactory/arc.git ~/Developer/arc
 cd ~/Developer/arc
 bun install
 bun link

@@ -18,12 +18,12 @@ PAI needs a way for users to share skills like `npm install` or `apt install`. W
 
 | Activity | Scope | Output |
 |----------|-------|--------|
-| 14 parallel research agents | npm attacks, MCP Registry, AAIF, Sigstore, plugin stores, capability models, prompt injection | [RESEARCH.md](https://github.com/mellanon/pai-pkg/blob/main/RESEARCH.md) |
+| 14 parallel research agents | npm attacks, MCP Registry, AAIF, Sigstore, plugin stores, capability models, prompt injection | [RESEARCH.md](https://github.com/the-metafactory/arc/blob/main/RESEARCH.md) |
 | 4-agent council debate (3 rounds) | Transport choice, governance model, enforcement, minimum viable system | Council findings in RESEARCH.md §5 |
 | 8-agent red team (32 perspectives) | Supply chain attacks, trust failures, capability bypasses, social engineering | Red team findings in RESEARCH.md §6 |
 | First-principles analysis | What is the actual enforcement boundary? | Discovery: SecurityValidator IS the firewall |
-| Security architecture design | Runtime enforcement, observability, integration | [SECURITY-ARCHITECTURE.md](https://github.com/mellanon/pai-pkg/blob/main/SECURITY-ARCHITECTURE.md) |
-| Skill lifecycle design | End-to-end: author → package → install → enforce → upgrade → govern | [SKILL-LIFECYCLE.md](https://github.com/mellanon/pai-pkg/blob/main/SKILL-LIFECYCLE.md) |
+| Security architecture design | Runtime enforcement, observability, integration | [SECURITY-ARCHITECTURE.md](https://github.com/the-metafactory/arc/blob/main/SECURITY-ARCHITECTURE.md) |
+| Skill lifecycle design | End-to-end: author → package → install → enforce → upgrade → govern | [SKILL-LIFECYCLE.md](https://github.com/the-metafactory/arc/blob/main/SKILL-LIFECYCLE.md) |
 | Analyzed 3 external sources | "Gas Town/Citadel", "Anthropic Attack", AvaKill | Integrated into architecture |
 
 ---
@@ -128,10 +128,10 @@ The design adapts Arbor's security kernel patterns without requiring Arbor to ru
 
 | Document | Words | Focus |
 |----------|-------|-------|
-| [SECURITY-ARCHITECTURE.md](https://github.com/mellanon/pai-pkg/blob/main/SECURITY-ARCHITECTURE.md) | 4,158 | Runtime enforcement, observability, integration |
-| [SKILL-LIFECYCLE.md](https://github.com/mellanon/pai-pkg/blob/main/SKILL-LIFECYCLE.md) | 3,800+ | End-to-end lifecycle, how all layers compose |
-| [RESEARCH.md](https://github.com/mellanon/pai-pkg/blob/main/RESEARCH.md) | 5,390 | Landscape, council, red team |
-| [DESIGN.md](https://github.com/mellanon/pai-pkg/blob/main/DESIGN.md) | 3,500+ | Transport, trust, governance (existing, reviewed previously) |
+| [SECURITY-ARCHITECTURE.md](https://github.com/the-metafactory/arc/blob/main/SECURITY-ARCHITECTURE.md) | 4,158 | Runtime enforcement, observability, integration |
+| [SKILL-LIFECYCLE.md](https://github.com/the-metafactory/arc/blob/main/SKILL-LIFECYCLE.md) | 3,800+ | End-to-end lifecycle, how all layers compose |
+| [RESEARCH.md](https://github.com/the-metafactory/arc/blob/main/RESEARCH.md) | 5,390 | Landscape, council, red team |
+| [DESIGN.md](https://github.com/the-metafactory/arc/blob/main/DESIGN.md) | 3,500+ | Transport, trust, governance (existing, reviewed previously) |
 
 **Priority:** SECURITY-ARCHITECTURE.md is the most critical for security review. SKILL-LIFECYCLE.md shows how everything composes. RESEARCH.md provides supporting evidence.
 
