@@ -1,0 +1,119 @@
+schema: blueprint/v1
+repo: arc
+
+features:
+  # Foundation
+  - id: A-100
+    name: Manifest format (pai-manifest.yaml)
+    status: done
+    iteration: 1
+    depends: []
+    description: Parse and validate pai-manifest.yaml with capabilities, provides, and dependency declarations
+
+  - id: A-101
+    name: Install pipeline
+    status: done
+    iteration: 1
+    depends: [A-100]
+    description: "Git clone → verify → symlink → DB record pipeline for all artifact types"
+
+  - id: A-102
+    name: Artifact types (skill, tool, agent, prompt, component)
+    status: done
+    iteration: 1
+    depends: [A-101]
+    description: Type-specific installation paths and CLI shim generation for tools
+
+  - id: A-103
+    name: Database tracking (packages.db)
+    status: done
+    iteration: 1
+    depends: [A-101]
+    description: SQLite WAL-mode DB tracking installs with manifest hash, capabilities, and status
+
+  - id: A-104
+    name: Enable/disable/remove lifecycle
+    status: done
+    iteration: 1
+    depends: [A-103]
+    description: Preserve repo on disable, full cleanup on remove, status tracking in DB
+
+  - id: A-105
+    name: Capability audit
+    status: done
+    iteration: 1
+    depends: [A-100]
+    description: Surface total capability footprint with cross-tier warnings and risk display
+
+  # Discovery
+  - id: A-200
+    name: Multi-source registry
+    status: done
+    iteration: 2
+    depends: [A-101]
+    description: "sources.yaml with trust tiers (official/community/custom), remote REGISTRY.yaml fetch and cache"
+
+  - id: A-201
+    name: Search and catalog
+    status: done
+    iteration: 2
+    depends: [A-200]
+    description: "Search across registries, personal catalog.yaml with two-level discovery model"
+
+  - id: A-202
+    name: Typed dependency resolution
+    status: done
+    iteration: 2
+    depends: [A-201]
+    description: "Skill-to-skill deps with version constraints, recursive resolution"
+
+  # Upgrade & lifecycle
+  - id: A-300
+    name: Upgrade with lifecycle hooks
+    status: done
+    iteration: 3
+    depends: [A-103, A-200]
+    description: "preinstall/postinstall/preupgrade/postupgrade hooks, version comparison, upgrade --check"
+
+  - id: A-301
+    name: Self-update and upgrade-core
+    status: done
+    iteration: 3
+    depends: [A-300]
+    description: "arc self-update via git pull, upgrade-core for PAI version symlink management"
+
+  - id: A-302
+    name: Package init scaffolding
+    status: done
+    iteration: 3
+    depends: [A-100]
+    description: "arc init — scaffold new package repo with manifest templates per artifact type"
+
+  # Planned
+  - id: A-400
+    name: Runtime enforcement (SecurityValidator)
+    status: planned
+    iteration: 4
+    depends: [A-105]
+    description: "Extend SecurityValidator to be skill-scoped, merge capabilities into patterns.yaml on install"
+
+  - id: A-401
+    name: metafactory registry source
+    status: planned
+    iteration: 4
+    depends: [A-200, meta-factory:F2-200]
+    description: "Official metafactory registry as a first-class source in arc"
+
+  - id: A-402
+    name: Version pinning
+    status: planned
+    iteration: 4
+    depends: [A-300]
+    description: "arc install MySkill@1.2.0 — pin to specific version during install"
+
+  - id: A-403
+    name: Author signing (SkillSeal)
+    status: planned
+    iteration: 4
+    depends: [A-105, meta-factory:F5-500]
+    description: "GitHub-based key discovery for package signing, future Sigstore keyless signing"
