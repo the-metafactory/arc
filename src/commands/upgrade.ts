@@ -245,7 +245,10 @@ export async function upgradePackage(
 
   // Re-wire extensions (if declared)
   if (manifest.extensions) {
-    await wireExtensions(manifest, installPath, paths.claudeRoot);
+    const wired = await wireExtensions(manifest, installPath, paths.claudeRoot);
+    for (const ext of wired) {
+      console.log(`  \u2713 Extension wired: ${ext}`);
+    }
   }
 
   // Run postupgrade script if declared (falls back to postinstall)

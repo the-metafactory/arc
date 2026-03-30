@@ -1,5 +1,6 @@
-import { join, dirname } from "path";
+import { join } from "path";
 import { mkdir } from "fs/promises";
+import { existsSync } from "fs";
 import { createSymlink, removeSymlink } from "./symlinks.js";
 import type { ArcManifest, ExtensionEntry } from "../types.js";
 
@@ -24,6 +25,10 @@ export async function wireExtensions(
 
     for (const ext of manifest.extensions.statusline) {
       const sourcePath = join(installPath, ext.source);
+      if (!existsSync(sourcePath)) {
+        console.warn(`  \u26A0 Extension source not found: ${ext.source}`);
+        continue;
+      }
       const linkPath = join(statuslineDir, `${ext.name}.sh`);
       await createSymlink(sourcePath, linkPath);
       wired.push(`statusline:${ext.name}`);
