@@ -11,8 +11,8 @@ describe("createPaths", () => {
     expect(paths.claudeRoot).toBe(join(home, ".claude"));
     expect(paths.skillsDir).toBe(join(home, ".claude", "skills"));
     expect(paths.binDir).toBe(join(home, ".claude", "bin"));
-    expect(paths.configRoot).toBe(join(home, ".config", "arc"));
-    expect(paths.dbPath).toBe(join(home, ".config", "arc", "packages.db"));
+    expect(paths.configRoot).toBe(join(home, ".config", "pai"));
+    expect(paths.dbPath).toBe(join(home, ".config", "pai", "packages.db"));
   });
 
   test("accepts overrides for test isolation", () => {

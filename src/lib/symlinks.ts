@@ -18,16 +18,6 @@ export async function createSymlink(
       await unlink(linkPath);
     } else if (stat.isDirectory()) {
       // Back up existing directory (e.g., manually-installed skill being replaced by arc)
-      // Migrate legacy .pre-pai-pkg backup if present
-      const legacyBackup = linkPath + ".pre-pai-pkg";
-      try {
-        const legacyStat = await lstat(legacyBackup);
-        if (legacyStat.isDirectory()) {
-          await rename(legacyBackup, linkPath + ".pre-arc");
-        }
-      } catch (e: any) {
-        if (e.code !== "ENOENT") throw e;
-      }
       await rename(linkPath, linkPath + ".pre-arc");
     } else if (stat.isFile()) {
       await unlink(linkPath);
