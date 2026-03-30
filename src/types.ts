@@ -232,15 +232,15 @@ export interface PaiPaths {
   promptsDir: string;
   /** Bin directory (~/.claude/bin/) */
   binDir: string;
-  /** Package repos (~/.config/pai/pkg/repos/) */
+  /** Package repos (~/.config/arc/pkg/repos/) */
   reposDir: string;
-  /** Database path (~/.config/pai/packages.db) */
+  /** Database path (~/.config/arc/packages.db) */
   dbPath: string;
-  /** Config root (~/.config/pai/) */
+  /** Config root (~/.config/arc/) */
   configRoot: string;
-  /** Secrets directory (~/.config/pai/secrets/) */
+  /** Secrets directory (~/.config/arc/secrets/) */
   secretsDir: string;
-  /** Runtime state (~/.config/pai/skills/) */
+  /** Runtime state (~/.config/arc/skills/) */
   runtimeDir: string;
   /** PATH-accessible shim directory (~/bin/) */
   shimDir: string;
@@ -248,8 +248,8 @@ export interface PaiPaths {
   catalogPath: string;
   /** Registry file path (repo-root/registry.yaml) */
   registryPath: string;
-  /** Sources config path (~/.config/pai/sources.yaml) */
+  /** Sources config path (~/.config/arc/sources.yaml) */
   sourcesPath: string;
-  /** Remote registry cache directory (~/.config/pai/pkg/cache/) */
+  /** Remote registry cache directory (~/.config/arc/pkg/cache/) */
   cachePath: string;
 }

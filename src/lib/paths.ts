@@ -9,7 +9,11 @@ import type { PaiPaths } from "../types.js";
 export function createPaths(overrides?: Partial<PaiPaths>): PaiPaths {
   const home = homedir();
   const claudeRoot = overrides?.claudeRoot ?? join(home, ".claude");
-  const configRoot = overrides?.configRoot ?? join(home, ".config", "pai");
+  const configRoot =
+    overrides?.configRoot ??
+    (process.env.ARC_CONFIG_ROOT
+      ? process.env.ARC_CONFIG_ROOT.replace(/^~/, home)
+      : join(home, ".config", "arc"));
 
   return {
     claudeRoot,

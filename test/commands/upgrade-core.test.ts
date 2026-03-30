@@ -22,7 +22,7 @@ interface MockPaiEnv {
   newRelease: string;
   /** Path to ~/.claude symlink */
   claudeSymlink: string;
-  /** Path to config root (~/.config/pai/) */
+  /** Path to config root (~/.config/arc/) */
   configRoot: string;
   /** Path to personal data repo */
   personalDataDir: string;
@@ -35,7 +35,7 @@ interface MockPaiEnv {
  * Layout:
  *   root/
  *     .claude → old release (symlink)
- *     .config/pai/               (config root)
+ *     .config/arc/               (config root)
  *       .env
  *       MEMORY/
  *       secrets/

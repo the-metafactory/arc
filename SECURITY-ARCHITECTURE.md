@@ -144,7 +144,7 @@ base:
       - "~/.ssh/"
       - "~/.gnupg/"
       - "~/.aws/credentials"
-      - "~/.config/pai/secrets/"
+      - "~/.config/arc/secrets/"
     readOnly:
       - "/etc/"
       - "/usr/"
@@ -370,7 +370,7 @@ SecurityValidator already logs every security event to `MEMORY/SECURITY/`. But t
 A new observability layer that analyzes PATTERNS across security events within a session:
 
 ```yaml
-# ~/.config/pai/security/anomaly-rules.yaml
+# ~/.config/arc/security/anomaly-rules.yaml
 
 rules:
   # Detect read-then-exfiltrate pattern
@@ -378,7 +378,7 @@ rules:
     description: "Reading sensitive files followed by network access"
     trigger:
       sequence:
-        - event: {tool: "Read", path_matches: "~/.config/pai/secrets/*"}
+        - event: {tool: "Read", path_matches: "~/.config/arc/secrets/*"}
         - event: {tool: "Bash", command_matches: "curl|wget|nc|fetch|python3|node"}
       within_minutes: 5
     action: block
@@ -607,7 +607,7 @@ The pai-collab spoke repos (pai-secret-scanning, pai-content-filter, skill-enfor
 # These aren't regular skills — they're enforcement components
 
 arc install --system pai-secret-scanning
-# → Installs gitleaks rules to ~/.config/pai/security/
+# → Installs gitleaks rules to ~/.config/arc/security/
 # → Registers pre-commit hook
 
 arc install --system pai-content-filter
@@ -624,7 +624,7 @@ The `--system` flag distinguishes infrastructure packages from regular skills. S
 - Are verified against a separate trust chain (the hive's allowed-signers)
 - Update independently from regular skills via signed atomic operations (write tmp, validate, rename)
 - Provide patterns/rules consumed by the SecurityValidator rather than SKILL.md instructions
-- Install to a protected path (`~/.config/pai/system-skills/`) separate from user skills
+- Install to a protected path (`~/.config/arc/system-skills/`) separate from user skills
 - Have integrity verified at SessionStart + periodically (every 30 minutes for long sessions)
 
 ### 6.2.1 System Package Manifest Schema
