@@ -6,9 +6,10 @@
  * entry is tagged with `_pai_pkg` for provenance tracking and clean removal.
  */
 
-import { existsSync } from "fs";
+import { existsSync, readFileSync } from "fs";
 import { mkdir } from "fs/promises";
-import { dirname } from "path";
+import { dirname, join } from "path";
+import type { HooksDeclaration, InlineHook, HooksConfigRef } from "../types.js";
 
 /** A single hook entry in settings.json's hooks.<event> array */
 interface SettingsHookGroup {
@@ -50,6 +51,88 @@ async function writeSettings(
 ): Promise<void> {
   await mkdir(dirname(settingsPath), { recursive: true });
   await Bun.write(settingsPath, JSON.stringify(settings, null, 4) + "\n");
+}
+
+/**
+ * Resolve hooks from a manifest's provides.hooks field.
+ *
+ * Supports two formats:
+ * 1. Inline array: [{ event, command, matcher? }] — used directly
+ * 2. Config-file ref: { claude_code: { config: "path/to/hooks.json" } } — loads
+ *    the JSON file, flattens its { EventName: [{ command }] } structure, and
+ *    resolves any $PKG_DIR or $<NAME>_DIR env vars to the actual install path.
+ *
+ * Returns null if hooks is undefined (no hooks declared).
+ */
+export function resolveHooksFromManifest(
+  hooks: HooksDeclaration | undefined,
+  installPath: string,
+  packageName: string,
+): InlineHook[] | null {
+  if (!hooks) return null;
+
+  // Format 1: inline array — already in the right shape
+  if (Array.isArray(hooks)) {
+    return resolveCommandPaths(hooks, installPath, packageName);
+  }
+
+  // Format 2: config-file reference
+  const configRef = hooks as HooksConfigRef;
+  if (!configRef.claude_code?.config) return null;
+
+  const configPath = join(installPath, configRef.claude_code.config);
+
+  let configData: Record<string, Array<{ type?: string; command: string }>>;
+  try {
+    const raw = readFileSync(configPath, "utf-8");
+    const parsed = JSON.parse(raw);
+    // The JSON file has either { hooks: { Event: [...] } } or { Event: [...] }
+    configData = parsed.hooks ?? parsed;
+  } catch {
+    return null;
+  }
+
+  // Flatten { SessionStart: [{ command }], PostToolUse: [{ command }] }
+  // into [{ event: "SessionStart", command }, { event: "PostToolUse", command }]
+  const flattened: InlineHook[] = [];
+  for (const [event, entries] of Object.entries(configData)) {
+    if (!Array.isArray(entries)) continue;
+    for (const entry of entries) {
+      if (entry.command) {
+        flattened.push({ event, command: entry.command });
+      }
+    }
+  }
+
+  return resolveCommandPaths(flattened, installPath, packageName);
+}
+
+/**
+ * Replace $PKG_DIR and $<NAME>_DIR in hook commands with the actual install path.
+ */
+function resolveCommandPaths(
+  hooks: InlineHook[],
+  installPath: string,
+  packageName: string,
+): InlineHook[] {
+  const nameUpper = packageName.toUpperCase().replace(/-/g, "_");
+  const namePattern = new RegExp(`\\$${nameUpper}_DIR`, "g");
+
+  return hooks.map((hook) => ({
+    ...hook,
+    command: hook.command
+      .replace(/\$PKG_DIR/g, installPath)
+      .replace(namePattern, installPath),
+  }));
+}
+
+/**
+ * Check whether a manifest has any hooks declared (either format).
+ */
+export function hasHooks(hooks: HooksDeclaration | undefined): boolean {
+  if (!hooks) return false;
+  if (Array.isArray(hooks)) return hooks.length > 0;
+  return !!(hooks as HooksConfigRef).claude_code?.config;
 }
 
 /**

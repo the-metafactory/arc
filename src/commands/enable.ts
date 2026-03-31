@@ -6,7 +6,7 @@ import type { PaiPaths } from "../types.js";
 import { getSkill, updateSkillStatus } from "../lib/db.js";
 import { readManifest } from "../lib/manifest.js";
 import { createSymlink, createCliShim } from "../lib/symlinks.js";
-import { registerHooks } from "../lib/hooks.js";
+import { registerHooks, resolveHooksFromManifest } from "../lib/hooks.js";
 
 export interface EnableResult {
   success: boolean;
@@ -94,9 +94,14 @@ export async function enable(
   }
 
   // Re-register hooks when enabling (consent was given at install time)
-  if (manifest?.provides?.hooks?.length) {
+  const resolvedHooks = resolveHooksFromManifest(
+    manifest?.provides?.hooks,
+    skill.install_path,
+    name,
+  );
+  if (resolvedHooks?.length) {
     const settingsPath = join(homedir(), ".claude", "settings.json");
-    await registerHooks(name, manifest.provides.hooks, settingsPath);
+    await registerHooks(name, resolvedHooks, settingsPath);
   }
 
   // Update database

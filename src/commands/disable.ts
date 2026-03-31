@@ -5,7 +5,7 @@ import type { PaiPaths } from "../types.js";
 import { getSkill, updateSkillStatus } from "../lib/db.js";
 import { removeSymlink, removeCliShim } from "../lib/symlinks.js";
 import { readManifest } from "../lib/manifest.js";
-import { removeHooks } from "../lib/hooks.js";
+import { removeHooks, hasHooks } from "../lib/hooks.js";
 
 export interface DisableResult {
   success: boolean;
@@ -71,7 +71,7 @@ export async function disable(
 
   // Remove hooks from settings.json
   const manifest = await readManifest(skill.install_path);
-  if (manifest?.provides?.hooks?.length) {
+  if (hasHooks(manifest?.provides?.hooks)) {
     const settingsPath = join(homedir(), ".claude", "settings.json");
     await removeHooks(name, settingsPath);
   }

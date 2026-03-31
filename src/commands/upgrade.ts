@@ -10,7 +10,7 @@ import { createSymlink } from "../lib/symlinks.js";
 import { loadSources } from "../lib/sources.js";
 import { findInAllSources } from "../lib/remote-registry.js";
 import { runScript } from "../lib/scripts.js";
-import { registerHooks, removeHooks } from "../lib/hooks.js";
+import { registerHooks, removeHooks, resolveHooksFromManifest } from "../lib/hooks.js";
 
 export interface UpgradeCheckResult {
   name: string;
@@ -172,10 +172,15 @@ export async function upgradePackage(
   }
 
   // Re-register hooks (remove old, add new) — no consent prompt on upgrade
-  if (manifest.provides?.hooks?.length) {
+  const resolvedHooks = resolveHooksFromManifest(
+    manifest.provides?.hooks,
+    installPath,
+    name,
+  );
+  if (resolvedHooks?.length) {
     const settingsPath = join(homedir(), ".claude", "settings.json");
     await removeHooks(name, settingsPath);
-    await registerHooks(name, manifest.provides.hooks, settingsPath);
+    await registerHooks(name, resolvedHooks, settingsPath);
   }
 
   // Run postupgrade script if declared (falls back to postinstall)

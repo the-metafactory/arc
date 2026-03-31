@@ -8,7 +8,7 @@ import { readManifest, assessRisk, formatCapabilities } from "../lib/manifest.js
 import { recordInstall, getSkill } from "../lib/db.js";
 import { createSymlink, createCliShim, extractCliInfo } from "../lib/symlinks.js";
 import { runScript } from "../lib/scripts.js";
-import { registerHooks } from "../lib/hooks.js";
+import { registerHooks, resolveHooksFromManifest, hasHooks } from "../lib/hooks.js";
 
 export interface InstallOptions {
   paths: PaiPaths;
@@ -267,17 +267,22 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
   }
 
   // 5b. Register hooks (if declared, with consent gating)
-  if (manifest.provides?.hooks?.length) {
+  const resolvedHooks = resolveHooksFromManifest(
+    manifest.provides?.hooks,
+    installPath,
+    manifest.name,
+  );
+  if (resolvedHooks?.length) {
     const tier = opts.sourceTier ?? manifest.tier ?? "custom";
     const approved = await promptHookConsent(
       manifest.name,
       tier,
-      manifest.provides.hooks,
+      resolvedHooks,
       opts.yes,
     );
     if (approved) {
       const settingsPath = join(homedir(), ".claude", "settings.json");
-      await registerHooks(manifest.name, manifest.provides.hooks, settingsPath);
+      await registerHooks(manifest.name, resolvedHooks, settingsPath);
       if (!opts.yes) {
         console.log("  \u2713 Hooks registered in settings.json");
       }

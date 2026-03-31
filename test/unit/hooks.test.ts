@@ -6,6 +6,8 @@ import {
   registerHooks,
   removeHooks,
   listPackageHooks,
+  resolveHooksFromManifest,
+  hasHooks,
 } from "../../src/lib/hooks.js";
 
 let tmpDir: string;
@@ -295,5 +297,127 @@ describe("listPackageHooks", () => {
 
     const hooks = listPackageHooks("Grove", settingsPath);
     expect(hooks).toBeArrayOfSize(0);
+  });
+});
+
+describe("resolveHooksFromManifest", () => {
+  test("returns null for undefined hooks", () => {
+    const result = resolveHooksFromManifest(undefined, "/install/path", "TestPkg");
+    expect(result).toBeNull();
+  });
+
+  test("passes through inline array format unchanged (no env vars)", () => {
+    const inline = [
+      { event: "PostToolUse", command: "/absolute/path/hook.ts" },
+      { event: "Stop", command: "/absolute/path/stop.ts" },
+    ];
+    const result = resolveHooksFromManifest(inline, "/install/path", "TestPkg");
+    expect(result).toEqual(inline);
+  });
+
+  test("resolves $PKG_DIR in inline array commands", () => {
+    const inline = [
+      { event: "PostToolUse", command: "bun $PKG_DIR/src/hooks/hook.ts" },
+    ];
+    const result = resolveHooksFromManifest(inline, "/opt/packages/mypkg", "MyPkg");
+    expect(result).toEqual([
+      { event: "PostToolUse", command: "bun /opt/packages/mypkg/src/hooks/hook.ts" },
+    ]);
+  });
+
+  test("resolves $NAME_DIR env var to install path", () => {
+    const inline = [
+      { event: "SessionStart", command: "bun $MINER_DIR/src/hooks/EventLogger.hook.ts" },
+    ];
+    const result = resolveHooksFromManifest(inline, "/home/user/.config/arc/pkg/repos/miner", "Miner");
+    expect(result).toEqual([
+      { event: "SessionStart", command: "bun /home/user/.config/arc/pkg/repos/miner/src/hooks/EventLogger.hook.ts" },
+    ]);
+  });
+
+  test("loads and flattens config-file JSON format", async () => {
+    // Create a temporary hooks JSON file
+    const hooksJson = {
+      hooks: {
+        SessionStart: [{ type: "command", command: "bun $MINER_DIR/src/hooks/Logger.ts" }],
+        PostToolUse: [{ type: "command", command: "bun $MINER_DIR/src/hooks/Logger.ts" }],
+        Stop: [{ type: "command", command: "bun $MINER_DIR/src/hooks/Logger.ts" }],
+      },
+    };
+    const configDir = join(tmpDir, "mock-repo");
+    const configPath = join(configDir, "src", "hooks", "hooks.json");
+    await Bun.write(configPath, JSON.stringify(hooksJson));
+
+    const result = resolveHooksFromManifest(
+      { claude_code: { config: "src/hooks/hooks.json" } },
+      configDir,
+      "Miner",
+    );
+
+    expect(result).toBeArrayOfSize(3);
+    expect(result![0]).toEqual({
+      event: "SessionStart",
+      command: `bun ${configDir}/src/hooks/Logger.ts`,
+    });
+    expect(result![1]).toEqual({
+      event: "PostToolUse",
+      command: `bun ${configDir}/src/hooks/Logger.ts`,
+    });
+    expect(result![2]).toEqual({
+      event: "Stop",
+      command: `bun ${configDir}/src/hooks/Logger.ts`,
+    });
+  });
+
+  test("returns null for config-file that does not exist", () => {
+    const result = resolveHooksFromManifest(
+      { claude_code: { config: "nonexistent.json" } },
+      "/fake/path",
+      "TestPkg",
+    );
+    expect(result).toBeNull();
+  });
+
+  test("handles config JSON without outer hooks wrapper", async () => {
+    // Some JSON files may have the events at the top level
+    const hooksJson = {
+      SessionStart: [{ type: "command", command: "bun $PKG_DIR/hook.ts" }],
+    };
+    const configDir = join(tmpDir, "flat-repo");
+    await Bun.write(join(configDir, "hooks.json"), JSON.stringify(hooksJson));
+
+    const result = resolveHooksFromManifest(
+      { claude_code: { config: "hooks.json" } },
+      configDir,
+      "FlatPkg",
+    );
+
+    expect(result).toBeArrayOfSize(1);
+    expect(result![0]).toEqual({
+      event: "SessionStart",
+      command: `bun ${configDir}/hook.ts`,
+    });
+  });
+});
+
+describe("hasHooks", () => {
+  test("returns false for undefined", () => {
+    expect(hasHooks(undefined)).toBe(false);
+  });
+
+  test("returns false for empty array", () => {
+    expect(hasHooks([])).toBe(false);
+  });
+
+  test("returns true for non-empty inline array", () => {
+    expect(hasHooks([{ event: "Stop", command: "/hook.ts" }])).toBe(true);
+  });
+
+  test("returns true for config-file reference", () => {
+    expect(hasHooks({ claude_code: { config: "hooks.json" } })).toBe(true);
+  });
+
+  test("returns false for empty config-file reference", () => {
+    expect(hasHooks({ claude_code: { config: "" } } as any)).toBe(false);
   });
 });

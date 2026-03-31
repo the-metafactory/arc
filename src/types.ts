@@ -146,12 +146,27 @@ export interface PaiManifest {
     skill?: SkillTrigger[];
     cli?: CliProvider[];
     files?: Array<{ source: string; target: string }>;
-    hooks?: Array<{
-      event: string;
-      command: string;
-      matcher?: string;
-    }>;
+    hooks?: HooksDeclaration;
   };
+}
+
+/** Inline hook array format (e.g. Grove) */
+export type InlineHook = {
+  event: string;
+  command: string;
+  matcher?: string;
+};
+
+/** Config-file hook format (e.g. Miner) — references a JSON file */
+export type HooksConfigRef = {
+  claude_code: {
+    config: string;
+    description?: string;
+  };
+};
+
+/** Union of both hook declaration formats in pai-manifest.yaml */
+export type HooksDeclaration = InlineHook[] | HooksConfigRef;
   depends_on?: {
     skills?: SkillDependency[];
     tools?: ToolDependency[];
