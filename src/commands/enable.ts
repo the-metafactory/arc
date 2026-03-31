@@ -5,7 +5,7 @@ import type { Database } from "bun:sqlite";
 import type { PaiPaths } from "../types.js";
 import { getSkill, updateSkillStatus } from "../lib/db.js";
 import { readManifest } from "../lib/manifest.js";
-import { createSymlink, createCliShim } from "../lib/symlinks.js";
+import { createSymlink, createCliShim, extractAllCliInfo } from "../lib/symlinks.js";
 import { registerHooks, resolveHooksFromManifest } from "../lib/hooks.js";
 
 export interface EnableResult {
@@ -37,12 +37,15 @@ export async function enable(
   const manifest = await readManifest(skill.install_path);
 
   if (isTool) {
-    // Tools: re-create bin symlink (repo root to binDir)
-    const binLinkPath = join(paths.binDir, name);
-    await createSymlink(skill.install_path, binLinkPath);
-
-    // Re-create CLI shim
+    // Tools: re-create bin symlinks for all CLI entries
     if (manifest) {
+      const cliEntries = extractAllCliInfo(manifest);
+      for (const entry of cliEntries) {
+        await createSymlink(skill.install_path, join(paths.binDir, entry.binName));
+      }
+      if (!cliEntries.length) {
+        await createSymlink(skill.install_path, join(paths.binDir, name));
+      }
       await createCliShim(paths.shimDir, paths.binDir, manifest);
     }
   } else if (isAgent) {
@@ -82,14 +85,15 @@ export async function enable(
       await createSymlink(skill.install_path, skillLinkPath);
     }
 
-    // Re-create bin symlink and CLI shim if CLI declared
-    if (manifest?.provides?.cli?.length) {
-      const binName =
-        manifest.provides.cli[0].name ??
-        name.replace(/^_/, "").toLowerCase();
-      const binLinkPath = join(paths.binDir, binName);
-      await createSymlink(skill.install_path, binLinkPath);
-      await createCliShim(paths.shimDir, paths.binDir, manifest);
+    // Re-create bin symlinks and CLI shims for all CLI entries
+    if (manifest) {
+      const cliEntries = extractAllCliInfo(manifest);
+      for (const entry of cliEntries) {
+        await createSymlink(skill.install_path, join(paths.binDir, entry.binName));
+      }
+      if (cliEntries.length) {
+        await createCliShim(paths.shimDir, paths.binDir, manifest);
+      }
     }
   }
 

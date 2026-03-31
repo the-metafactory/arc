@@ -4,7 +4,7 @@ import { homedir } from "os";
 import type { Database } from "bun:sqlite";
 import type { PaiPaths } from "../types.js";
 import { getSkill, removeSkill } from "../lib/db.js";
-import { removeSymlink, removeCliShim } from "../lib/symlinks.js";
+import { removeSymlink, removeCliShim, extractAllCliInfo } from "../lib/symlinks.js";
 import { readManifest } from "../lib/manifest.js";
 import { removeHooks } from "../lib/hooks.js";
 
@@ -54,22 +54,24 @@ export async function remove(
     // Skills: remove skill symlink
     const skillLink = join(paths.skillsDir, name);
     await removeSymlink(skillLink);
-
-    // Remove bin symlink (skills with CLI)
-    const binName = name.replace(/^_/, "").toLowerCase();
-    const binLink = join(paths.binDir, binName);
-    await removeSymlink(binLink);
   }
 
-  // Read manifest before removal (needed for CLI shim name and hooks cleanup)
+  // Read manifest before removal (needed for CLI shim names and hooks cleanup)
   const manifest = await readManifest(skill.install_path);
 
-  // Remove CLI shim from PATH (only for skills and tools)
-  if (!isAgent && !isPrompt) {
-    const shimName = isTool
-      ? manifest?.provides?.cli?.[0]?.name ?? name.toLowerCase()
-      : name.replace(/^_/, "").toLowerCase();
-    await removeCliShim(paths.shimDir, shimName);
+  // Remove all CLI shims and bin symlinks (skills and tools)
+  if (!isAgent && !isPrompt && manifest) {
+    const cliEntries = extractAllCliInfo(manifest);
+    for (const entry of cliEntries) {
+      await removeCliShim(paths.shimDir, entry.binName);
+      await removeSymlink(join(paths.binDir, entry.binName));
+    }
+    if (!cliEntries.length) {
+      // Fallback: remove by conventional name
+      const fallbackName = isTool ? name.toLowerCase() : name.replace(/^_/, "").toLowerCase();
+      await removeCliShim(paths.shimDir, fallbackName);
+      await removeSymlink(join(paths.binDir, fallbackName));
+    }
   }
 
   // Remove hooks from settings.json (before deleting repo)

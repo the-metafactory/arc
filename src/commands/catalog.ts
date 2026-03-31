@@ -18,7 +18,7 @@ import {
 import { resolveSource } from "../lib/source-resolver.js";
 import { readManifest } from "../lib/manifest.js";
 import { recordInstall, getSkill } from "../lib/db.js";
-import { createSymlink, createCliShim, extractCliInfo } from "../lib/symlinks.js";
+import { createSymlink, createCliShim, extractAllCliInfo } from "../lib/symlinks.js";
 
 // ── Result types ──────────────────────────────────────────────
 

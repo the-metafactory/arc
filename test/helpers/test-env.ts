@@ -39,6 +39,7 @@ export async function createTestEnv(): Promise<TestEnv> {
     agentsDir: join(root, ".claude", "agents"),
     promptsDir: join(root, ".claude", "commands"),
     binDir: join(root, ".claude", "bin"),
+    shimDir: join(root, "bin"),
     reposDir: join(root, ".config", "pai", "pkg", "repos"),
     dbPath: join(root, ".config", "pai", "packages.db"),
     secretsDir: join(root, ".config", "pai", "secrets"),
@@ -92,6 +93,8 @@ export async function createMockSkillRepo(
       bash?: { allowed: boolean; restricted_to?: string[] };
       secrets?: string[];
     };
+    /** Additional CLI entries beyond the default one */
+    extraCli?: Array<{ name: string; command: string }>;
     /** Lifecycle scripts to declare in the manifest and create on disk */
     scripts?: {
       preinstall?: { path: string; content: string };
@@ -177,7 +180,10 @@ export async function createMockSkillRepo(
           ? { skill: [{ trigger: opts.name.replace(/^_/, "").toLowerCase() }] }
           : {}),
         ...(opts.withCli || isTool
-          ? { cli: [{ command: `bun src/tool.ts`, name: opts.name.replace(/^_/, "").toLowerCase() }] }
+          ? { cli: [
+              { command: `bun src/tool.ts`, name: opts.name.replace(/^_/, "").toLowerCase() },
+              ...(opts.extraCli ?? []),
+            ] }
           : {}),
       },
       depends_on: { tools: [{ name: "bun", version: ">=1.0.0" }] },

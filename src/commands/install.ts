@@ -6,7 +6,7 @@ import type { PaiPaths, PaiManifest, PackageTier } from "../types.js";
 import type { Database } from "bun:sqlite";
 import { readManifest, assessRisk, formatCapabilities } from "../lib/manifest.js";
 import { recordInstall, getSkill } from "../lib/db.js";
-import { createSymlink, createCliShim, extractCliInfo } from "../lib/symlinks.js";
+import { createSymlink, createCliShim, extractAllCliInfo } from "../lib/symlinks.js";
 import { runScript } from "../lib/scripts.js";
 import { registerHooks, resolveHooksFromManifest, hasHooks } from "../lib/hooks.js";
 
@@ -212,11 +212,18 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
       await createSymlink(sourcePath, targetPath);
     }
   } else if (isTool) {
-    // Tools: symlink repo root to binDir (no skill/ subdirectory)
-    const binLinkPath = join(paths.binDir, manifest.name);
-    await createSymlink(installPath, binLinkPath);
+    // Tools: symlink repo root to binDir for each CLI entry
+    const cliEntries = extractAllCliInfo(manifest);
+    for (const entry of cliEntries) {
+      const binLinkPath = join(paths.binDir, entry.binName);
+      await createSymlink(installPath, binLinkPath);
+    }
+    if (!cliEntries.length) {
+      // Fallback: symlink under manifest name if no CLI declared
+      await createSymlink(installPath, join(paths.binDir, manifest.name));
+    }
 
-    // Create PATH-accessible shim
+    // Create PATH-accessible shims for all CLI entries
     await createCliShim(paths.shimDir, paths.binDir, manifest);
   } else if (isAgent) {
     // Agents: symlink the .md file directly into agentsDir for Claude auto-discovery
@@ -257,11 +264,13 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
       await createSymlink(installPath, skillLinkPath);
     }
 
-    // Create bin symlink if CLI declared (skills with CLI)
-    const cliInfo = extractCliInfo(manifest);
-    if (cliInfo) {
-      const binLinkPath = join(paths.binDir, cliInfo.binName);
+    // Create bin symlinks and shims for all CLI entries (skills with CLI)
+    const cliEntries = extractAllCliInfo(manifest);
+    for (const entry of cliEntries) {
+      const binLinkPath = join(paths.binDir, entry.binName);
       await createSymlink(installPath, binLinkPath);
+    }
+    if (cliEntries.length) {
       await createCliShim(paths.shimDir, paths.binDir, manifest);
     }
   }
