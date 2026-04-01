@@ -29,7 +29,7 @@ export interface RunScriptResult {
 }
 
 /**
- * Run a lifecycle script declared in pai-manifest.yaml.
+ * Run a lifecycle script declared in arc-manifest.yaml.
  *
  * Returns { success: true, skipped: true } if the script file doesn't exist on disk.
  * Returns { success: false } if the script exits non-zero.

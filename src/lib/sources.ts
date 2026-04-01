@@ -4,7 +4,7 @@ import YAML from "yaml";
 import type { SourcesConfig, RegistrySource, PackageTier } from "../types.js";
 
 const DEFAULT_SOURCE: RegistrySource = {
-  name: "pai-collab",
+  name: "community",
   url: "https://raw.githubusercontent.com/mellanon/pai-collab/main/skills/REGISTRY.yaml",
   tier: "community",
   enabled: true,

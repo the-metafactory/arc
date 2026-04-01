@@ -4,6 +4,7 @@ import { mkdir, cp, rm } from "fs/promises";
 import { homedir } from "os";
 import type { Database } from "bun:sqlite";
 import type { PaiPaths, CatalogEntry, ArtifactType } from "../types.js";
+import { MANIFEST_FILENAMES } from "../lib/manifest.js";
 import {
   loadCatalog,
   saveCatalog,
@@ -487,7 +488,7 @@ async function installSkillEntry(
   const isRefresh = getSkill(db, entry.name) !== null;
 
   if (resolved.type === "local") {
-    // For CLI skills: find the repo root (walk up from skill dir to find pai-manifest.yaml)
+    // For CLI skills: find the repo root (walk up from skill dir to find arc-manifest.yaml)
     // For simple skills: just copy the parent dir of SKILL.md
     let sourceDir = resolved.parentPath;
     if (isCli) {
@@ -604,14 +605,14 @@ async function installSkillEntry(
 }
 
 /**
- * Walk up from a directory to find the repo root (where pai-manifest.yaml or package.json lives).
+ * Walk up from a directory to find the repo root (where arc-manifest.yaml or package.json lives).
  * Falls back to the given dir if nothing found.
  */
 function findRepoRoot(startDir: string): string {
   let dir = startDir;
   for (let i = 0; i < 5; i++) {
     if (
-      existsSync(join(dir, "pai-manifest.yaml")) ||
+      MANIFEST_FILENAMES.some((f) => existsSync(join(dir, f))) ||
       existsSync(join(dir, "package.json")) ||
       existsSync(join(dir, ".git"))
     ) {

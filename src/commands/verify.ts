@@ -47,10 +47,10 @@ export async function verify(
     detail: skill.install_path,
   });
 
-  // Check 2: pai-manifest.yaml exists
+  // Check 2: arc-manifest.yaml exists
   const manifest = await readManifest(skill.install_path);
   checks.push({
-    check: "pai-manifest.yaml valid",
+    check: "arc-manifest.yaml valid",
     passed: manifest !== null,
   });
 

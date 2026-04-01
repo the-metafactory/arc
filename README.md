@@ -12,16 +12,16 @@
 </p>
 
 <h1 align="center">arc</h1>
-<p align="center"><strong>Package management for PAI.</strong></p>
+<p align="center"><strong>Agentic skill package manager.</strong></p>
 <p align="center">Install, discover, and share skills, tools, agents, and prompts<br/>with capability-based trust and multi-source registries.</p>
 
 ---
 
 ## Your Agent Needs More Skills
 
-[PAI](https://github.com/danielmiessler/PAI) skills are powerful but non-distributable. Each user's skill directory is a local collection with no mechanism for discovery, installation, or sharing between users.
+Claude Code skills are powerful but non-distributable. Each user's skill directory is a local collection with no mechanism for discovery, installation, or sharing between users.
 
-**arc is `apt install` for PAI.** It manages the full lifecycle — search a registry, review capabilities, install with one command, audit what's running.
+**arc is `apt install` for agentic skills.** It manages the full lifecycle — search a registry, review capabilities, install with one command, audit what's running.
 
 ```bash
 arc search doc                # Find packages across all sources
@@ -31,7 +31,7 @@ arc audit                     # See your total attack surface
 
 ### What It Installs
 
-arc handles all four PAI artifact types:
+arc handles all four artifact types:
 
 | Type | Installed To | What It Is |
 |------|-------------|------------|
@@ -84,7 +84,7 @@ arc upgrade --check           # Check for available upgrades (compares against r
 arc upgrade                   # Upgrade all packages
 arc upgrade <name>            # Upgrade a specific package
 arc self-update               # Update arc itself (git pull + bun install)
-arc upgrade-core <version>    # Upgrade PAI core (symlink management)
+arc upgrade-core <version>    # Upgrade core (symlink management)
 ```
 
 ### Discovery
@@ -104,7 +104,7 @@ arc source remove <name>      # Remove a source
 
 ### Catalog
 
-The catalog is a local `catalog.yaml` tracking available PAI artifacts (built-in skills, agents). It complements the registry — the registry is for community-published packages, the catalog is for known artifacts you may want to install.
+The catalog is a local `catalog.yaml` tracking available artifacts (built-in skills, agents). It complements the registry — the registry is for community-published packages, the catalog is for known artifacts you may want to install.
 
 ```bash
 arc catalog list              # List catalog with install status
@@ -126,7 +126,7 @@ arc init my-agent --type agent
 arc init my-prompt --type prompt
 ```
 
-Each scaffold includes `pai-manifest.yaml`, `package.json`, `README.md`, `.gitignore`, and type-specific files (SKILL.md + workflows, agent persona, prompt template, or tool entry point).
+Each scaffold includes `arc-manifest.yaml`, `package.json`, `README.md`, `.gitignore`, and type-specific files (SKILL.md + workflows, agent persona, prompt template, or tool entry point).
 
 ---
 
@@ -136,7 +136,7 @@ Each scaffold includes `pai-manifest.yaml`, `package.json`, `README.md`, `.gitig
   sources.yaml             Registry Sources              arc                  Your Machine
   ────────────             ────────────────              ───────                  ────────────
        │                          │                         │                         │
-       │  pai-collab (community)  │                         │                         │
+       │  community hub           │                         │                         │
        │  personal (custom)       │                         │                         │
        │─────────────────────────►│                         │                         │
        │                          │                         │                         │
@@ -152,7 +152,7 @@ Each scaffold includes `pai-manifest.yaml`, `package.json`, `README.md`, `.gitig
        │                          │                         │  → git clone            │
        │                          │                         │─────────────────────────►
        │                          │                         │                         │
-       │                          │                         │  read pai-manifest.yaml │
+       │                          │                         │  read arc-manifest.yaml │
        │                          │                         │  display capabilities   │
        │                          │                         │  user confirms          │
        │                          │                         │                         │
@@ -166,7 +166,7 @@ Each scaffold includes `pai-manifest.yaml`, `package.json`, `README.md`, `.gitig
 1. `arc source update` fetches REGISTRY.yaml from each source in `sources.yaml` and caches locally
 2. `arc search` queries the cached indexes across all enabled sources
 3. `arc install` resolves the package from the registry, clones the source repo via git
-4. Reads `pai-manifest.yaml` — the capability declaration
+4. Reads `arc-manifest.yaml` — the capability declaration
 5. Displays capabilities and risk level for user approval
 6. Creates symlinks to the appropriate Claude directory
 7. For tools: runs `bun install` and creates CLI shim on PATH
@@ -183,7 +183,7 @@ arc supports multiple registry sources, like apt's sources.list:
 ```yaml
 # ~/.config/arc/sources.yaml (auto-created on first run)
 sources:
-  - name: pai-collab
+  - name: community
     url: https://raw.githubusercontent.com/mellanon/pai-collab/main/skills/REGISTRY.yaml
     tier: community
     enabled: true
@@ -206,13 +206,13 @@ Trust flows from the **source**, not the package:
 
 | Tier | Install Behavior | Example Source |
 |------|-----------------|----------------|
-| **official** | Auto-approves, minimal display | Daniel Miessler's upstream PAI |
-| **community** | Shows capabilities, requires confirmation | [pai-collab](https://github.com/mellanon/pai-collab) |
+| **official** | Auto-approves, minimal display | Upstream maintained packages |
+| **community** | Shows capabilities, requires confirmation | Community registries |
 | **custom** | Risk warning, full capability review | Direct git URL installs |
 
 ### Capability Declarations
 
-Every package declares what it accesses in `pai-manifest.yaml`:
+Every package declares what it accesses in `arc-manifest.yaml`:
 
 ```yaml
 capabilities:
@@ -241,11 +241,11 @@ Cross-tier warnings surface when a community package's capabilities combine dang
 
 ## Package Format
 
-A package is a git repo with `pai-manifest.yaml` at root:
+A package is a git repo with `arc-manifest.yaml` at root:
 
 ```
-pai-skill-example/
-├── pai-manifest.yaml       # Capability declaration (required)
+arc-skill-example/
+├── arc-manifest.yaml       # Capability declaration (required)
 ├── skill/                  # Skill directory (skills)
 │   ├── SKILL.md
 │   └── workflows/
@@ -259,7 +259,7 @@ pai-skill-example/
 └── README.md
 ```
 
-### pai-manifest.yaml
+### arc-manifest.yaml
 
 ```yaml
 name: _DOC
@@ -310,7 +310,7 @@ Tests run in isolated temp directories — never touch real `~/.claude/` or `~/.
 
 ## Versioning
 
-Packages use [semver](https://semver.org/). The canonical version lives in `pai-manifest.yaml`:
+Packages use [semver](https://semver.org/). The canonical version lives in `arc-manifest.yaml`:
 
 ```yaml
 version: 1.2.0
@@ -319,7 +319,7 @@ version: 1.2.0
 **Convention:** bump the version, tag the commit, create a GitHub Release:
 
 ```bash
-# After updating pai-manifest.yaml version to 1.2.0
+# After updating arc-manifest.yaml version to 1.2.0
 git tag v1.2.0
 git push origin v1.2.0
 gh release create v1.2.0 --title "v1.2.0" --notes "## What Changed
@@ -337,10 +337,10 @@ Registry entries include a `version` field to advertise the latest available ver
 
 ## Publishing
 
-To add your package to a community registry, see the [pai-collab publishing guide](https://github.com/mellanon/pai-collab/blob/main/sops/skill-publishing.md).
+To add your package to a community registry, see the publishing guide.
 
 **Requirements:**
-- Public GitHub repo with `pai-manifest.yaml`
+- Public GitHub repo with `arc-manifest.yaml`
 - All capabilities honestly declared
 - License file (MIT, Apache-2.0, BSD-2-Clause, BSD-3-Clause)
 - Git tag + GitHub Release matching the manifest version
@@ -350,10 +350,8 @@ To add your package to a community registry, see the [pai-collab publishing guid
 
 ## Acknowledgments
 
-- **[PAI](https://github.com/danielmiessler/PAI)** by [Daniel Miessler](https://github.com/danielmiessler) — The skill system that this package manager extends
 - **[SkillSeal](https://github.com/mcyork/skillseal)** by [Ian McCutcheon](https://github.com/mcyork) — Cryptographic signing framework for Claude Code skills (future integration)
-- **[SpecFlow](https://github.com/jcfischer/specflow-bundle)** by [Jens-Christian Fischer](https://github.com/jcfischer) — The `pai-manifest.yaml` capability format is adapted from SpecFlow's manifest schema
-- **[pai-collab](https://github.com/mellanon/pai-collab)** — Community coordination hub and package registry
+- **[SpecFlow](https://github.com/jcfischer/specflow-bundle)** by [Jens-Christian Fischer](https://github.com/jcfischer) — The `arc-manifest.yaml` capability format is adapted from SpecFlow's manifest schema
 - **Debian Project** — The multi-tier trust model is inspired by Debian's main/contrib/non-free architecture
 
 ## License

@@ -4,11 +4,11 @@ repo: arc
 features:
   # Foundation
   - id: A-100
-    name: Manifest format (pai-manifest.yaml)
+    name: Manifest format (arc-manifest.yaml)
     status: done
     iteration: 1
     depends: []
-    description: Parse and validate pai-manifest.yaml with capabilities, provides, and dependency declarations
+    description: Parse and validate arc-manifest.yaml with capabilities, provides, and dependency declarations
 
   - id: A-101
     name: Install pipeline
@@ -80,7 +80,7 @@ features:
     status: done
     iteration: 3
     depends: [A-300]
-    description: "arc self-update via git pull, upgrade-core for PAI version symlink management"
+    description: "arc self-update via git pull, upgrade-core for version symlink management"
 
   - id: A-302
     name: Package init scaffolding

@@ -9,7 +9,7 @@ import {
   getCapabilities,
   getAllActiveCapabilities,
 } from "../../src/lib/db.js";
-import type { PaiManifest } from "../../src/types.js";
+import type { ArcManifest } from "../../src/types.js";
 
 let env: TestEnv;
 
@@ -21,7 +21,7 @@ afterEach(async () => {
   await env.cleanup();
 });
 
-const mockManifest: PaiManifest = {
+const mockManifest: ArcManifest = {
   name: "TestSkill",
   version: "1.0.0",
   type: "skill",

@@ -117,7 +117,7 @@ describe("upgradePackage", () => {
     await install({ paths: env.paths, db: env.db, repoUrl: repo.url, yes: true });
 
     // Simulate a new version: update manifest in source repo and commit
-    const manifestPath = join(repo.path, "pai-manifest.yaml");
+    const manifestPath = join(repo.path, "arc-manifest.yaml");
     const content = await Bun.file(manifestPath).text();
     await writeFile(manifestPath, content.replace("version: 1.0.0", "version: 1.1.0"));
 

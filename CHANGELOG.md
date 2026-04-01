@@ -3,7 +3,7 @@
 ## 0.5.0
 
 ### Added
-- **Lifecycle hooks**: `preinstall`, `preupgrade`, and `postupgrade` scripts in `pai-manifest.yaml`
+- **Lifecycle hooks**: `preinstall`, `preupgrade`, and `postupgrade` scripts in `arc-manifest.yaml`
   - `preinstall` runs before symlinks are created during first install
   - `preupgrade` runs before symlinks are updated during upgrade
   - `postupgrade` runs after symlinks + bun install during upgrade (falls back to `postinstall` if not declared)
@@ -18,7 +18,7 @@
 ## 0.4.0
 
 ### Added
-- `scripts.postinstall` support in `pai-manifest.yaml`
+- `scripts.postinstall` support in `arc-manifest.yaml`
 - Component artifact type (`type: component`) for file-to-target symlink packages
 - Optional `capabilities` field for components
 

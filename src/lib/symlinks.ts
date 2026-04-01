@@ -1,6 +1,6 @@
 import { symlink, unlink, readlink, lstat, mkdir, writeFile, chmod, rename } from "fs/promises";
 import { join, dirname, basename } from "path";
-import type { PaiManifest } from "../types.js";
+import type { ArcManifest } from "../types.js";
 
 /**
  * Create a symlink, ensuring the parent directory exists.
@@ -91,7 +91,7 @@ export async function getSymlinkTarget(
  * 3. Skill name lowercased without underscore prefix
  */
 export function extractCliInfo(
-  manifest: PaiManifest
+  manifest: ArcManifest
 ): { binName: string; scriptPath: string; command: string } | null {
   const all = extractAllCliInfo(manifest);
   return all.length > 0 ? all[0] : null;
@@ -102,7 +102,7 @@ export function extractCliInfo(
  * Returns empty array if no CLI is declared.
  */
 export function extractAllCliInfo(
-  manifest: PaiManifest
+  manifest: ArcManifest
 ): Array<{ binName: string; scriptPath: string; command: string }> {
   if (!manifest.provides?.cli?.length) return [];
 
@@ -122,7 +122,7 @@ export function extractAllCliInfo(
 export async function createCliShim(
   shimDir: string,
   binDir: string,
-  manifest: PaiManifest
+  manifest: ArcManifest
 ): Promise<string[]> {
   const entries = extractAllCliInfo(manifest);
   if (!entries.length) return [];

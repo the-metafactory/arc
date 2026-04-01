@@ -174,7 +174,7 @@ describe("upgrade lifecycle hooks", () => {
     Bun.spawnSync(["chmod", "+x", join(scriptsDir, "postupgrade.sh")], { stdout: "pipe", stderr: "pipe" });
 
     // Update manifest with version bump and scripts
-    const manifestPath = join(repo.path, "pai-manifest.yaml");
+    const manifestPath = join(repo.path, "arc-manifest.yaml");
     let manifestContent = await Bun.file(manifestPath).text();
     manifestContent = manifestContent.replace("version: 1.0.0", "version: 1.1.0");
     manifestContent += "\nscripts:\n  preupgrade: ./scripts/preupgrade.sh\n  postupgrade: ./scripts/postupgrade.sh\n";
@@ -218,7 +218,7 @@ describe("upgrade lifecycle hooks", () => {
     );
     Bun.spawnSync(["chmod", "+x", join(scriptsDir, "postinstall.sh")], { stdout: "pipe", stderr: "pipe" });
 
-    const manifestPath = join(repo.path, "pai-manifest.yaml");
+    const manifestPath = join(repo.path, "arc-manifest.yaml");
     let manifestContent = await Bun.file(manifestPath).text();
     manifestContent = manifestContent.replace("version: 1.0.0", "version: 1.1.0");
     manifestContent += "\nscripts:\n  postinstall: ./scripts/postinstall.sh\n";
@@ -260,7 +260,7 @@ describe("upgrade lifecycle hooks", () => {
     );
     Bun.spawnSync(["chmod", "+x", join(scriptsDir, "postupgrade.sh")], { stdout: "pipe", stderr: "pipe" });
 
-    const manifestPath = join(repo.path, "pai-manifest.yaml");
+    const manifestPath = join(repo.path, "arc-manifest.yaml");
     let manifestContent = await Bun.file(manifestPath).text();
     manifestContent = manifestContent.replace("version: 1.0.0", "version: 1.1.0");
     manifestContent += "\nscripts:\n  postupgrade: ./scripts/postupgrade.sh\n";
@@ -297,7 +297,7 @@ describe("upgrade lifecycle hooks", () => {
     await Bun.write(join(scriptsDir, "preupgrade.sh"), `#!/bin/bash\nexit 1\n`);
     Bun.spawnSync(["chmod", "+x", join(scriptsDir, "preupgrade.sh")], { stdout: "pipe", stderr: "pipe" });
 
-    const manifestPath = join(repo.path, "pai-manifest.yaml");
+    const manifestPath = join(repo.path, "arc-manifest.yaml");
     let manifestContent = await Bun.file(manifestPath).text();
     manifestContent = manifestContent.replace("version: 1.0.0", "version: 1.1.0");
     manifestContent += "\nscripts:\n  preupgrade: ./scripts/preupgrade.sh\n";

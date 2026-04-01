@@ -29,7 +29,7 @@ export async function init(
 
   const authorName = author ?? "username";
   const files: string[] = [];
-  const prefix = `pai-${type}`;
+  const prefix = `arc-${type}`;
   const lowerName = name.replace(/^_/, "").toLowerCase();
 
   // ── Directory structure ──────────────────────────────────────────────────
@@ -44,12 +44,13 @@ export async function init(
     await mkdir(join(targetDir, "prompt"), { recursive: true });
   }
 
-  // ── pai-manifest.yaml ───────────────────────────────────────────────────
+  // ── arc-manifest.yaml ───────────────────────────────────────────────────
 
   let manifestContent: string;
 
   if (type === "tool") {
-    manifestContent = `# pai-manifest.yaml — PAI capability declaration
+    manifestContent = `# arc-manifest.yaml — capability declaration
+schema: arc/v1
 name: ${name}
 version: 1.0.0
 type: tool
@@ -82,9 +83,8 @@ capabilities:
   secrets: []
 `;
   } else if (type === "skill") {
-    manifestContent = `# pai-manifest.yaml — PAI capability declaration
-# Schema: arc DESIGN.md §2 (pai-manifest.yaml)
-
+    manifestContent = `# arc-manifest.yaml — capability declaration
+schema: arc/v1
 name: ${name}
 version: 1.0.0
 type: skill
@@ -118,7 +118,8 @@ capabilities:
   secrets: []
 `;
   } else if (type === "agent") {
-    manifestContent = `# pai-manifest.yaml — PAI capability declaration
+    manifestContent = `# arc-manifest.yaml — capability declaration
+schema: arc/v1
 name: ${name}
 version: 1.0.0
 type: agent
@@ -139,7 +140,8 @@ capabilities:
 `;
   } else {
     // prompt
-    manifestContent = `# pai-manifest.yaml — PAI capability declaration
+    manifestContent = `# arc-manifest.yaml — capability declaration
+schema: arc/v1
 name: ${name}
 version: 1.0.0
 type: prompt
@@ -160,8 +162,8 @@ capabilities:
 `;
   }
 
-  await Bun.write(join(targetDir, "pai-manifest.yaml"), manifestContent);
-  files.push("pai-manifest.yaml");
+  await Bun.write(join(targetDir, "arc-manifest.yaml"), manifestContent);
+  files.push("arc-manifest.yaml");
 
   // ── Type-specific files ─────────────────────────────────────────────────
 
@@ -169,7 +171,7 @@ capabilities:
     const toolContent = `#!/usr/bin/env bun
 
 /**
- * ${name} — PAI tool
+ * ${name} — arc tool
  */
 
 console.log("${name} tool");
@@ -284,7 +286,7 @@ version: 1.0.0
   const packageJson = {
     name: `${prefix}-${lowerName}`,
     version: "1.0.0",
-    description: `PAI ${name} ${typeLabel}`,
+    description: `arc ${name} ${typeLabel}`,
     type: "module",
     scripts: {
       test: "bun test",
@@ -305,7 +307,7 @@ version: 1.0.0
   if (type === "tool") {
     readmeContent = `# ${name}
 
-PAI tool — [brief description].
+arc tool — [brief description].
 
 ## Setup
 
@@ -328,7 +330,7 @@ MIT
   } else if (type === "skill") {
     readmeContent = `# ${name}
 
-PAI skill — [brief description].
+arc skill — [brief description].
 
 ## Setup
 
@@ -351,7 +353,7 @@ MIT
   } else if (type === "agent") {
     readmeContent = `# ${name}
 
-PAI agent — [brief description].
+arc agent — [brief description].
 
 ## Setup
 
@@ -373,7 +375,7 @@ MIT
     // prompt
     readmeContent = `# ${name}
 
-PAI prompt — [brief description].
+arc prompt — [brief description].
 
 ## Setup
 

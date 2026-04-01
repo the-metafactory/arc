@@ -1,7 +1,7 @@
 /**
  * Test environment helper for arc.
  *
- * Creates isolated temp directories that simulate the PAI directory structure.
+ * Creates isolated temp directories that simulate the arc directory structure.
  * Every test gets its own fresh environment — no cross-test contamination.
  */
 
@@ -73,7 +73,7 @@ export interface MockSkillRepo {
 
 /**
  * Create a mock skill repo with git initialized.
- * The repo has a skill/ dir, pai-manifest.yaml, and optionally src/.
+ * The repo has a skill/ dir, arc-manifest.yaml, and optionally src/.
  */
 export async function createMockSkillRepo(
   root: string,
@@ -129,7 +129,7 @@ export async function createMockSkillRepo(
       join(repoDir, "package.json"),
       JSON.stringify(
         {
-          name: `pai-tool-${opts.name.toLowerCase()}`,
+          name: `arc-tool-${opts.name.toLowerCase()}`,
           version: opts.version ?? "1.0.0",
           type: "module",
         },
@@ -163,7 +163,7 @@ export async function createMockSkillRepo(
     }
   }
 
-  // Create pai-manifest.yaml (unless testing without it)
+  // Create arc-manifest.yaml (unless testing without it)
   if (!opts.withoutManifest) {
     const caps = opts.capabilities ?? {};
     const isTool = artifactType === "tool";
@@ -202,7 +202,7 @@ export async function createMockSkillRepo(
 
     // Write as YAML manually (avoid dependency on yaml in test helper)
     const yaml = buildYaml(manifest);
-    await Bun.write(join(repoDir, "pai-manifest.yaml"), yaml);
+    await Bun.write(join(repoDir, "arc-manifest.yaml"), yaml);
   }
 
   // Create src/ if CLI tool (for skills with CLI)
@@ -216,7 +216,7 @@ export async function createMockSkillRepo(
       join(repoDir, "package.json"),
       JSON.stringify(
         {
-          name: `pai-skill-${opts.name.replace(/^_/, "").toLowerCase()}`,
+          name: `arc-skill-${opts.name.replace(/^_/, "").toLowerCase()}`,
           version: opts.version ?? "1.0.0",
           type: "module",
         },
@@ -242,7 +242,7 @@ export async function createMockSkillRepo(
 
 /**
  * Simple YAML builder (avoids external dependency in test helper).
- * Only handles the specific pai-manifest structure.
+ * Only handles the specific arc-manifest structure.
  */
 function buildYaml(obj: any, indent = 0): string {
   const pad = "  ".repeat(indent);

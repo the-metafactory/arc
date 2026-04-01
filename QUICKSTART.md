@@ -6,7 +6,7 @@ Get from zero to installing and publishing skills in 5 minutes.
 
 - [Bun](https://bun.sh) >= 1.0.0 (`curl -fsSL https://bun.sh/install | bash`)
 - Git
-- A PAI installation (`~/.claude/skills/` directory exists)
+- A Claude Code installation (`~/.claude/skills/` directory exists)
 
 ## Install arc
 
@@ -21,7 +21,7 @@ Verify: `arc --version`
 
 ## Discover Skills
 
-arc comes pre-configured with the [pai-collab](https://github.com/mellanon/pai-collab) community hub as a source.
+arc comes pre-configured with a community hub as a source.
 
 ```bash
 # See configured sources
@@ -36,7 +36,7 @@ Example output:
 Found 1 match(es) across sources:
 
   _DOC [skill] [community] — Markdown to styled HTML conversion with template/theme system
-    by mellanon | source: pai-collab
+    by mellanon | source: community
 ```
 
 ## Install a Skill
@@ -46,7 +46,7 @@ Found 1 match(es) across sources:
 arc install _DOC
 
 # Or install directly from a git URL
-arc install git@github.com:mellanon/pai-skill-doc.git
+arc install git@github.com:mellanon/arc-skill-doc.git
 ```
 
 arc will:
@@ -74,7 +74,7 @@ Add other community hubs to discover skills from different authors:
 ```bash
 # Add a source
 arc source add jcfischer-tools \
-  https://raw.githubusercontent.com/jcfischer/pai-tools/main/REGISTRY.yaml \
+  https://raw.githubusercontent.com/jcfischer/arc-tools/main/REGISTRY.yaml \
   --tier community
 
 # Search now includes both sources
@@ -91,20 +91,20 @@ arc source remove jcfischer-tools
 ```bash
 # Scaffold a new skill
 arc init MySkill --author your-github-handle
-cd pai-skill-myskill
+cd arc-skill-myskill
 ```
 
 This creates:
 ```
-pai-skill-myskill/
-  pai-manifest.yaml    # Capability declarations
+arc-skill-myskill/
+  arc-manifest.yaml    # Capability declarations
   skill/
     SKILL.md           # Skill definition
     workflows/
       Main.md          # Default workflow
 ```
 
-### 2. Edit pai-manifest.yaml
+### 2. Edit arc-manifest.yaml
 
 Declare everything your skill needs. Be honest — undeclared capabilities will be caught in review.
 
@@ -141,24 +141,22 @@ capabilities:
 
 ```bash
 git init && git add . && git commit -m "Initial commit"
-gh repo create pai-skill-myskill --public --push
+gh repo create arc-skill-myskill --public --push
 ```
 
 ### 4. Register with a hub
 
-Fork [pai-collab](https://github.com/mellanon/pai-collab), add your entry to `skills/REGISTRY.yaml`, and open a PR:
+Add your entry to a community registry's `REGISTRY.yaml` and open a PR:
 
 ```yaml
 # In skills/REGISTRY.yaml, under skills:
 - name: MySkill
   description: What it does (one line)
   author: your-github-handle
-  source: https://github.com/you/pai-skill-myskill
+  source: https://github.com/you/arc-skill-myskill
   type: community
   status: shipped
 ```
-
-See the full publishing process: [pai-collab skill publishing SOP](https://github.com/mellanon/pai-collab/blob/main/sops/skill-publishing.md)
 
 ## Trust Model
 
@@ -170,7 +168,7 @@ Trust flows from the **source**, not the package:
 | **community** | Shows capabilities, user confirms |
 | **custom** | Risk warning, full capability review |
 
-Skills installed from pai-collab get **community** tier. Direct git URL installs get **custom** tier.
+Skills installed from community registries get **community** tier. Direct git URL installs get **custom** tier.
 
 ## What's Next
 

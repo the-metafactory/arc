@@ -2,7 +2,7 @@ import { Database } from "bun:sqlite";
 import type {
   InstalledSkill,
   CapabilityRecord,
-  PaiManifest,
+  ArcManifest,
 } from "../types.js";
 
 /**
@@ -72,7 +72,7 @@ export function openDatabase(dbPath: string): Database {
 export function recordInstall(
   db: Database,
   skill: InstalledSkill,
-  manifest: PaiManifest
+  manifest: ArcManifest
 ): void {
   const now = new Date().toISOString();
 

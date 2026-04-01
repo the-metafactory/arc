@@ -128,7 +128,7 @@ export async function upgradePackage(
   // Re-read manifest for new version
   const manifest = await readManifest(installPath);
   if (!manifest) {
-    return { success: false, name, oldVersion: skill.version, error: "No pai-manifest.yaml after pull" };
+    return { success: false, name, oldVersion: skill.version, error: "No arc-manifest.yaml (or pai-manifest.yaml) after pull" };
   }
 
   const oldVersion = skill.version;

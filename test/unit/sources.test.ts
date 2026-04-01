@@ -26,7 +26,7 @@ describe("loadSources", () => {
   test("creates default sources.yaml if missing", async () => {
     const config = await loadSources(env.paths.sourcesPath);
     expect(config.sources).toHaveLength(1);
-    expect(config.sources[0].name).toBe("pai-collab");
+    expect(config.sources[0].name).toBe("community");
     expect(config.sources[0].tier).toBe("community");
     expect(config.sources[0].enabled).toBe(true);
   });
@@ -51,7 +51,7 @@ describe("loadSources", () => {
 
     const config = await loadSources(env.paths.sourcesPath);
     expect(config.sources).toHaveLength(1);
-    expect(config.sources[0].name).toBe("pai-collab");
+    expect(config.sources[0].name).toBe("community");
   });
 
   test("returns defaults for empty file", async () => {
@@ -94,7 +94,7 @@ describe("addSource", () => {
     const config = createDefaultSources();
     expect(() =>
       addSource(config, {
-        name: "pai-collab",
+        name: "community",
         url: "https://example.com/dup.yaml",
         tier: "community",
         enabled: true,
@@ -106,7 +106,7 @@ describe("addSource", () => {
 describe("removeSource", () => {
   test("removes existing source", () => {
     const config = createDefaultSources();
-    removeSource(config, "pai-collab");
+    removeSource(config, "community");
     expect(config.sources).toHaveLength(0);
   });
 
@@ -120,7 +120,7 @@ describe("formatSourceList", () => {
   test("formats source list", () => {
     const config = createDefaultSources();
     const output = formatSourceList(config);
-    expect(output).toContain("pai-collab");
+    expect(output).toContain("community");
     expect(output).toContain("[community]");
     expect(output).toContain("(enabled)");
   });

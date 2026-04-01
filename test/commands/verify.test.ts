@@ -39,7 +39,7 @@ describe("verify command", () => {
     expect(symlinkCheck?.passed).toBe(true);
   });
 
-  test("checks pai-manifest.yaml exists", async () => {
+  test("checks arc-manifest.yaml exists", async () => {
     const repo = await createMockSkillRepo(env.root, {
       name: "TestSkill",
     });

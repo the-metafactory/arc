@@ -10,7 +10,7 @@ import {
   upgradeCore,
   type UpgradeConfig,
 } from "../../src/commands/upgrade-core.js";
-import type { PaiManifest } from "../../src/types.js";
+import type { ArcManifest } from "../../src/types.js";
 
 interface MockPaiEnv {
   root: string;
@@ -62,7 +62,7 @@ interface MockPaiEnv {
  *           coupa/patterns.json
  *       pai-skill-alpha/         (mock installed skill)
  *         skill/SKILL.md
- *         pai-manifest.yaml
+ *         arc-manifest.yaml
  */
 async function createMockPaiEnv(): Promise<MockPaiEnv> {
   const root = await mkdtemp(join(tmpdir(), "pai-upgrade-test-"));
@@ -168,7 +168,7 @@ async function createMockPaiEnv(): Promise<MockPaiEnv> {
     "---\nname: _ALPHA\n---\n# Alpha Skill\n"
   );
   await Bun.write(
-    join(skillRepoDir, "pai-manifest.yaml"),
+    join(skillRepoDir, "arc-manifest.yaml"),
     "name: _ALPHA\nversion: 1.0.0\ntype: skill\nauthor:\n  name: test\n  github: test\ncapabilities:\n  filesystem:\n    read: []\n  network: []\n  bash:\n    allowed: false\n  secrets: []\n"
   );
 
@@ -187,7 +187,7 @@ async function createMockPaiEnv(): Promise<MockPaiEnv> {
   const db = openDatabase(dbPath);
 
   // Record the mock skill in DB
-  const manifest: PaiManifest = {
+  const manifest: ArcManifest = {
     name: "_ALPHA",
     version: "1.0.0",
     type: "skill",

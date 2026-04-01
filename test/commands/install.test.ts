@@ -38,7 +38,7 @@ describe("install command", () => {
     expect(existsSync(repoDir)).toBe(true);
   });
 
-  test("reads pai-manifest.yaml from cloned repo", async () => {
+  test("reads arc-manifest.yaml from cloned repo", async () => {
     const repo = await createMockSkillRepo(env.root, {
       name: "TestSkill",
       version: "2.5.0",
@@ -110,7 +110,7 @@ describe("install command", () => {
     expect(skill!.status).toBe("active");
   });
 
-  test("rejects repo without pai-manifest.yaml", async () => {
+  test("rejects repo without arc-manifest.yaml", async () => {
     const repo = await createMockSkillRepo(env.root, {
       name: "BadSkill",
       withoutManifest: true,
@@ -124,7 +124,7 @@ describe("install command", () => {
     });
 
     expect(result.success).toBe(false);
-    expect(result.error).toContain("No pai-manifest.yaml");
+    expect(result.error).toContain("No arc-manifest.yaml");
   });
 
   test("installs manifest with authors array format", async () => {

@@ -1,11 +1,11 @@
 import type { Database } from "bun:sqlite";
 import { getSkill, getCapabilities } from "../lib/db.js";
 import { readManifest, assessRisk, formatCapabilities } from "../lib/manifest.js";
-import type { InstalledSkill, PaiManifest } from "../types.js";
+import type { InstalledSkill, ArcManifest } from "../types.js";
 
 export interface InfoResult {
   skill: InstalledSkill | null;
-  manifest: PaiManifest | null;
+  manifest: ArcManifest | null;
   releaseNotes: string | null;
   error?: string;
 }

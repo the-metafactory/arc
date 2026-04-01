@@ -23,7 +23,7 @@ describe("init command", () => {
     expect(result.success).toBe(true);
     expect(existsSync(join(targetDir, "skill", "SKILL.md"))).toBe(true);
     expect(existsSync(join(targetDir, "skill", "workflows", "Main.md"))).toBe(true);
-    expect(existsSync(join(targetDir, "pai-manifest.yaml"))).toBe(true);
+    expect(existsSync(join(targetDir, "arc-manifest.yaml"))).toBe(true);
     expect(existsSync(join(targetDir, "package.json"))).toBe(true);
     expect(existsSync(join(targetDir, "README.md"))).toBe(true);
     expect(existsSync(join(targetDir, ".gitignore"))).toBe(true);
@@ -34,7 +34,7 @@ describe("init command", () => {
     await init(targetDir, "MySkill", "myuser");
 
     const content = await Bun.file(
-      join(targetDir, "pai-manifest.yaml")
+      join(targetDir, "arc-manifest.yaml")
     ).text();
     expect(content).toContain("name: MySkill");
     expect(content).toContain("myuser");

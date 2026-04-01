@@ -78,7 +78,7 @@ export interface ResolvedSource {
   filename: string;
 }
 
-/** Capability declarations from pai-manifest.yaml */
+/** Capability declarations from arc-manifest.yaml */
 export interface Capabilities {
   filesystem?: {
     read?: string[];
@@ -126,8 +126,27 @@ export interface SkillTrigger {
   trigger: string;
 }
 
-/** The full pai-manifest.yaml schema */
-export interface PaiManifest {
+/** Inline hook array format (e.g. Grove) */
+export type InlineHook = {
+  event: string;
+  command: string;
+  matcher?: string;
+};
+
+/** Config-file hook format (e.g. Miner) — references a JSON file */
+export type HooksConfigRef = {
+  claude_code: {
+    config: string;
+    description?: string;
+  };
+};
+
+/** Union of both hook declaration formats in arc-manifest.yaml */
+export type HooksDeclaration = InlineHook[] | HooksConfigRef;
+
+/** The full arc-manifest.yaml schema (also accepts legacy pai-manifest.yaml) */
+export interface ArcManifest {
+  schema?: "arc/v1" | "pai/v1";
   name: string;
   version: string;
   type: "skill" | "system" | "tool" | "agent" | "prompt" | "component";
@@ -148,25 +167,6 @@ export interface PaiManifest {
     files?: Array<{ source: string; target: string }>;
     hooks?: HooksDeclaration;
   };
-}
-
-/** Inline hook array format (e.g. Grove) */
-export type InlineHook = {
-  event: string;
-  command: string;
-  matcher?: string;
-};
-
-/** Config-file hook format (e.g. Miner) — references a JSON file */
-export type HooksConfigRef = {
-  claude_code: {
-    config: string;
-    description?: string;
-  };
-};
-
-/** Union of both hook declaration formats in pai-manifest.yaml */
-export type HooksDeclaration = InlineHook[] | HooksConfigRef;
   depends_on?: {
     skills?: SkillDependency[];
     tools?: ToolDependency[];

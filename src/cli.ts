@@ -297,7 +297,7 @@ program
         process.exit(1);
       }
 
-      const prefix = `pai-${artifactType}`;
+      const prefix = `arc-${artifactType}`;
       const targetDir =
         opts.dir ??
         `./${prefix}-${name.replace(/^_/, "").toLowerCase()}`;

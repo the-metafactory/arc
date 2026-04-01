@@ -91,7 +91,7 @@ async function createMockSkillDir(
       },
     };
     await writeFile(
-      join(dir, "pai-manifest.yaml"),
+      join(dir, "arc-manifest.yaml"),
       YAML.stringify(manifest)
     );
   }

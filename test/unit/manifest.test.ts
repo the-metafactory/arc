@@ -2,8 +2,8 @@ import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { mkdtemp, rm } from "fs/promises";
 import { join } from "path";
 import { tmpdir } from "os";
-import { readManifest, assessRisk, formatCapabilities } from "../../src/lib/manifest.js";
-import type { PaiManifest } from "../../src/types.js";
+import { readManifest, assessRisk, formatCapabilities, MANIFEST_FILENAME, LEGACY_MANIFEST_FILENAME } from "../../src/lib/manifest.js";
+import type { ArcManifest } from "../../src/types.js";
 
 let tempDir: string;
 
@@ -16,9 +16,9 @@ afterEach(async () => {
 });
 
 describe("readManifest", () => {
-  test("parses valid pai-manifest.yaml", async () => {
+  test("parses valid arc-manifest.yaml", async () => {
     await Bun.write(
-      join(tempDir, "pai-manifest.yaml"),
+      join(tempDir, MANIFEST_FILENAME),
       `name: TestSkill
 version: 1.0.0
 type: skill
@@ -45,6 +45,73 @@ capabilities:
     ]);
   });
 
+  test("falls back to legacy pai-manifest.yaml", async () => {
+    await Bun.write(
+      join(tempDir, LEGACY_MANIFEST_FILENAME),
+      `name: LegacySkill
+version: 2.0.0
+type: skill
+author:
+  name: testuser
+  github: testuser
+capabilities:
+  filesystem:
+    read: []
+  network: []
+  bash:
+    allowed: false
+  secrets: []
+`
+    );
+
+    const manifest = await readManifest(tempDir);
+    expect(manifest).not.toBeNull();
+    expect(manifest!.name).toBe("LegacySkill");
+    expect(manifest!.version).toBe("2.0.0");
+  });
+
+  test("prefers arc-manifest.yaml over pai-manifest.yaml", async () => {
+    await Bun.write(
+      join(tempDir, MANIFEST_FILENAME),
+      `name: NewName
+version: 3.0.0
+type: skill
+author:
+  name: testuser
+  github: testuser
+capabilities:
+  filesystem:
+    read: []
+  network: []
+  bash:
+    allowed: false
+  secrets: []
+`
+    );
+    await Bun.write(
+      join(tempDir, LEGACY_MANIFEST_FILENAME),
+      `name: OldName
+version: 1.0.0
+type: skill
+author:
+  name: testuser
+  github: testuser
+capabilities:
+  filesystem:
+    read: []
+  network: []
+  bash:
+    allowed: false
+  secrets: []
+`
+    );
+
+    const manifest = await readManifest(tempDir);
+    expect(manifest).not.toBeNull();
+    expect(manifest!.name).toBe("NewName");
+    expect(manifest!.version).toBe("3.0.0");
+  });
+
   test("returns null for missing file", async () => {
     const manifest = await readManifest(tempDir);
     expect(manifest).toBeNull();
@@ -52,7 +119,7 @@ capabilities:
 
   test("throws for invalid manifest (missing required fields)", async () => {
     await Bun.write(
-      join(tempDir, "pai-manifest.yaml"),
+      join(tempDir, MANIFEST_FILENAME),
       `description: "not a valid manifest"\n`
     );
 
@@ -61,7 +128,7 @@ capabilities:
 });
 
 describe("assessRisk", () => {
-  const base: PaiManifest = {
+  const base: ArcManifest = {
     name: "Test",
     version: "1.0.0",
     type: "skill",
@@ -125,7 +192,7 @@ describe("assessRisk", () => {
 
 describe("formatCapabilities", () => {
   test("formats all capability types", () => {
-    const m: PaiManifest = {
+    const m: ArcManifest = {
       name: "Test",
       version: "1.0.0",
       type: "skill",
@@ -147,7 +214,7 @@ describe("formatCapabilities", () => {
   });
 
   test("shows unrestricted bash as red", () => {
-    const m: PaiManifest = {
+    const m: ArcManifest = {
       name: "Test",
       version: "1.0.0",
       type: "skill",

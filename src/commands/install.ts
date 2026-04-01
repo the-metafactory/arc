@@ -2,7 +2,7 @@ import { join, dirname } from "path";
 import { existsSync } from "fs";
 import { mkdir } from "fs/promises";
 import { homedir } from "os";
-import type { PaiPaths, PaiManifest, PackageTier } from "../types.js";
+import type { PaiPaths, ArcManifest, PackageTier } from "../types.js";
 import type { Database } from "bun:sqlite";
 import { readManifest, assessRisk, formatCapabilities } from "../lib/manifest.js";
 import { recordInstall, getSkill } from "../lib/db.js";
@@ -27,7 +27,7 @@ export interface InstallResult {
   name?: string;
   version?: string;
   error?: string;
-  manifest?: PaiManifest;
+  manifest?: ArcManifest;
 }
 
 /**
@@ -35,7 +35,7 @@ export interface InstallResult {
  *
  * Flow:
  * 1. Clone repo to repos directory
- * 2. Read pai-manifest.yaml
+ * 2. Read arc-manifest.yaml
  * 3. Display capabilities + risk level
  * 4. Create skill symlink
  * 5. Create bin symlink (if CLI declared)
@@ -105,7 +105,7 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
     Bun.spawnSync(["rm", "-rf", installPath]);
     return {
       success: false,
-      error: `No pai-manifest.yaml found in ${repoUrl}`,
+      error: `No arc-manifest.yaml (or pai-manifest.yaml) found in ${repoUrl}`,
     };
   }
 
