@@ -1,17 +1,41 @@
 import type { Database } from "bun:sqlite";
 import { listSkills } from "../lib/db.js";
-import type { InstalledSkill } from "../types.js";
+import type { ArtifactType, InstalledSkill } from "../types.js";
 
 export interface ListResult {
   skills: InstalledSkill[];
 }
 
+export interface ListOptions {
+  /** Filter by artifact type */
+  type?: ArtifactType;
+}
+
 /**
  * List all installed skills with version and status.
  */
-export function list(db: Database): ListResult {
-  const skills = listSkills(db);
+export function list(db: Database, opts?: ListOptions): ListResult {
+  let skills = listSkills(db);
+  if (opts?.type) {
+    skills = skills.filter((s) => s.artifact_type === opts.type);
+  }
   return { skills };
+}
+
+/**
+ * Format installed packages as JSON for machine consumption.
+ */
+export function formatListJson(result: ListResult): string {
+  const packages = result.skills.map((s) => ({
+    name: s.name,
+    version: s.version,
+    type: s.artifact_type,
+    status: s.status,
+    tier: s.tier,
+    repoUrl: s.repo_url,
+    installPath: s.install_path,
+  }));
+  return JSON.stringify({ packages }, null, 2);
 }
 
 /**
