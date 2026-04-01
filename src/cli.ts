@@ -4,7 +4,7 @@ import { Command } from "commander";
 import { createPaths, ensureDirectories } from "./lib/paths.js";
 import { openDatabase } from "./lib/db.js";
 import { install } from "./commands/install.js";
-import { list, formatList } from "./commands/list.js";
+import { list, formatList, formatListJson } from "./commands/list.js";
 import { info, formatInfo } from "./commands/info.js";
 import { audit, formatAudit } from "./commands/audit.js";
 import { disable } from "./commands/disable.js";
@@ -117,12 +117,19 @@ program
 
 program
   .command("list")
-  .description("List installed skills")
-  .action(() => {
+  .description("List installed packages")
+  .option("--json", "Output as JSON")
+  .option("--type <type>", "Filter by artifact type (skill, tool, agent, prompt, pipeline)")
+  .action((opts: { json?: boolean; type?: string }) => {
+    const validTypes = ["skill", "tool", "agent", "prompt", "component", "pipeline"];
+    if (opts.type && !validTypes.includes(opts.type)) {
+      console.error(`\n❌ Unknown type "${opts.type}". Valid types: ${validTypes.join(", ")}`);
+      process.exit(1);
+    }
     const paths = createPaths();
     const db = openDatabase(paths.dbPath);
-    const result = list(db);
-    console.log(formatList(result));
+    const result = list(db, { type: opts.type as ArtifactType | undefined });
+    console.log(opts.json ? formatListJson(result) : formatList(result));
     db.close();
   });
 
