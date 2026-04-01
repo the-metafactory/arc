@@ -33,10 +33,15 @@ export async function disable(
   const isTool = skill.artifact_type === "tool";
   const isAgent = skill.artifact_type === "agent";
   const isPrompt = skill.artifact_type === "prompt";
+  const isPipeline = skill.artifact_type === "pipeline";
 
   const manifest = await readManifest(skill.install_path);
 
-  if (isAgent) {
+  if (isPipeline) {
+    // Pipelines: remove pipeline symlink
+    const pipelineLink = join(paths.pipelinesDir, name);
+    await removeSymlink(pipelineLink);
+  } else if (isAgent) {
     // Agents: remove .md file symlink (or legacy directory symlink)
     const mdLink = join(paths.agentsDir, `${name}.md`);
     const dirLink = join(paths.agentsDir, name);

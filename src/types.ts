@@ -3,7 +3,7 @@
 // ── Catalog types ──────────────────────────────────────────────
 
 /** Artifact types in the catalog */
-export type ArtifactType = "skill" | "agent" | "prompt" | "tool" | "component";
+export type ArtifactType = "skill" | "agent" | "prompt" | "tool" | "component" | "pipeline";
 
 /** Catalog entry type — controls trust level and install behavior */
 export type CatalogEntryType = "builtin" | "community" | "system" | "custom";
@@ -149,7 +149,7 @@ export interface ArcManifest {
   schema?: "arc/v1" | "pai/v1";
   name: string;
   version: string;
-  type: "skill" | "system" | "tool" | "agent" | "prompt" | "component";
+  type: "skill" | "system" | "tool" | "agent" | "prompt" | "component" | "pipeline";
   tier?: PackageTier;
   author?: {
     name: string;
@@ -272,4 +272,6 @@ export interface PaiPaths {
   sourcesPath: string;
   /** Remote registry cache directory (~/.config/arc/pkg/cache/) */
   cachePath: string;
+  /** Pipelines directory (~/.config/arc/pipelines/) */
+  pipelinesDir: string;
 }

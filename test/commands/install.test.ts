@@ -149,6 +149,31 @@ describe("install command", () => {
     expect(result.manifest!.author).toBeUndefined();
   });
 
+  test("installs pipeline to pipelines directory", async () => {
+    const repo = await createMockSkillRepo(env.root, {
+      name: "P_RSS_DIGEST",
+      type: "pipeline",
+    });
+
+    const result = await install({
+      paths: env.paths,
+      db: env.db,
+      repoUrl: repo.url,
+      yes: true,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.name).toBe("P_RSS_DIGEST");
+
+    const pipelineLink = join(env.paths.pipelinesDir, "P_RSS_DIGEST");
+    expect(existsSync(pipelineLink)).toBe(true);
+    expect(lstatSync(pipelineLink).isSymbolicLink()).toBe(true);
+
+    const skill = getSkill(env.db, "P_RSS_DIGEST");
+    expect(skill).not.toBeNull();
+    expect(skill!.artifact_type).toBe("pipeline");
+  });
+
   test("rejects already-installed skill", async () => {
     const repo = await createMockSkillRepo(env.root, {
       name: "TestSkill",

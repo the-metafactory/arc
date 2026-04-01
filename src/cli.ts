@@ -269,14 +269,14 @@ program
   .option("-a, --author <name>", "Author GitHub username")
   .option(
     "--type <type>",
-    "Artifact type: skill, tool, agent, prompt (default: skill)"
+    "Artifact type: skill, tool, agent, prompt, pipeline (default: skill)"
   )
   .action(
     async (
       name: string,
       opts: { dir?: string; author?: string; type?: string }
     ) => {
-      const validTypes = ["skill", "tool", "agent", "prompt"] as const;
+      const validTypes = ["skill", "tool", "agent", "prompt", "pipeline"] as const;
       type ArtifactInitType = (typeof validTypes)[number];
 
       const artifactType: ArtifactInitType =
@@ -495,7 +495,7 @@ catalog
   .option("-s, --source <url>", "Source URL or path (manual mode)")
   .option("-d, --desc <description>", "Description (manual mode)")
   .option("-t, --type <type>", "Entry type (builtin|community|system|custom)", "custom")
-  .option("--artifact <type>", "Artifact type (skill|agent|prompt|tool)", "skill")
+  .option("--artifact <type>", "Artifact type (skill|agent|prompt|tool|pipeline)", "skill")
   .option("--has-cli", "Skill provides CLI tooling")
   .option("--bundle", "Skill is a spec-flow bundle")
   .action(

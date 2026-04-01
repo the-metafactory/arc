@@ -201,8 +201,25 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
   const isAgent = manifest.type === "agent";
   const isPrompt = manifest.type === "prompt";
   const isComponent = manifest.type === "component";
+  const isPipeline = manifest.type === "pipeline";
 
-  if (isComponent) {
+  if (isPipeline) {
+    // Pipelines: symlink repo root (or pipeline/ subdirectory) to pipelinesDir
+    const pipelineSourceDir = join(installPath, "pipeline");
+    const sourceDir = existsSync(pipelineSourceDir) ? pipelineSourceDir : installPath;
+    const pipelineLinkPath = join(paths.pipelinesDir, manifest.name);
+    await createSymlink(sourceDir, pipelineLinkPath);
+
+    // If the manifest declares CLI entries, also create shims
+    const cliEntries = extractAllCliInfo(manifest);
+    for (const entry of cliEntries) {
+      const binLinkPath = join(paths.binDir, entry.binName);
+      await createSymlink(installPath, binLinkPath);
+    }
+    if (cliEntries.length) {
+      await createCliShim(paths.shimDir, paths.binDir, manifest);
+    }
+  } else if (isComponent) {
     // Components: symlink each provides.files entry from repo source to expanded target
     const files = manifest.provides?.files ?? [];
     for (const file of files) {
@@ -330,8 +347,9 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
 
   // 7. Record in database
   const now = new Date().toISOString();
-  const artifactType = isComponent ? "component" : isTool ? "tool" : isAgent ? "agent" : isPrompt ? "prompt" : "skill";
-  const artifactSourceDir = isComponent ? installPath
+  const artifactType = isPipeline ? "pipeline" : isComponent ? "component" : isTool ? "tool" : isAgent ? "agent" : isPrompt ? "prompt" : "skill";
+  const artifactSourceDir = isPipeline ? (existsSync(join(installPath, "pipeline")) ? join(installPath, "pipeline") : installPath)
+    : isComponent ? installPath
     : isTool ? installPath
     : isAgent ? join(installPath, "agent")
     : isPrompt ? join(installPath, "prompt")

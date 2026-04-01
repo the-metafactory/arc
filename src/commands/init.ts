@@ -2,7 +2,7 @@ import { join } from "path";
 import { existsSync } from "fs";
 import { mkdir } from "fs/promises";
 
-export type ArtifactInitType = "skill" | "tool" | "agent" | "prompt";
+export type ArtifactInitType = "skill" | "tool" | "agent" | "prompt" | "pipeline";
 
 export interface InitResult {
   success: boolean;
@@ -136,6 +136,29 @@ capabilities:
   network: []
   bash:
     allowed: false
+  secrets: []
+`;
+  } else if (type === "pipeline") {
+    manifestContent = `# arc-manifest.yaml — capability declaration
+schema: arc/v1
+name: ${name}
+version: 1.0.0
+type: pipeline
+tier: custom
+
+author:
+  name: ${authorName}
+  github: ${authorName}
+
+capabilities:
+  filesystem:
+    read: []
+    write: []
+  network: []
+  bash:
+    allowed: true
+    restricted_to:
+      - bun
   secrets: []
 `;
   } else {
@@ -278,6 +301,38 @@ version: 1.0.0
 `;
     await Bun.write(join(targetDir, "prompt", `${lowerName}.md`), promptMdContent);
     files.push(`prompt/${lowerName}.md`);
+  } else if (type === "pipeline") {
+    const pipelineYaml = `name: ${name}
+description: "[Describe what this pipeline does]"
+version: 1.0.0
+
+actions:
+  - name: A_EXAMPLE
+    description: "Example action"
+`;
+    await Bun.write(join(targetDir, "pipeline.yaml"), pipelineYaml);
+    files.push("pipeline.yaml");
+
+    const actionJson = JSON.stringify({
+      name: "A_EXAMPLE",
+      description: "Example action — replace with your logic",
+      inputs: { data: { type: "string", description: "Input data" } },
+      outputs: { result: { type: "string", description: "Output result" } },
+    }, null, 2) + "\n";
+    await Bun.write(join(targetDir, "A_EXAMPLE", "action.json"), actionJson);
+    files.push("A_EXAMPLE/action.json");
+
+    const actionTs = `#!/usr/bin/env bun
+
+/**
+ * A_EXAMPLE — example pipeline action
+ */
+
+const input = JSON.parse(process.argv[2] ?? "{}");
+console.log(JSON.stringify({ result: \`Processed: \${input.data}\` }));
+`;
+    await Bun.write(join(targetDir, "A_EXAMPLE", "action.ts"), actionTs);
+    files.push("A_EXAMPLE/action.ts");
   }
 
   // ── package.json ────────────────────────────────────────────────────────
@@ -365,6 +420,29 @@ git clone [repo-url] ~/Developer/${prefix}-${lowerName}/
 
 \`\`\`bash
 ln -sfn ~/Developer/${prefix}-${lowerName}/agent ~/.claude/agents/${name}
+\`\`\`
+
+## License
+
+MIT
+`;
+  } else if (type === "pipeline") {
+    readmeContent = `# ${name}
+
+arc pipeline — [brief description].
+
+## Setup
+
+\`\`\`bash
+arc install ${prefix}-${lowerName}
+\`\`\`
+
+## Manual Setup
+
+\`\`\`bash
+git clone [repo-url] ~/Developer/${prefix}-${lowerName}/
+cd ~/Developer/${prefix}-${lowerName}/
+bun install
 \`\`\`
 
 ## License
