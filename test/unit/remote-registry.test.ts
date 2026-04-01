@@ -5,7 +5,7 @@ import {
   searchAllSources,
   formatSourcedSearch,
 } from "../../src/lib/remote-registry.js";
-import type { RegistryConfig, SourcesConfig } from "../../src/types.js";
+import type { RegistryConfig, SourcesConfig, RegistrySource } from "../../src/types.js";
 import YAML from "yaml";
 import { join } from "path";
 import { writeFile, mkdir } from "fs/promises";

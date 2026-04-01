@@ -6,7 +6,7 @@ import type { PaiPaths } from "../types.js";
 import { getSkill, removeSkill } from "../lib/db.js";
 import { removeSymlink, removeCliShim, extractAllCliInfo } from "../lib/symlinks.js";
 import { readManifest } from "../lib/manifest.js";
-import { removeHooks } from "../lib/hooks.js";
+import { removeHooks, hasHooks } from "../lib/hooks.js";
 
 export interface RemoveResult {
   success: boolean;
@@ -75,7 +75,7 @@ export async function remove(
   }
 
   // Remove hooks from settings.json (before deleting repo)
-  if (manifest?.provides?.hooks?.length) {
+  if (hasHooks(manifest?.provides?.hooks)) {
     const settingsPath = join(homedir(), ".claude", "settings.json");
     await removeHooks(name, settingsPath);
   }

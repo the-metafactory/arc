@@ -40,7 +40,7 @@ capabilities:
     expect(manifest).not.toBeNull();
     expect(manifest!.name).toBe("TestSkill");
     expect(manifest!.version).toBe("1.0.0");
-    expect(manifest!.capabilities.filesystem?.read).toEqual([
+    expect(manifest!.capabilities?.filesystem?.read).toEqual([
       "~/.claude/MEMORY/",
     ]);
   });

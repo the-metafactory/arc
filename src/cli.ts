@@ -33,7 +33,7 @@ import {
   formatCatalogList,
   formatCatalogSearch,
 } from "./commands/catalog.js";
-import type { CatalogEntry, ArtifactType, PackageTier } from "../types.js";
+import type { CatalogEntry, ArtifactType, PackageTier } from "./types.js";
 import { loadCatalog, saveCatalog, findEntry } from "./lib/catalog.js";
 import {
   loadSources,
