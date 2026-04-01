@@ -121,6 +121,11 @@ program
   .option("--json", "Output as JSON")
   .option("--type <type>", "Filter by artifact type (skill, tool, agent, prompt, pipeline)")
   .action((opts: { json?: boolean; type?: string }) => {
+    const validTypes = ["skill", "tool", "agent", "prompt", "component", "pipeline"];
+    if (opts.type && !validTypes.includes(opts.type)) {
+      console.error(`\n❌ Unknown type "${opts.type}". Valid types: ${validTypes.join(", ")}`);
+      process.exit(1);
+    }
     const paths = createPaths();
     const db = openDatabase(paths.dbPath);
     const result = list(db, { type: opts.type as ArtifactType | undefined });
