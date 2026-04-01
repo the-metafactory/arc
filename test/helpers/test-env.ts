@@ -83,8 +83,8 @@ export async function createMockSkillRepo(
     author?: string;
     /** Use authors array format instead of singular author */
     authors?: Array<{ name: string; github: string }>;
-    /** Artifact type: skill (default), tool, agent, prompt, component */
-    type?: "skill" | "tool" | "agent" | "prompt" | "component";
+    /** Artifact type: skill (default), tool, agent, prompt, component, pipeline */
+    type?: "skill" | "tool" | "agent" | "prompt" | "component" | "pipeline";
     withCli?: boolean;
     withoutManifest?: boolean;
     capabilities?: {

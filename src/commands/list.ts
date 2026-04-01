@@ -22,9 +22,11 @@ export function formatList(result: ListResult): string {
     return "No packages installed.";
   }
 
-  const skills = result.skills.filter((s) => s.artifact_type !== "tool");
+  const skills = result.skills.filter((s) => !["tool", "pipeline"].includes(s.artifact_type));
   const tools = result.skills.filter((s) => s.artifact_type === "tool");
+  const pipelines = result.skills.filter((s) => s.artifact_type === "pipeline");
   const lines: string[] = [];
+  let sectionCount = 0;
 
   if (skills.length > 0) {
     lines.push(`Installed skills (${skills.length}):`, "");
@@ -34,15 +36,27 @@ export function formatList(result: ListResult): string {
       const customBadge = s.customization_path ? " *" : "";
       lines.push(`  ${statusBadge} ${s.name} v${s.version} [${s.status}]${tierBadge}${customBadge}`);
     }
+    sectionCount++;
   }
 
   if (tools.length > 0) {
-    if (skills.length > 0) lines.push("");
+    if (sectionCount > 0) lines.push("");
     lines.push(`Installed tools (${tools.length}):`, "");
     for (const t of tools) {
       const statusBadge = t.status === "active" ? "✅" : "⏸️";
       const tierBadge = t.tier === "official" ? " (official)" : t.tier === "community" ? " (community)" : "";
       lines.push(`  ${statusBadge} ${t.name} v${t.version} [${t.status}]${tierBadge}`);
+    }
+    sectionCount++;
+  }
+
+  if (pipelines.length > 0) {
+    if (sectionCount > 0) lines.push("");
+    lines.push(`Installed pipelines (${pipelines.length}):`, "");
+    for (const p of pipelines) {
+      const statusBadge = p.status === "active" ? "✅" : "⏸️";
+      const tierBadge = p.tier === "official" ? " (official)" : p.tier === "community" ? " (community)" : "";
+      lines.push(`  ${statusBadge} ${p.name} v${p.version} [${p.status}]${tierBadge}`);
     }
   }
 

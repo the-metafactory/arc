@@ -39,6 +39,9 @@ export function createPaths(overrides?: Partial<PaiPaths>): PaiPaths {
     cachePath:
       overrides?.cachePath ??
       join(configRoot, "pkg", "cache"),
+    pipelinesDir:
+      overrides?.pipelinesDir ??
+      join(configRoot, "pipelines"),
   };
 }
 
@@ -55,6 +58,7 @@ export async function ensureDirectories(paths: PaiPaths): Promise<void> {
     paths.configRoot,
     paths.secretsDir,
     paths.runtimeDir,
+    paths.pipelinesDir,
   ];
 
   for (const dir of dirs) {

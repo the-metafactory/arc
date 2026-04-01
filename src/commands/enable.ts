@@ -34,9 +34,15 @@ export async function enable(
   const isTool = skill.artifact_type === "tool";
   const isAgent = skill.artifact_type === "agent";
   const isPrompt = skill.artifact_type === "prompt";
+  const isPipeline = skill.artifact_type === "pipeline";
   const manifest = await readManifest(skill.install_path);
 
-  if (isTool) {
+  if (isPipeline) {
+    // Pipelines: re-create pipeline symlink
+    const pipelineSourceDir = join(skill.install_path, "pipeline");
+    const sourceDir = existsSync(pipelineSourceDir) ? pipelineSourceDir : skill.install_path;
+    await createSymlink(sourceDir, join(paths.pipelinesDir, name));
+  } else if (isTool) {
     // Tools: re-create bin symlinks for all CLI entries
     if (manifest) {
       const cliEntries = extractAllCliInfo(manifest);

@@ -51,6 +51,21 @@ describe("init command", () => {
     expect(content).toContain("---");
   });
 
+  test("scaffolds pipeline directory structure", async () => {
+    const targetDir = join(tempDir, "my-pipeline");
+    const result = await init(targetDir, "P_RSS_DIGEST", "testauthor", "pipeline");
+
+    expect(result.success).toBe(true);
+    expect(existsSync(join(targetDir, "arc-manifest.yaml"))).toBe(true);
+    expect(existsSync(join(targetDir, "pipeline.yaml"))).toBe(true);
+    expect(existsSync(join(targetDir, "A_EXAMPLE", "action.json"))).toBe(true);
+    expect(existsSync(join(targetDir, "A_EXAMPLE", "action.ts"))).toBe(true);
+
+    const manifest = await Bun.file(join(targetDir, "arc-manifest.yaml")).text();
+    expect(manifest).toContain("type: pipeline");
+    expect(manifest).toContain("name: P_RSS_DIGEST");
+  });
+
   test("rejects existing directory", async () => {
     const targetDir = join(tempDir, "existing");
     await Bun.write(join(targetDir, "file.txt"), "exists");

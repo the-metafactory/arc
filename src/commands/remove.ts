@@ -31,8 +31,13 @@ export async function remove(
   const isTool = skill.artifact_type === "tool";
   const isAgent = skill.artifact_type === "agent";
   const isPrompt = skill.artifact_type === "prompt";
+  const isPipeline = skill.artifact_type === "pipeline";
 
-  if (isTool) {
+  if (isPipeline) {
+    // Pipelines: remove pipeline symlink
+    const pipelineLink = join(paths.pipelinesDir, name);
+    await removeSymlink(pipelineLink);
+  } else if (isTool) {
     // Tools: remove bin symlink (repo root linked to binDir)
     const binLink = join(paths.binDir, name);
     await removeSymlink(binLink);
