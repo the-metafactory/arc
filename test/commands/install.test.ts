@@ -7,6 +7,7 @@ import {
   type TestEnv,
 } from "../helpers/test-env.js";
 import { install } from "../../src/commands/install.js";
+import { remove } from "../../src/commands/remove.js";
 import { getSkill } from "../../src/lib/db.js";
 
 let env: TestEnv;
@@ -172,6 +173,36 @@ describe("install command", () => {
     const skill = getSkill(env.db, "P_RSS_DIGEST");
     expect(skill).not.toBeNull();
     expect(skill!.artifact_type).toBe("pipeline");
+  });
+
+  test("removes pipeline and cleans up CLI shims", async () => {
+    const repo = await createMockSkillRepo(env.root, {
+      name: "P_CLI_PIPE",
+      type: "pipeline",
+      withCli: true,
+    });
+
+    await install({
+      paths: env.paths,
+      db: env.db,
+      repoUrl: repo.url,
+      yes: true,
+    });
+
+    // Verify installed
+    const pipelineLink = join(env.paths.pipelinesDir, "P_CLI_PIPE");
+    expect(existsSync(pipelineLink)).toBe(true);
+    const binLink = join(env.paths.binDir, "p_cli_pipe");
+    expect(existsSync(binLink)).toBe(true);
+
+    // Remove
+    const result = await remove(env.db, env.paths, "P_CLI_PIPE");
+    expect(result.success).toBe(true);
+
+    // Verify cleaned up
+    expect(existsSync(pipelineLink)).toBe(false);
+    expect(existsSync(binLink)).toBe(false);
+    expect(getSkill(env.db, "P_CLI_PIPE")).toBeNull();
   });
 
   test("rejects already-installed skill", async () => {
