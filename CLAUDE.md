@@ -79,6 +79,7 @@ The single source of truth for every package. Declares name, version, type, capa
 | `prompt` | `~/.claude/commands/{name}.md` | Slash command template |
 | `component` | `~/.claude/components/{name}/` | Reusable component |
 | `pipeline` | `~/.config/arc/pipelines/{name}/` | Multi-step pipeline definition |
+| `action` | `~/.config/arc/actions/{name}/` | Pulse action (action.json + action.ts) |
 
 ### Trust Tiers
 

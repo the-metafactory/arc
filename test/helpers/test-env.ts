@@ -48,6 +48,7 @@ export async function createTestEnv(): Promise<TestEnv> {
     registryPath: join(root, "registry.yaml"),
     sourcesPath: join(root, ".config", "pai", "sources.yaml"),
     cachePath: join(root, ".config", "pai", "pkg", "cache"),
+    actionsDir: join(root, ".config", "pai", "actions"),
     settingsPath: join(root, ".claude", "settings.json"),
   });
 
@@ -84,8 +85,8 @@ export async function createMockSkillRepo(
     author?: string;
     /** Use authors array format instead of singular author */
     authors?: Array<{ name: string; github: string }>;
-    /** Artifact type: skill (default), tool, agent, prompt, component, pipeline */
-    type?: "skill" | "tool" | "agent" | "prompt" | "component" | "pipeline";
+    /** Artifact type: skill (default), tool, agent, prompt, component, pipeline, action */
+    type?: "skill" | "tool" | "agent" | "prompt" | "component" | "pipeline" | "action";
     withCli?: boolean;
     withoutManifest?: boolean;
     capabilities?: {
@@ -258,7 +259,7 @@ export async function createMockLibraryRepo(
     artifacts: Array<{
       path: string;
       name: string;
-      type: "skill" | "tool" | "agent" | "prompt" | "pipeline" | "component";
+      type: "skill" | "tool" | "agent" | "prompt" | "pipeline" | "component" | "action";
       version?: string;
       description?: string;
     }>;

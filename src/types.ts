@@ -3,7 +3,7 @@
 // ── Catalog types ──────────────────────────────────────────────
 
 /** Artifact types in the catalog */
-export type ArtifactType = "skill" | "agent" | "prompt" | "tool" | "component" | "pipeline" | "rules" | "library";
+export type ArtifactType = "skill" | "agent" | "prompt" | "tool" | "component" | "pipeline" | "rules" | "library" | "action";
 
 /** Catalog entry type — controls trust level and install behavior */
 export type CatalogEntryType = "builtin" | "community" | "system" | "custom";
@@ -311,6 +311,8 @@ export interface PaiPaths {
   cachePath: string;
   /** Pipelines directory (~/.config/arc/pipelines/) */
   pipelinesDir: string;
+  /** Actions directory (~/.config/arc/actions/) */
+  actionsDir: string;
   /** Claude settings path (~/.claude/settings.json) */
   settingsPath: string;
 }

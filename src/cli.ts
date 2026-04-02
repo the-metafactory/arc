@@ -148,7 +148,7 @@ program
   .option("--type <type>", "Filter by artifact type (skill, tool, agent, prompt, pipeline, rules)")
   .option("--library <name>", "Filter by library name")
   .action((opts: { json?: boolean; type?: string; library?: string }) => {
-    const validTypes = ["skill", "tool", "agent", "prompt", "component", "pipeline", "rules"];
+    const validTypes = ["skill", "tool", "agent", "prompt", "component", "pipeline", "rules", "action"];
     if (opts.type && !validTypes.includes(opts.type)) {
       console.error(`\n❌ Unknown type "${opts.type}". Valid types: ${validTypes.join(", ")}`);
       process.exit(1);
