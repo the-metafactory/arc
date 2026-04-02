@@ -10,7 +10,6 @@ import {
 } from "../../src/lib/sources.js";
 import type { SourcesConfig } from "../../src/types.js";
 import YAML from "yaml";
-import { join } from "path";
 
 let env: TestEnv;
 
@@ -26,7 +25,7 @@ describe("loadSources", () => {
   test("creates default sources.yaml if missing", async () => {
     const config = await loadSources(env.paths.sourcesPath);
     expect(config.sources).toHaveLength(1);
-    expect(config.sources[0].name).toBe("community");
+    expect(config.sources[0].name).toBe("metafactory");
     expect(config.sources[0].tier).toBe("community");
     expect(config.sources[0].enabled).toBe(true);
   });
@@ -51,7 +50,7 @@ describe("loadSources", () => {
 
     const config = await loadSources(env.paths.sourcesPath);
     expect(config.sources).toHaveLength(1);
-    expect(config.sources[0].name).toBe("community");
+    expect(config.sources[0].name).toBe("metafactory");
   });
 
   test("returns defaults for empty file", async () => {
@@ -94,7 +93,7 @@ describe("addSource", () => {
     const config = createDefaultSources();
     expect(() =>
       addSource(config, {
-        name: "community",
+        name: "metafactory",
         url: "https://example.com/dup.yaml",
         tier: "community",
         enabled: true,
@@ -106,7 +105,7 @@ describe("addSource", () => {
 describe("removeSource", () => {
   test("removes existing source", () => {
     const config = createDefaultSources();
-    removeSource(config, "community");
+    removeSource(config, "metafactory");
     expect(config.sources).toHaveLength(0);
   });
 
@@ -120,7 +119,7 @@ describe("formatSourceList", () => {
   test("formats source list", () => {
     const config = createDefaultSources();
     const output = formatSourceList(config);
-    expect(output).toContain("community");
+    expect(output).toContain("metafactory");
     expect(output).toContain("[community]");
     expect(output).toContain("(enabled)");
   });
