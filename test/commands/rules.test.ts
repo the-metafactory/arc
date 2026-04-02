@@ -12,7 +12,7 @@ beforeEach(async () => {
   env = await createTestEnv();
   // Create a consumer directory simulating a repo that uses rules
   consumerDir = join(env.root, "consumer-repo");
-  await mkdir(join(consumerDir, "docs", "claude-md"), { recursive: true });
+  await mkdir(join(consumerDir, "docs", "agents-md"), { recursive: true });
 });
 
 afterEach(async () => {
@@ -70,7 +70,7 @@ provides:
   templates:
     - source: templates/CLAUDE.md.template
       target: CLAUDE.md
-      config: claude-md.yaml
+      config: agents-md.yaml
 `,
   );
 
@@ -90,7 +90,7 @@ test("install rules package generates CLAUDE.md in consumer dir", async () => {
 
   // Set up consumer config
   await Bun.write(
-    join(consumerDir, "claude-md.yaml"),
+    join(consumerDir, "agents-md.yaml"),
     `template: compass-standards
 repo_name: test-project
 repo_description: "A test project"
@@ -120,15 +120,15 @@ test("install rules package with sections injects content", async () => {
 
   // Consumer config with sections
   await Bun.write(
-    join(consumerDir, "claude-md.yaml"),
+    join(consumerDir, "agents-md.yaml"),
     `template: compass-standards
 repo_name: grove
 repo_description: "PAI Event Relay"
 sections:
   - position: "after:description"
-    file: docs/claude-md/architecture.md
+    file: docs/agents-md/architecture.md
   - position: "after:critical-rules"
-    file: docs/claude-md/critical-rules.md
+    file: docs/agents-md/critical-rules.md
 extra_labels:
   - name: visibility
   - name: network
@@ -137,11 +137,11 @@ extra_labels:
 
   // Section files
   await Bun.write(
-    join(consumerDir, "docs", "claude-md", "architecture.md"),
+    join(consumerDir, "docs", "agents-md", "architecture.md"),
     "## Architecture\n\nGrove is a Discord bot.",
   );
   await Bun.write(
-    join(consumerDir, "docs", "claude-md", "critical-rules.md"),
+    join(consumerDir, "docs", "agents-md", "critical-rules.md"),
     "- Never use empty catch blocks",
   );
 
@@ -169,7 +169,7 @@ test("rules package recorded as rules artifact type in DB", async () => {
   const rulesRepo = await createMockRulesRepo(env.root);
 
   await Bun.write(
-    join(consumerDir, "claude-md.yaml"),
+    join(consumerDir, "agents-md.yaml"),
     `template: compass-standards
 repo_name: test
 repo_description: "Test"

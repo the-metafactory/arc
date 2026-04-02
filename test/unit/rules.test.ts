@@ -14,7 +14,7 @@ beforeEach(async () => {
   packageDir = join(root, "package");
   consumerDir = join(root, "consumer");
   await mkdir(join(packageDir, "templates"), { recursive: true });
-  await mkdir(join(consumerDir, "docs", "claude-md"), { recursive: true });
+  await mkdir(join(consumerDir, "docs", "agents-md"), { recursive: true });
 });
 
 afterEach(async () => {
@@ -30,7 +30,7 @@ test("generates rule file with placeholder substitution", async () => {
 
   // Config
   await Bun.write(
-    join(consumerDir, "claude-md.yaml"),
+    join(consumerDir, "agents-md.yaml"),
     `template: compass-standards
 repo_name: grove
 repo_description: "PAI Event Relay"
@@ -38,7 +38,7 @@ repo_description: "PAI Event Relay"
   );
 
   const templates: RulesTemplate[] = [
-    { source: "templates/CLAUDE.md.template", target: "CLAUDE.md", config: "claude-md.yaml" },
+    { source: "templates/CLAUDE.md.template", target: "CLAUDE.md", config: "agents-md.yaml" },
   ];
 
   const results = await generateRules(packageDir, templates, consumerDir);
@@ -73,29 +73,29 @@ Standard rules here.
 
   // Section files
   await Bun.write(
-    join(consumerDir, "docs", "claude-md", "architecture.md"),
+    join(consumerDir, "docs", "agents-md", "architecture.md"),
     "### Custom Architecture\n\nThis repo uses a special pattern.",
   );
   await Bun.write(
-    join(consumerDir, "docs", "claude-md", "critical-rules.md"),
+    join(consumerDir, "docs", "agents-md", "critical-rules.md"),
     "- Never do X\n- Always do Y",
   );
 
   // Config
   await Bun.write(
-    join(consumerDir, "claude-md.yaml"),
+    join(consumerDir, "agents-md.yaml"),
     `template: compass-standards
 repo_name: grove
 sections:
   - position: "after:description"
-    file: docs/claude-md/architecture.md
+    file: docs/agents-md/architecture.md
   - position: "after:critical-rules"
-    file: docs/claude-md/critical-rules.md
+    file: docs/agents-md/critical-rules.md
 `,
   );
 
   const templates: RulesTemplate[] = [
-    { source: "templates/CLAUDE.md.template", target: "CLAUDE.md", config: "claude-md.yaml" },
+    { source: "templates/CLAUDE.md.template", target: "CLAUDE.md", config: "agents-md.yaml" },
   ];
 
   const results = await generateRules(packageDir, templates, consumerDir);
@@ -118,7 +118,7 @@ test("skips optional template when format not in generate list", async () => {
 
   // Config without cursorrules in generate list
   await Bun.write(
-    join(consumerDir, "claude-md.yaml"),
+    join(consumerDir, "agents-md.yaml"),
     `template: compass-standards
 repo_name: grove
 generate:
@@ -127,7 +127,7 @@ generate:
   );
 
   const templates: RulesTemplate[] = [
-    { source: "templates/.cursorrules.template", target: ".cursorrules", config: "claude-md.yaml", optional: true },
+    { source: "templates/.cursorrules.template", target: ".cursorrules", config: "agents-md.yaml", optional: true },
   ];
 
   const results = await generateRules(packageDir, templates, consumerDir);
@@ -145,7 +145,7 @@ test("generates optional template when format is opted in", async () => {
   );
 
   await Bun.write(
-    join(consumerDir, "claude-md.yaml"),
+    join(consumerDir, "agents-md.yaml"),
     `template: compass-standards
 repo_name: grove
 generate:
@@ -155,7 +155,7 @@ generate:
   );
 
   const templates: RulesTemplate[] = [
-    { source: "templates/.cursorrules.template", target: ".cursorrules", config: "claude-md.yaml", optional: true },
+    { source: "templates/.cursorrules.template", target: ".cursorrules", config: "agents-md.yaml", optional: true },
   ];
 
   const results = await generateRules(packageDir, templates, consumerDir);
@@ -181,7 +181,7 @@ Done.
   );
 
   await Bun.write(
-    join(consumerDir, "claude-md.yaml"),
+    join(consumerDir, "agents-md.yaml"),
     `template: compass-standards
 repo_name: grove
 extra_labels:
@@ -191,7 +191,7 @@ extra_labels:
   );
 
   const templates: RulesTemplate[] = [
-    { source: "templates/CLAUDE.md.template", target: "CLAUDE.md", config: "claude-md.yaml" },
+    { source: "templates/CLAUDE.md.template", target: "CLAUDE.md", config: "agents-md.yaml" },
   ];
 
   const results = await generateRules(packageDir, templates, consumerDir);
@@ -210,7 +210,7 @@ test("errors when required template has no config", async () => {
 
   // No config file in consumer dir
   const templates: RulesTemplate[] = [
-    { source: "templates/CLAUDE.md.template", target: "CLAUDE.md", config: "claude-md.yaml" },
+    { source: "templates/CLAUDE.md.template", target: "CLAUDE.md", config: "agents-md.yaml" },
   ];
 
   const results = await generateRules(packageDir, templates, consumerDir);
@@ -225,7 +225,7 @@ test("silently skips optional template when config is missing", async () => {
   );
 
   const templates: RulesTemplate[] = [
-    { source: "templates/AGENTS.md.template", target: "AGENTS.md", config: "claude-md.yaml", optional: true },
+    { source: "templates/AGENTS.md.template", target: "AGENTS.md", config: "agents-md.yaml", optional: true },
   ];
 
   const results = await generateRules(packageDir, templates, consumerDir);
@@ -244,28 +244,28 @@ test("multiple sections at same injection point are concatenated", async () => {
   );
 
   await Bun.write(
-    join(consumerDir, "docs", "claude-md", "section-a.md"),
+    join(consumerDir, "docs", "agents-md", "section-a.md"),
     "Section A content",
   );
   await Bun.write(
-    join(consumerDir, "docs", "claude-md", "section-b.md"),
+    join(consumerDir, "docs", "agents-md", "section-b.md"),
     "Section B content",
   );
 
   await Bun.write(
-    join(consumerDir, "claude-md.yaml"),
+    join(consumerDir, "agents-md.yaml"),
     `template: compass-standards
 repo_name: grove
 sections:
   - position: "after:description"
-    file: docs/claude-md/section-a.md
+    file: docs/agents-md/section-a.md
   - position: "after:description"
-    file: docs/claude-md/section-b.md
+    file: docs/agents-md/section-b.md
 `,
   );
 
   const templates: RulesTemplate[] = [
-    { source: "templates/CLAUDE.md.template", target: "CLAUDE.md", config: "claude-md.yaml" },
+    { source: "templates/CLAUDE.md.template", target: "CLAUDE.md", config: "agents-md.yaml" },
   ];
 
   const results = await generateRules(packageDir, templates, consumerDir);
@@ -294,17 +294,17 @@ test("handles missing section file gracefully", async () => {
   );
 
   await Bun.write(
-    join(consumerDir, "claude-md.yaml"),
+    join(consumerDir, "agents-md.yaml"),
     `template: compass-standards
 repo_name: grove
 sections:
   - position: "after:description"
-    file: docs/claude-md/nonexistent.md
+    file: docs/agents-md/nonexistent.md
 `,
   );
 
   const templates: RulesTemplate[] = [
-    { source: "templates/CLAUDE.md.template", target: "CLAUDE.md", config: "claude-md.yaml" },
+    { source: "templates/CLAUDE.md.template", target: "CLAUDE.md", config: "agents-md.yaml" },
   ];
 
   const results = await generateRules(packageDir, templates, consumerDir);
