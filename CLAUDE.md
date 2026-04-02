@@ -127,6 +127,7 @@ This repo follows ecosystem SOPs defined in [compass](https://github.com/the-met
 | **Design process** | Creating specs, design docs, or research docs | `compass/sops/design-process.md` |
 | **Retrospective** | Post-work review, extracting process patterns | `compass/sops/retrospective-and-process-mining.md` |
 | **New repo** | Bootstrapping a new repository in the ecosystem | `compass/sops/new-repo.md` |
+| **PR review** | Reviewing a PR, before approving or merging | `compass/sops/pr-review.md` |
 
 ### Examples
 
