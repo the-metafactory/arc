@@ -117,3 +117,25 @@ features:
     iteration: 4
     depends: [A-105, meta-factory:F5-500]
     description: "GitHub-based key discovery for package signing, future Sigstore keyless signing"
+
+  # Library support
+  - id: A-404
+    name: Library manifest support
+    status: planned
+    iteration: 5
+    depends: [A-100]
+    description: "Parse library-type root manifest with artifacts array, discover per-artifact manifests in subdirectories"
+
+  - id: A-405
+    name: Library install command
+    status: planned
+    iteration: 5
+    depends: [A-404, A-101]
+    description: "arc install library:artifact syntax, install single or all artifacts, per-artifact capability audit and DB tracking"
+
+  - id: A-406
+    name: SHA-256 registry verification
+    status: planned
+    iteration: 5
+    depends: [A-200]
+    description: "Verify sha256 field in REGISTRY.yaml entries against manifest content at install time"
