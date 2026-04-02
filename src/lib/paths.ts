@@ -1,5 +1,6 @@
-import { join } from "path";
+import { join, dirname } from "path";
 import { homedir } from "os";
+import { existsSync } from "fs";
 import type { PaiPaths } from "../types.js";
 
 /**
@@ -65,4 +66,21 @@ export async function ensureDirectories(paths: PaiPaths): Promise<void> {
     await Bun.write(join(dir, ".gitkeep"), "");
     // Bun.write auto-creates parent directories
   }
+}
+
+/**
+ * Walk up from a directory to find the git root (directory containing .git).
+ * Returns the git root path or null if not found within 10 levels.
+ */
+export function findGitRoot(startPath: string): string | null {
+  let current = startPath;
+  for (let i = 0; i < 10; i++) {
+    if (existsSync(join(current, ".git"))) {
+      return current;
+    }
+    const parent = dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+  return null;
 }

@@ -7,6 +7,7 @@ import type { Database } from "bun:sqlite";
 import { listSkills, getSkill, listByLibrary } from "../lib/db.js";
 import { readManifest } from "../lib/manifest.js";
 import { createSymlink } from "../lib/symlinks.js";
+import { findGitRoot } from "../lib/paths.js";
 import { loadSources } from "../lib/sources.js";
 import { findInAllSources } from "../lib/remote-registry.js";
 import { runScript } from "../lib/scripts.js";
@@ -352,23 +353,6 @@ export function formatUpgradeResults(results: UpgradeResult[]): string {
   }
 
   return lines.join("\n");
-}
-
-/**
- * Walk up from a directory to find the git root (directory containing .git).
- * Returns the git root path or null if not found within 10 levels.
- */
-function findGitRoot(startPath: string): string | null {
-  let current = startPath;
-  for (let i = 0; i < 10; i++) {
-    if (existsSync(join(current, ".git"))) {
-      return current;
-    }
-    const parent = join(current, "..");
-    if (parent === current) break;
-    current = parent;
-  }
-  return null;
 }
 
 /**

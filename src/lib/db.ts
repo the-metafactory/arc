@@ -204,17 +204,6 @@ export function listByLibrary(db: Database, libraryName: string): InstalledSkill
     .all(libraryName) as InstalledSkill[];
 }
 
-/**
- * Remove all skills from a specific library.
- */
-export function removeByLibrary(db: Database, libraryName: string): string[] {
-  const skills = listByLibrary(db, libraryName);
-  const names = skills.map((s) => s.name);
-  if (names.length) {
-    db.prepare("DELETE FROM skills WHERE library_name = ?").run(libraryName);
-  }
-  return names;
-}
 
 /**
  * Get all capabilities across all active skills (for audit).
