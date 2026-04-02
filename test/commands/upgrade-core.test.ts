@@ -213,6 +213,7 @@ async function createMockPaiEnv(): Promise<MockPaiEnv> {
       tier: "custom",
       customization_path: null,
       install_source: null,
+      library_name: null,
       installed_at: "2026-03-18T00:00:00Z",
       updated_at: "2026-03-18T00:00:00Z",
     },

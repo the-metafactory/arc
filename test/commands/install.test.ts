@@ -205,6 +205,37 @@ describe("install command", () => {
     expect(getSkill(env.db, "P_CLI_PIPE")).toBeNull();
   });
 
+  test("installs action to actions directory", async () => {
+    const repo = await createMockSkillRepo(env.root, {
+      name: "A_DISCOVER_REPOS",
+      type: "action",
+    });
+
+    const result = await install({
+      paths: env.paths,
+      db: env.db,
+      repoUrl: repo.url,
+      yes: true,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.name).toBe("A_DISCOVER_REPOS");
+
+    const actionLink = join(env.paths.actionsDir, "A_DISCOVER_REPOS");
+    expect(existsSync(actionLink)).toBe(true);
+    expect(lstatSync(actionLink).isSymbolicLink()).toBe(true);
+
+    const skill = getSkill(env.db, "A_DISCOVER_REPOS");
+    expect(skill).not.toBeNull();
+    expect(skill!.artifact_type).toBe("action");
+
+    // Remove
+    const removeResult = await remove(env.db, env.paths, "A_DISCOVER_REPOS");
+    expect(removeResult.success).toBe(true);
+    expect(existsSync(actionLink)).toBe(false);
+    expect(getSkill(env.db, "A_DISCOVER_REPOS")).toBeNull();
+  });
+
   test("rejects already-installed skill", async () => {
     const repo = await createMockSkillRepo(env.root, {
       name: "TestSkill",

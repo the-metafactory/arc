@@ -32,8 +32,13 @@ export async function remove(
   const isAgent = skill.artifact_type === "agent";
   const isPrompt = skill.artifact_type === "prompt";
   const isPipeline = skill.artifact_type === "pipeline";
+  const isAction = skill.artifact_type === "action";
 
-  if (isPipeline) {
+  if (isAction) {
+    // Actions: remove action symlink
+    const actionLink = join(paths.actionsDir, name);
+    await removeSymlink(actionLink);
+  } else if (isPipeline) {
     // Pipelines: remove pipeline symlink
     const pipelineLink = join(paths.pipelinesDir, name);
     await removeSymlink(pipelineLink);

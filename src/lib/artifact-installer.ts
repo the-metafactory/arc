@@ -17,6 +17,7 @@ import { generateRules } from "./rules.js";
  */
 export function resolveArtifactSourceDir(type: ArtifactType | "rules" | "system", baseDir: string): string {
   switch (type) {
+    case "action":
     case "rules":
     case "component":
     case "tool":
@@ -58,6 +59,13 @@ export async function createArtifactSymlinks(opts: {
   const { type, manifest, paths, installDir, quiet } = opts;
 
   switch (type) {
+    case "action": {
+      // Actions: symlink action directory into actionsDir
+      const actionLinkPath = join(paths.actionsDir, manifest.name);
+      await createSymlink(installDir, actionLinkPath);
+      break;
+    }
+
     case "rules": {
       // Rules packages: run template generation in the consumer repo
       const templates = manifest.provides?.templates ?? [];

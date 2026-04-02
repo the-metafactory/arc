@@ -599,6 +599,7 @@ async function installSkillEntry(
       tier: "custom",
       customization_path: null,
       install_source: entry.source,
+      library_name: null,
       installed_at: now,
       updated_at: now,
     },

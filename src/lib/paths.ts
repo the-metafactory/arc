@@ -43,6 +43,9 @@ export function createPaths(overrides?: Partial<PaiPaths>): PaiPaths {
     pipelinesDir:
       overrides?.pipelinesDir ??
       join(configRoot, "pipelines"),
+    actionsDir:
+      overrides?.actionsDir ??
+      join(configRoot, "actions"),
     settingsPath:
       overrides?.settingsPath ??
       join(claudeRoot, "settings.json"),
@@ -63,6 +66,7 @@ export async function ensureDirectories(paths: PaiPaths): Promise<void> {
     paths.secretsDir,
     paths.runtimeDir,
     paths.pipelinesDir,
+    paths.actionsDir,
   ];
 
   for (const dir of dirs) {
