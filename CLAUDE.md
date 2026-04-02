@@ -117,16 +117,35 @@ Packages are git-cloned to `~/.config/arc/pkg/repos/` and symlinked into `~/.cla
 
 ## Standard Operating Procedures
 
-This repo follows ecosystem SOPs from [compass](https://github.com/the-metafactory/compass):
+This repo follows ecosystem SOPs defined in [compass](https://github.com/the-metafactory/compass). **Before starting work, identify which SOPs apply and Read them. Output the pre-flight line from each loaded SOP.**
 
-- **Development pipeline:** `compass/sops/dev-pipeline.md` — branches, commits, PR workflow
-- **Versioning & releases:** `compass/sops/versioning.md` — semantic versioning, tags, GitHub releases
-- **Worktree discipline:** `compass/sops/worktree-discipline.md` — multi-agent isolation
-- **Design process:** `compass/sops/design-process.md` — research → decisions → specs → code
-- **Retrospectives:** `compass/sops/retrospective-and-process-mining.md` — post-work pattern extraction
-- **New repo onboarding:** `compass/sops/new-repo.md` — labels, webhooks, CLAUDE.md, bot.yaml
+| SOP | Activate when | File |
+|-----|--------------|------|
+| **Dev pipeline** | Creating branches, making PRs, starting any feature/fix work | `compass/sops/dev-pipeline.md` |
+| **Versioning** | After merging PRs, before deploying, any version bump | `compass/sops/versioning.md` |
+| **Worktree discipline** | Starting feature work (always -- even solo) | `compass/sops/worktree-discipline.md` |
+| **Design process** | Creating specs, design docs, or research docs | `compass/sops/design-process.md` |
+| **Retrospective** | Post-work review, extracting process patterns | `compass/sops/retrospective-and-process-mining.md` |
+| **New repo** | Bootstrapping a new repository in the ecosystem | `compass/sops/new-repo.md` |
 
-Read the relevant SOP when starting that type of work.
+### Examples
+
+**Starting a feature:**
+```
+Task: "Add a new install command"
+→ Activate: dev-pipeline + worktree
+→ Read both SOPs from compass
+→ Output: "SOP: dev-pipeline | Branch: feat/a-050-install-cmd | Prefix: feat:"
+→ Output: "SOP: worktree | Worktree: ../arc-install-cmd | Branch: feat/a-050-install-cmd | Main: untouched"
+```
+
+**After merging a PR:**
+```
+Task: "Merge PR #25"
+→ After merge, activate: versioning
+→ Read SOP from compass
+→ Output: "SOP: versioning | Current: v0.8.2 | Bump: patch → v0.8.3"
+```
 
 ---
 
@@ -205,23 +224,22 @@ When working on a GitHub issue in this repo, keep the issue updated as you work.
 
 ---
 
-## Versioning & Releases (mandatory)
+## Versioning & Releases
 
-Follow `compass/sops/versioning.md` for the full release workflow. arc-specific:
+See `compass/sops/versioning.md` for the full procedure. Key repo-specific details:
 
-- Version tracked in both `arc-manifest.yaml` and `package.json`
-- **Patch**: Bug fixes, dependency updates
-- **Minor**: New commands, new capabilities
-- **Major**: Breaking CLI changes, database schema changes
+- Version source of truth: `arc-manifest.yaml` and `package.json`
 - Release title format: `"arc vX.Y.Z — Short Description"`
+- Deploy command: `arc upgrade arc`
 
 ---
 
-## Multi-Agent Worktree Discipline (mandatory)
+## Multi-Agent Worktree Discipline
 
-Never switch branches or stash in the main worktree when another agent might be active. Use `git worktree` instead. See `compass/sops/worktree-discipline.md` for full setup and conventions.
+See `compass/sops/worktree-discipline.md` for the full procedure. Key repo-specific details:
 
-Arc worktree directories: `../arc-{slug}`.
+- Worktree directory pattern: `../arc-{slug}`
+- Example: `git worktree add ../arc-feature -b feat/{branch-name} main`
 
 ---
 
