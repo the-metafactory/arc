@@ -382,26 +382,12 @@ export async function upgradeLibrary(
     }
   }
 
-  // Now check each artifact's version
+  // Upgrade each artifact via upgradePackage (git pull is a no-op since we already pulled).
+  // This ensures per-artifact scripts, hooks, capabilities, and symlinks are all handled.
   const results: UpgradeResult[] = [];
   for (const artifact of artifacts) {
-    const manifest = await readManifest(artifact.install_path);
-    if (!manifest) {
-      results.push({ success: false, name: artifact.name, oldVersion: artifact.version, error: "No manifest after pull" });
-      continue;
-    }
-
-    if (compareSemver(artifact.version, manifest.version) >= 0) {
-      results.push({ success: true, name: artifact.name, oldVersion: artifact.version, newVersion: artifact.version });
-      continue;
-    }
-
-    // Version changed — update DB
-    const now = new Date().toISOString();
-    db.prepare("UPDATE skills SET version = ?, updated_at = ? WHERE name = ?")
-      .run(manifest.version, now, artifact.name);
-
-    results.push({ success: true, name: artifact.name, oldVersion: artifact.version, newVersion: manifest.version });
+    const result = await upgradePackage(db, paths, artifact.name);
+    results.push(result);
   }
 
   return results;
