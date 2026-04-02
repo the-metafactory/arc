@@ -1,12 +1,12 @@
 import { join } from "path";
 import { rm } from "fs/promises";
-import { homedir } from "os";
 import type { Database } from "bun:sqlite";
 import type { PaiPaths } from "../types.js";
-import { getSkill, removeSkill } from "../lib/db.js";
+import { getSkill, removeSkill, listByLibrary } from "../lib/db.js";
 import { removeSymlink, removeCliShim, extractAllCliInfo } from "../lib/symlinks.js";
 import { readManifest } from "../lib/manifest.js";
 import { removeHooks, hasHooks } from "../lib/hooks.js";
+import { findGitRoot } from "../lib/paths.js";
 
 export interface RemoveResult {
   success: boolean;
@@ -81,15 +81,30 @@ export async function remove(
 
   // Remove hooks from settings.json (before deleting repo)
   if (hasHooks(manifest?.provides?.hooks)) {
-    const settingsPath = join(homedir(), ".claude", "settings.json");
+    const settingsPath = paths.settingsPath;
     await removeHooks(name, settingsPath);
   }
 
-  // Remove repo directory
-  await rm(skill.install_path, { recursive: true, force: true });
-
-  // Remove from database (CASCADE deletes capabilities)
+  // Remove from database (CASCADE deletes capabilities) — before repo removal
   removeSkill(db, name);
+
+  // Remove repo directory — but NOT if other library artifacts still reference it
+  if (skill.library_name) {
+    const siblings = listByLibrary(db, skill.library_name);
+    if (siblings.length === 0) {
+      // Last artifact from this library — safe to remove the entire repo clone
+      // The repo clone is the parent of install_path for library artifacts
+      // install_path points to the artifact subdir, so we need the library root
+      const repoRoot = findGitRoot(skill.install_path);
+      if (repoRoot) {
+        await rm(repoRoot, { recursive: true, force: true });
+      }
+    }
+    // If siblings remain, leave the repo clone in place
+  } else {
+    // Standalone package — remove repo directory as before
+    await rm(skill.install_path, { recursive: true, force: true });
+  }
 
   return { success: true, name };
 }

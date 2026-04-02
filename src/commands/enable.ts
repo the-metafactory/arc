@@ -1,6 +1,5 @@
 import { join } from "path";
 import { existsSync } from "fs";
-import { homedir } from "os";
 import type { Database } from "bun:sqlite";
 import type { PaiPaths } from "../types.js";
 import { getSkill, updateSkillStatus } from "../lib/db.js";
@@ -110,7 +109,7 @@ export async function enable(
     name,
   );
   if (resolvedHooks?.length) {
-    const settingsPath = join(homedir(), ".claude", "settings.json");
+    const settingsPath = paths.settingsPath;
     await registerHooks(name, resolvedHooks, settingsPath);
   }
 

@@ -52,6 +52,13 @@ export function openDatabase(dbPath: string): Database {
     // Column already exists
   }
 
+  // Migration: add library_name column for library-sourced artifacts
+  try {
+    db.exec(`ALTER TABLE skills ADD COLUMN library_name TEXT`);
+  } catch {
+    // Column already exists
+  }
+
   db.exec(`
     CREATE TABLE IF NOT EXISTS capabilities (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -77,8 +84,8 @@ export function recordInstall(
   const now = new Date().toISOString();
 
   const insertSkill = db.prepare(`
-    INSERT INTO skills (name, version, repo_url, install_path, skill_dir, status, artifact_type, tier, customization_path, install_source, installed_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO skills (name, version, repo_url, install_path, skill_dir, status, artifact_type, tier, customization_path, install_source, library_name, installed_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   insertSkill.run(
@@ -92,6 +99,7 @@ export function recordInstall(
     skill.tier || manifest.tier || "custom",
     skill.customization_path || null,
     skill.install_source || null,
+    skill.library_name || null,
     skill.installed_at || now,
     skill.updated_at || now
   );
@@ -186,6 +194,16 @@ export function getCapabilities(
     .prepare("SELECT * FROM capabilities WHERE skill_name = ?")
     .all(skillName) as CapabilityRecord[];
 }
+
+/**
+ * List all installed skills from a specific library.
+ */
+export function listByLibrary(db: Database, libraryName: string): InstalledSkill[] {
+  return db
+    .prepare("SELECT * FROM skills WHERE library_name = ? ORDER BY name")
+    .all(libraryName) as InstalledSkill[];
+}
+
 
 /**
  * Get all capabilities across all active skills (for audit).

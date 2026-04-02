@@ -1,5 +1,5 @@
 import type { Database } from "bun:sqlite";
-import { listSkills } from "../lib/db.js";
+import { listSkills, listByLibrary } from "../lib/db.js";
 import type { ArtifactType, InstalledSkill } from "../types.js";
 
 export interface ListResult {
@@ -9,13 +9,20 @@ export interface ListResult {
 export interface ListOptions {
   /** Filter by artifact type */
   type?: ArtifactType;
+  /** Filter by library name */
+  library?: string;
 }
 
 /**
  * List all installed skills with version and status.
  */
 export function list(db: Database, opts?: ListOptions): ListResult {
-  let skills = listSkills(db);
+  let skills: InstalledSkill[];
+  if (opts?.library) {
+    skills = listByLibrary(db, opts.library);
+  } else {
+    skills = listSkills(db);
+  }
   if (opts?.type) {
     skills = skills.filter((s) => s.artifact_type === opts.type);
   }
@@ -34,6 +41,7 @@ export function formatListJson(result: ListResult): string {
     tier: s.tier,
     repoUrl: s.repo_url,
     installPath: s.install_path,
+    ...(s.library_name ? { library: s.library_name } : {}),
   }));
   return JSON.stringify({ packages }, null, 2);
 }
@@ -58,7 +66,8 @@ export function formatList(result: ListResult): string {
       const statusBadge = s.status === "active" ? "✅" : "⏸️";
       const tierBadge = s.tier === "official" ? " (official)" : s.tier === "community" ? " (community)" : "";
       const customBadge = s.customization_path ? " *" : "";
-      lines.push(`  ${statusBadge} ${s.name} v${s.version} [${s.status}]${tierBadge}${customBadge}`);
+      const libraryBadge = s.library_name ? ` 📚${s.library_name}` : "";
+      lines.push(`  ${statusBadge} ${s.name} v${s.version} [${s.status}]${tierBadge}${customBadge}${libraryBadge}`);
     }
     sectionCount++;
   }

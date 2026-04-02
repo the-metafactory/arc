@@ -18,6 +18,7 @@ import {
   checkUpgrades,
   upgradePackage,
   upgradeAll,
+  upgradeLibrary,
   formatCheckResults,
   formatUpgradeResults,
 } from "./commands/upgrade.js";
@@ -50,6 +51,7 @@ import {
 } from "./lib/remote-registry.js";
 import { homedir } from "os";
 import { join } from "path";
+import { parseLibraryRef } from "./lib/artifact-installer.js";
 
 const pkg = require("../package.json");
 
@@ -69,16 +71,34 @@ program
     await ensureDirectories(paths);
     const db = openDatabase(paths.dbPath);
 
+    // Parse library:artifact colon syntax (only for non-URL names)
     const isUrl =
       nameOrUrl.includes("/") ||
       nameOrUrl.startsWith("git@") ||
       nameOrUrl.startsWith("http");
 
+    let libraryName: string | undefined;
+    let artifactName: string | undefined;
+    let lookupName = nameOrUrl;
+
+    if (!isUrl) {
+      const libRef = parseLibraryRef(nameOrUrl);
+      if (libRef?.artifactName) {
+        libraryName = libRef.libraryName;
+        artifactName = libRef.artifactName;
+        lookupName = libRef.libraryName;
+      }
+    }
+
     if (isUrl) {
       // Direct git install
-      const result = await install({ paths, db, repoUrl: nameOrUrl, yes: opts.yes });
+      const result = await install({ paths, db, repoUrl: nameOrUrl, yes: opts.yes, artifactName });
       if (result.success) {
-        console.log(`\n✅ Installed ${result.name} v${result.version}`);
+        if (result.artifacts?.length) {
+          console.log(`\n✅ Installed ${result.artifacts.filter(a => a.success).length} artifact(s) from ${result.name}`);
+        } else {
+          console.log(`\n✅ Installed ${result.name} v${result.version}`);
+        }
       } else {
         console.error(`\n❌ ${result.error}`);
         process.exit(1);
@@ -86,14 +106,14 @@ program
     } else {
       // Name-based: search all configured sources → install
       const sources = await loadSources(paths.sourcesPath);
-      const found = await findInAllSources(sources, nameOrUrl, paths.cachePath);
+      const found = await findInAllSources(sources, lookupName, paths.cachePath);
 
       if (!found) {
-        console.error(`❌ "${nameOrUrl}" not found in any source. Try: arc search <keyword>`);
+        console.error(`❌ "${lookupName}" not found in any source. Try: arc search <keyword>`);
         process.exit(1);
       }
 
-      console.log(`Found ${nameOrUrl} [${found.artifactType}] in ${found.sourceName} [${found.sourceTier}]`);
+      console.log(`Found ${lookupName} [${found.artifactType}] in ${found.sourceName} [${found.sourceTier}]`);
 
       // Install directly from the source URL
       const result = await install({
@@ -103,9 +123,15 @@ program
         yes: opts.yes,
         sourceName: found.sourceName,
         sourceTier: found.sourceTier,
+        artifactName,
+        libraryName,
       });
       if (result.success) {
-        console.log(`✅ Installed ${result.name} v${result.version}`);
+        if (result.artifacts?.length) {
+          console.log(`✅ Installed ${result.artifacts.filter(a => a.success).length} artifact(s) from ${result.name}`);
+        } else {
+          console.log(`✅ Installed ${result.name} v${result.version}`);
+        }
       } else {
         console.error(`❌ ${result.error}`);
         process.exit(1);
@@ -120,7 +146,8 @@ program
   .description("List installed packages")
   .option("--json", "Output as JSON")
   .option("--type <type>", "Filter by artifact type (skill, tool, agent, prompt, pipeline, rules)")
-  .action((opts: { json?: boolean; type?: string }) => {
+  .option("--library <name>", "Filter by library name")
+  .action((opts: { json?: boolean; type?: string; library?: string }) => {
     const validTypes = ["skill", "tool", "agent", "prompt", "component", "pipeline", "rules"];
     if (opts.type && !validTypes.includes(opts.type)) {
       console.error(`\n❌ Unknown type "${opts.type}". Valid types: ${validTypes.join(", ")}`);
@@ -128,7 +155,7 @@ program
     }
     const paths = createPaths();
     const db = openDatabase(paths.dbPath);
-    const result = list(db, { type: opts.type as ArtifactType | undefined });
+    const result = list(db, { type: opts.type as ArtifactType | undefined, library: opts.library });
     console.log(opts.json ? formatListJson(result) : formatList(result));
     db.close();
   });
@@ -194,17 +221,40 @@ program
 
 program
   .command("remove <name>")
-  .description("Completely uninstall a skill")
-  .action(async (name: string) => {
+  .description("Completely uninstall a skill (supports library:artifact syntax)")
+  .option("--library <name>", "Remove all artifacts from a library")
+  .action(async (name: string, opts: { library?: string }) => {
     const paths = createPaths();
     const db = openDatabase(paths.dbPath);
-    const result = await remove(db, paths, name);
 
-    if (result.success) {
-      console.log(`🗑️  Removed ${result.name}`);
+    if (opts.library) {
+      // Remove all artifacts from a library
+      const { listByLibrary } = await import("./lib/db.js");
+      const libArtifacts = listByLibrary(db, opts.library);
+      if (libArtifacts.length) {
+        for (const art of libArtifacts) {
+          const result = await remove(db, paths, art.name);
+          if (result.success) {
+            console.log(`🗑️  Removed ${result.name}`);
+          }
+        }
+      } else {
+        console.error(`❌ No artifacts found for library '${opts.library}'`);
+        process.exit(1);
+      }
     } else {
-      console.error(`❌ ${result.error}`);
-      process.exit(1);
+      // Parse library:artifact syntax
+      const libRef = parseLibraryRef(name);
+      const removeName = libRef?.artifactName ?? name;
+
+      const result = await remove(db, paths, removeName);
+
+      if (result.success) {
+        console.log(`🗑️  Removed ${result.name}`);
+      } else {
+        console.error(`❌ ${result.error}`);
+        process.exit(1);
+      }
     }
 
     db.close();
@@ -252,17 +302,35 @@ program
         }
       }
     } else {
-      // Upgrade specific package
-      const result = await upgradePackage(db, paths, name);
-      if (result.success) {
-        if (result.oldVersion === result.newVersion) {
-          console.log(`${result.name} is already at ${result.oldVersion}`);
-        } else {
-          console.log(`${result.name}: ${result.oldVersion} → ${result.newVersion}`);
+      // Check for library:artifact syntax
+      const libRef = parseLibraryRef(name);
+      let upgradeName = libRef?.artifactName ?? name;
+      let isLibraryUpgrade = false;
+
+      if (!libRef?.artifactName) {
+        // No colon — check if name matches a library
+        const { listByLibrary } = await import("./lib/db.js");
+        const libArtifacts = listByLibrary(db, name);
+        if (libArtifacts.length > 0) {
+          isLibraryUpgrade = true;
         }
+      }
+
+      if (isLibraryUpgrade) {
+        const results = await upgradeLibrary(db, paths, name);
+        console.log(formatUpgradeResults(results));
       } else {
-        console.error(`${result.error}`);
-        process.exit(1);
+        const result = await upgradePackage(db, paths, upgradeName);
+        if (result.success) {
+          if (result.oldVersion === result.newVersion) {
+            console.log(`${result.name} is already at ${result.oldVersion}`);
+          } else {
+            console.log(`${result.name}: ${result.oldVersion} → ${result.newVersion}`);
+          }
+        } else {
+          console.error(`${result.error}`);
+          process.exit(1);
+        }
       }
     }
 

@@ -4,9 +4,10 @@ import { mkdir } from "fs/promises";
 import { homedir } from "os";
 import type { PaiPaths, InstalledSkill, SourcesConfig, RulesTemplate } from "../types.js";
 import type { Database } from "bun:sqlite";
-import { listSkills, getSkill } from "../lib/db.js";
+import { listSkills, getSkill, listByLibrary } from "../lib/db.js";
 import { readManifest } from "../lib/manifest.js";
 import { createSymlink } from "../lib/symlinks.js";
+import { findGitRoot } from "../lib/paths.js";
 import { loadSources } from "../lib/sources.js";
 import { findInAllSources } from "../lib/remote-registry.js";
 import { runScript } from "../lib/scripts.js";
@@ -151,9 +152,12 @@ export async function upgradePackage(
     return { success: false, name, oldVersion: skill.version, error: `Install path not found: ${installPath}` };
   }
 
+  // For library artifacts, git pull must run at the repo root (not artifact subdir)
+  const gitCwd = findGitRoot(installPath) ?? installPath;
+
   // git pull in the cloned repo
   const pullResult = Bun.spawnSync(["git", "pull", "--ff-only"], {
-    cwd: installPath,
+    cwd: gitCwd,
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -224,7 +228,7 @@ export async function upgradePackage(
     name,
   );
   if (resolvedHooks?.length) {
-    const settingsPath = join(homedir(), ".claude", "settings.json");
+    const settingsPath = paths.settingsPath;
     await removeHooks(name, settingsPath);
     await registerHooks(name, resolvedHooks, settingsPath);
   }
@@ -349,4 +353,42 @@ export function formatUpgradeResults(results: UpgradeResult[]): string {
   }
 
   return lines.join("\n");
+}
+
+/**
+ * Upgrade all artifacts from a library.
+ * Pulls the repo once, then checks each artifact's manifest version.
+ */
+export async function upgradeLibrary(
+  db: Database,
+  paths: PaiPaths,
+  libraryName: string,
+): Promise<UpgradeResult[]> {
+  const artifacts = listByLibrary(db, libraryName);
+  if (!artifacts.length) {
+    return [{ success: false, name: libraryName, oldVersion: "?", error: `No artifacts installed from library '${libraryName}'` }];
+  }
+
+  // Pull the library repo once (from the first artifact's path)
+  const gitRoot = findGitRoot(artifacts[0].install_path);
+  if (gitRoot) {
+    const pullResult = Bun.spawnSync(["git", "pull", "--ff-only"], {
+      cwd: gitRoot,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    if (pullResult.exitCode !== 0) {
+      return [{ success: false, name: libraryName, oldVersion: "?", error: `git pull failed: ${pullResult.stderr.toString().trim()}` }];
+    }
+  }
+
+  // Upgrade each artifact via upgradePackage (git pull is a no-op since we already pulled).
+  // This ensures per-artifact scripts, hooks, capabilities, and symlinks are all handled.
+  const results: UpgradeResult[] = [];
+  for (const artifact of artifacts) {
+    const result = await upgradePackage(db, paths, artifact.name);
+    results.push(result);
+  }
+
+  return results;
 }

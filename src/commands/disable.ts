@@ -1,5 +1,4 @@
 import { join } from "path";
-import { homedir } from "os";
 import type { Database } from "bun:sqlite";
 import type { PaiPaths } from "../types.js";
 import { getSkill, updateSkillStatus } from "../lib/db.js";
@@ -75,7 +74,7 @@ export async function disable(
     }
   }
   if (hasHooks(manifest?.provides?.hooks)) {
-    const settingsPath = join(homedir(), ".claude", "settings.json");
+    const settingsPath = paths.settingsPath;
     await removeHooks(name, settingsPath);
   }
 
