@@ -123,7 +123,7 @@ This repo follows ecosystem SOPs defined in [compass](https://github.com/the-met
 |-----|--------------|------|
 | **Dev pipeline** | Creating branches, making PRs, starting any feature/fix work | `compass/sops/dev-pipeline.md` |
 | **Versioning** | After merging PRs, before deploying, any version bump | `compass/sops/versioning.md` |
-| **Worktree discipline** | Starting feature work (always -- even solo) | `compass/sops/worktree-discipline.md` |
+| **Worktree discipline** | Starting feature work (always — even solo) | `compass/sops/worktree-discipline.md` |
 | **Design process** | Creating specs, design docs, or research docs | `compass/sops/design-process.md` |
 | **Retrospective** | Post-work review, extracting process patterns | `compass/sops/retrospective-and-process-mining.md` |
 | **New repo** | Bootstrapping a new repository in the ecosystem | `compass/sops/new-repo.md` |
@@ -206,8 +206,7 @@ Every issue must have at least one type label (`bug`, `feature`, `infrastructure
 
 ---
 
-## GitHub Issue Tracking (mandatory)
-
+## GitHub Issue Tracking
 When working on a GitHub issue in this repo, keep the issue updated as you work.
 
 **On starting work:**
