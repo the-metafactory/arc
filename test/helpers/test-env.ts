@@ -240,6 +240,101 @@ export async function createMockSkillRepo(
   };
 }
 
+export interface MockLibraryRepo {
+  path: string;
+  url: string;
+}
+
+/**
+ * Create a mock library repo with multiple artifacts for testing.
+ */
+export async function createMockLibraryRepo(
+  root: string,
+  opts: {
+    name: string;
+    version?: string;
+    author?: string;
+    artifacts: Array<{
+      path: string;
+      name: string;
+      type: "skill" | "tool" | "agent" | "prompt" | "pipeline" | "component";
+      version?: string;
+      description?: string;
+    }>;
+  }
+): Promise<MockLibraryRepo> {
+  const repoDir = join(root, `mock-lib-${opts.name}`);
+
+  // Create root manifest
+  const rootManifest = {
+    schema: "arc/v1",
+    name: opts.name,
+    version: opts.version ?? "1.0.0",
+    type: "library",
+    author: { name: opts.author ?? "testuser", github: opts.author ?? "testuser" },
+    description: `Mock library ${opts.name}`,
+    artifacts: opts.artifacts.map((a) => ({
+      path: a.path,
+      description: a.description ?? `${a.name} artifact`,
+    })),
+  };
+
+  await Bun.write(join(repoDir, "arc-manifest.yaml"), buildYaml(rootManifest));
+
+  // Create each artifact subdirectory with its own manifest
+  for (const artifact of opts.artifacts) {
+    const artifactDir = join(repoDir, artifact.path);
+
+    const artifactManifest = {
+      schema: "arc/v1",
+      name: artifact.name,
+      version: artifact.version ?? "1.0.0",
+      type: artifact.type,
+      author: { name: opts.author ?? "testuser", github: opts.author ?? "testuser" },
+      provides: artifact.type === "skill"
+        ? { skill: [{ trigger: artifact.name.toLowerCase() }] }
+        : {},
+      depends_on: { tools: [{ name: "bun", version: ">=1.0.0" }] },
+      capabilities: {
+        filesystem: { read: ["./"], write: [] },
+        network: [],
+        bash: { allowed: false },
+        secrets: [],
+      },
+    };
+
+    await Bun.write(join(artifactDir, "arc-manifest.yaml"), buildYaml(artifactManifest));
+
+    // Create type-specific content
+    if (artifact.type === "skill") {
+      await Bun.write(
+        join(artifactDir, "skill", "SKILL.md"),
+        `# ${artifact.name}\n\nTest skill.\n`
+      );
+    } else if (artifact.type === "agent") {
+      await Bun.write(
+        join(artifactDir, "agent", `${artifact.name}.md`),
+        `# ${artifact.name}\n\nTest agent.\n`
+      );
+    } else if (artifact.type === "prompt") {
+      await Bun.write(
+        join(artifactDir, "prompt", `${artifact.name}.md`),
+        `# ${artifact.name}\n\nTest prompt.\n`
+      );
+    }
+  }
+
+  // Initialize git repo
+  Bun.spawnSync(["git", "init"], { cwd: repoDir, stdout: "pipe", stderr: "pipe" });
+  Bun.spawnSync(["git", "add", "."], { cwd: repoDir, stdout: "pipe", stderr: "pipe" });
+  Bun.spawnSync(
+    ["git", "-c", "user.name=Test", "-c", "user.email=test@test.com", "commit", "-m", "Initial commit"],
+    { cwd: repoDir, stdout: "pipe", stderr: "pipe" }
+  );
+
+  return { path: repoDir, url: repoDir };
+}
+
 /**
  * Simple YAML builder (avoids external dependency in test helper).
  * Only handles the specific arc-manifest structure.

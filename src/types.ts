@@ -3,7 +3,7 @@
 // ── Catalog types ──────────────────────────────────────────────
 
 /** Artifact types in the catalog */
-export type ArtifactType = "skill" | "agent" | "prompt" | "tool" | "component" | "pipeline" | "rules";
+export type ArtifactType = "skill" | "agent" | "prompt" | "tool" | "component" | "pipeline" | "rules" | "library";
 
 /** Catalog entry type — controls trust level and install behavior */
 export type CatalogEntryType = "builtin" | "community" | "system" | "custom";
@@ -78,6 +78,8 @@ export interface ResolvedSource {
   parentPath: string;
   /** The filename referenced in the source URL */
   filename: string;
+  /** Artifact subdirectory within a library repo (undefined for standalone) */
+  subPath?: string;
 }
 
 /** Capability declarations from arc-manifest.yaml */
@@ -168,12 +170,20 @@ export type HooksConfigRef = {
 /** Union of both hook declaration formats in arc-manifest.yaml */
 export type HooksDeclaration = InlineHook[] | HooksConfigRef;
 
+/** An artifact entry in a library root manifest */
+export interface LibraryArtifactEntry {
+  path: string;
+  description?: string;
+}
+
 /** The full arc-manifest.yaml schema (also accepts legacy pai-manifest.yaml) */
 export interface ArcManifest {
   schema?: "arc/v1" | "pai/v1";
   name: string;
   version: string;
-  type: "skill" | "system" | "tool" | "agent" | "prompt" | "component" | "pipeline" | "rules";
+  type: "skill" | "system" | "tool" | "agent" | "prompt" | "component" | "pipeline" | "rules" | "library";
+  /** Only present when type is "library" — lists contained artifacts */
+  artifacts?: LibraryArtifactEntry[];
   tier?: PackageTier;
   author?: {
     name: string;
@@ -242,6 +252,8 @@ export interface InstalledSkill {
   tier: PackageTier;
   customization_path: string | null;
   install_source: string | null;
+  /** Library name when this artifact was installed from a library (null for standalone) */
+  library_name: string | null;
   installed_at: string;
   updated_at: string;
 }

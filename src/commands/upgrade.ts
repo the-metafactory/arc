@@ -4,7 +4,7 @@ import { mkdir } from "fs/promises";
 import { homedir } from "os";
 import type { PaiPaths, InstalledSkill, SourcesConfig, RulesTemplate } from "../types.js";
 import type { Database } from "bun:sqlite";
-import { listSkills, getSkill } from "../lib/db.js";
+import { listSkills, getSkill, listByLibrary } from "../lib/db.js";
 import { readManifest } from "../lib/manifest.js";
 import { createSymlink } from "../lib/symlinks.js";
 import { loadSources } from "../lib/sources.js";
@@ -151,9 +151,12 @@ export async function upgradePackage(
     return { success: false, name, oldVersion: skill.version, error: `Install path not found: ${installPath}` };
   }
 
+  // For library artifacts, git pull must run at the repo root (not artifact subdir)
+  const gitCwd = findGitRoot(installPath) ?? installPath;
+
   // git pull in the cloned repo
   const pullResult = Bun.spawnSync(["git", "pull", "--ff-only"], {
-    cwd: installPath,
+    cwd: gitCwd,
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -349,4 +352,73 @@ export function formatUpgradeResults(results: UpgradeResult[]): string {
   }
 
   return lines.join("\n");
+}
+
+/**
+ * Walk up from a directory to find the git root (directory containing .git).
+ * Returns the git root path or null if not found within 10 levels.
+ */
+function findGitRoot(startPath: string): string | null {
+  let current = startPath;
+  for (let i = 0; i < 10; i++) {
+    if (existsSync(join(current, ".git"))) {
+      return current;
+    }
+    const parent = join(current, "..");
+    if (parent === current) break;
+    current = parent;
+  }
+  return null;
+}
+
+/**
+ * Upgrade all artifacts from a library.
+ * Pulls the repo once, then checks each artifact's manifest version.
+ */
+export async function upgradeLibrary(
+  db: Database,
+  paths: PaiPaths,
+  libraryName: string,
+): Promise<UpgradeResult[]> {
+  const artifacts = listByLibrary(db, libraryName);
+  if (!artifacts.length) {
+    return [{ success: false, name: libraryName, oldVersion: "?", error: `No artifacts installed from library '${libraryName}'` }];
+  }
+
+  // Pull the library repo once (from the first artifact's path)
+  const gitRoot = findGitRoot(artifacts[0].install_path);
+  if (gitRoot) {
+    const pullResult = Bun.spawnSync(["git", "pull", "--ff-only"], {
+      cwd: gitRoot,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    if (pullResult.exitCode !== 0) {
+      return [{ success: false, name: libraryName, oldVersion: "?", error: `git pull failed: ${pullResult.stderr.toString().trim()}` }];
+    }
+  }
+
+  // Now check each artifact's version
+  const results: UpgradeResult[] = [];
+  for (const artifact of artifacts) {
+    const manifest = await readManifest(artifact.install_path);
+    if (!manifest) {
+      results.push({ success: false, name: artifact.name, oldVersion: artifact.version, error: "No manifest after pull" });
+      continue;
+    }
+
+    if (compareSemver(artifact.version, manifest.version) >= 0) {
+      results.push({ success: true, name: artifact.name, oldVersion: artifact.version, newVersion: artifact.version });
+      continue;
+    }
+
+    // Version changed — update DB
+    const now = new Date().toISOString();
+    db.prepare("UPDATE skills SET version = ?, updated_at = ? WHERE name = ?")
+      .run(manifest.version, now, artifact.name);
+
+    results.push({ success: true, name: artifact.name, oldVersion: artifact.version, newVersion: manifest.version });
+  }
+
+  return results;
 }

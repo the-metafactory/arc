@@ -32,6 +32,13 @@ export async function readManifest(
           `Invalid ${filename}: missing required fields (name, version)`
         );
       }
+
+      // Library-specific validation
+      if (parsed.type === "library") {
+        validateLibraryManifest(parsed, filename);
+        return parsed;
+      }
+
       // capabilities optional for component and rules types, required for others
       if (!parsed.capabilities && parsed.type !== "component" && parsed.type !== "rules") {
         throw new Error(
@@ -46,6 +53,83 @@ export async function readManifest(
     }
   }
   return null;
+}
+
+/**
+ * Validate a library root manifest.
+ * Libraries must have an artifacts array and must NOT have provides/capabilities/scripts.
+ */
+function validateLibraryManifest(parsed: ArcManifest, filename: string): void {
+  if (!parsed.artifacts || !Array.isArray(parsed.artifacts) || parsed.artifacts.length === 0) {
+    throw new Error(
+      `Invalid ${filename}: library type requires a non-empty 'artifacts' array`
+    );
+  }
+
+  // Root manifest must not contain per-artifact fields
+  if (parsed.provides) {
+    throw new Error(
+      `Invalid ${filename}: library root manifest must not contain 'provides' (belongs on per-artifact manifests)`
+    );
+  }
+  if (parsed.capabilities) {
+    throw new Error(
+      `Invalid ${filename}: library root manifest must not contain 'capabilities' (belongs on per-artifact manifests)`
+    );
+  }
+  if (parsed.scripts) {
+    throw new Error(
+      `Invalid ${filename}: library root manifest must not contain 'scripts' (belongs on per-artifact manifests)`
+    );
+  }
+
+  // Validate each artifact entry
+  for (const artifact of parsed.artifacts) {
+    if (!artifact.path || typeof artifact.path !== "string") {
+      throw new Error(
+        `Invalid ${filename}: each artifact must have a 'path' string`
+      );
+    }
+    // Path traversal guard
+    if (artifact.path.includes("..") || artifact.path.startsWith("/")) {
+      throw new Error(
+        `Invalid ${filename}: artifact path '${artifact.path}' must be relative and cannot contain '..'`
+      );
+    }
+  }
+}
+
+/**
+ * Read artifact manifests from a library repo.
+ * Returns an array of [artifactEntry, manifest] pairs for valid artifacts.
+ */
+export async function readLibraryArtifacts(
+  libraryDir: string,
+  manifest: ArcManifest,
+): Promise<Array<{ entry: import("../types.js").LibraryArtifactEntry; manifest: ArcManifest }>> {
+  if (manifest.type !== "library" || !manifest.artifacts) {
+    return [];
+  }
+
+  const results: Array<{ entry: import("../types.js").LibraryArtifactEntry; manifest: ArcManifest }> = [];
+
+  for (const entry of manifest.artifacts) {
+    const artifactDir = join(libraryDir, entry.path);
+    const artifactManifest = await readManifest(artifactDir);
+    if (!artifactManifest) {
+      throw new Error(
+        `Library artifact '${entry.path}' has no arc-manifest.yaml`
+      );
+    }
+    if (artifactManifest.type === "library") {
+      throw new Error(
+        `Library artifact '${entry.path}' cannot itself be a library`
+      );
+    }
+    results.push({ entry, manifest: artifactManifest });
+  }
+
+  return results;
 }
 
 /**

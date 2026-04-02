@@ -1,9 +1,10 @@
 import { join } from "path";
 import { rm } from "fs/promises";
+import { existsSync } from "fs";
 import { homedir } from "os";
 import type { Database } from "bun:sqlite";
 import type { PaiPaths } from "../types.js";
-import { getSkill, removeSkill } from "../lib/db.js";
+import { getSkill, removeSkill, listByLibrary } from "../lib/db.js";
 import { removeSymlink, removeCliShim, extractAllCliInfo } from "../lib/symlinks.js";
 import { readManifest } from "../lib/manifest.js";
 import { removeHooks, hasHooks } from "../lib/hooks.js";
@@ -85,11 +86,46 @@ export async function remove(
     await removeHooks(name, settingsPath);
   }
 
-  // Remove repo directory
-  await rm(skill.install_path, { recursive: true, force: true });
-
-  // Remove from database (CASCADE deletes capabilities)
+  // Remove from database (CASCADE deletes capabilities) — before repo removal
   removeSkill(db, name);
 
+  // Remove repo directory — but NOT if other library artifacts still reference it
+  if (skill.library_name) {
+    const siblings = listByLibrary(db, skill.library_name);
+    if (siblings.length === 0) {
+      // Last artifact from this library — safe to remove the entire repo clone
+      // The repo clone is the parent of install_path for library artifacts
+      // install_path points to the artifact subdir, so we need the library root
+      const repoRoot = findLibraryRepoRoot(skill.install_path);
+      if (repoRoot) {
+        await rm(repoRoot, { recursive: true, force: true });
+      }
+    }
+    // If siblings remain, leave the repo clone in place
+  } else {
+    // Standalone package — remove repo directory as before
+    await rm(skill.install_path, { recursive: true, force: true });
+  }
+
   return { success: true, name };
+}
+
+/**
+ * Find the library repo root directory from an artifact's install path.
+ * Walks up from the artifact subdir looking for the repo root in the repos dir.
+ */
+function findLibraryRepoRoot(artifactPath: string): string | null {
+  // The artifact path is like: ~/.config/arc/pkg/repos/mf-library/skills/code-review
+  // The repo root is: ~/.config/arc/pkg/repos/mf-library/
+  // Walk up until we find a .git directory
+  let current = artifactPath;
+  for (let i = 0; i < 10; i++) {
+    if (existsSync(join(current, ".git"))) {
+      return current;
+    }
+    const parent = join(current, "..");
+    if (parent === current) break;
+    current = parent;
+  }
+  return null;
 }
