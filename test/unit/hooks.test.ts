@@ -335,6 +335,26 @@ describe("resolveHooksFromManifest", () => {
     ]);
   });
 
+  test("resolves ${PKG_DIR} brace syntax to install path", () => {
+    const inline = [
+      { event: "PostToolUse", command: "bun ${PKG_DIR}/src/hooks/hook.ts" },
+    ];
+    const result = resolveHooksFromManifest(inline, "/opt/packages/mypkg", "MyPkg");
+    expect(result).toEqual([
+      { event: "PostToolUse", command: "bun /opt/packages/mypkg/src/hooks/hook.ts" },
+    ]);
+  });
+
+  test("resolves ${NAME_DIR} brace syntax to install path", () => {
+    const inline = [
+      { event: "SessionStart", command: "bun ${MINER_DIR}/src/hooks/MinerEventLogger.hook.ts" },
+    ];
+    const result = resolveHooksFromManifest(inline, "/home/user/.config/arc/pkg/repos/miner", "Miner");
+    expect(result).toEqual([
+      { event: "SessionStart", command: "bun /home/user/.config/arc/pkg/repos/miner/src/hooks/MinerEventLogger.hook.ts" },
+    ]);
+  });
+
   test("loads and flattens config-file JSON format", async () => {
     // Create a temporary hooks JSON file
     const hooksJson = {
