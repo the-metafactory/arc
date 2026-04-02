@@ -32,8 +32,8 @@ export async function readManifest(
           `Invalid ${filename}: missing required fields (name, version)`
         );
       }
-      // capabilities optional for component type, required for others
-      if (!parsed.capabilities && parsed.type !== "component") {
+      // capabilities optional for component and rules types, required for others
+      if (!parsed.capabilities && parsed.type !== "component" && parsed.type !== "rules") {
         throw new Error(
           `Invalid ${filename}: missing required field 'capabilities' (only optional for type: component)`
         );

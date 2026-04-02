@@ -119,9 +119,9 @@ program
   .command("list")
   .description("List installed packages")
   .option("--json", "Output as JSON")
-  .option("--type <type>", "Filter by artifact type (skill, tool, agent, prompt, pipeline)")
+  .option("--type <type>", "Filter by artifact type (skill, tool, agent, prompt, pipeline, rules)")
   .action((opts: { json?: boolean; type?: string }) => {
-    const validTypes = ["skill", "tool", "agent", "prompt", "component", "pipeline"];
+    const validTypes = ["skill", "tool", "agent", "prompt", "component", "pipeline", "rules"];
     if (opts.type && !validTypes.includes(opts.type)) {
       console.error(`\n❌ Unknown type "${opts.type}". Valid types: ${validTypes.join(", ")}`);
       process.exit(1);

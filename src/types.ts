@@ -3,7 +3,7 @@
 // ── Catalog types ──────────────────────────────────────────────
 
 /** Artifact types in the catalog */
-export type ArtifactType = "skill" | "agent" | "prompt" | "tool" | "component" | "pipeline";
+export type ArtifactType = "skill" | "agent" | "prompt" | "tool" | "component" | "pipeline" | "rules";
 
 /** Catalog entry type — controls trust level and install behavior */
 export type CatalogEntryType = "builtin" | "community" | "system" | "custom";
@@ -126,6 +126,28 @@ export interface SkillTrigger {
   trigger: string;
 }
 
+/** Template declaration for rules packages */
+export interface RulesTemplate {
+  /** Path to template file within the package (e.g., "templates/CLAUDE.md.template") */
+  source: string;
+  /** Output file name in the consumer repo (e.g., "CLAUDE.md") */
+  target: string;
+  /** Config file in consumer repo (e.g., "claude-md.yaml") */
+  config: string;
+  /** Only generate if consumer opts in via their generate list */
+  optional?: boolean;
+}
+
+/** Rules config schema (claude-md.yaml in consumer repo) */
+export interface RulesConfig {
+  template: string;
+  generate?: Array<{ format: string }>;
+  sections?: Array<{ position: string; file: string }>;
+  extra_labels?: Array<{ name: string }>;
+  /** Placeholder values — any key not in the above is a placeholder */
+  [key: string]: unknown;
+}
+
 /** Inline hook array format (e.g. Grove) */
 export type InlineHook = {
   event: string;
@@ -149,7 +171,7 @@ export interface ArcManifest {
   schema?: "arc/v1" | "pai/v1";
   name: string;
   version: string;
-  type: "skill" | "system" | "tool" | "agent" | "prompt" | "component" | "pipeline";
+  type: "skill" | "system" | "tool" | "agent" | "prompt" | "component" | "pipeline" | "rules";
   tier?: PackageTier;
   author?: {
     name: string;
@@ -165,6 +187,7 @@ export interface ArcManifest {
     skill?: SkillTrigger[];
     cli?: CliProvider[];
     files?: Array<{ source: string; target: string }>;
+    templates?: RulesTemplate[];
     hooks?: HooksDeclaration;
   };
   depends_on?: {

@@ -9,6 +9,7 @@ import { recordInstall, getSkill } from "../lib/db.js";
 import { createSymlink, createCliShim, extractAllCliInfo } from "../lib/symlinks.js";
 import { runScript } from "../lib/scripts.js";
 import { registerHooks, resolveHooksFromManifest, hasHooks } from "../lib/hooks.js";
+import { generateRules } from "../lib/rules.js";
 
 export interface InstallOptions {
   paths: PaiPaths;
@@ -20,6 +21,8 @@ export interface InstallOptions {
   sourceName?: string;
   /** Trust tier of the source */
   sourceTier?: PackageTier;
+  /** Consumer repo directory for rules template generation (defaults to cwd) */
+  consumerDir?: string;
 }
 
 export interface InstallResult {
@@ -202,8 +205,25 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
   const isPrompt = manifest.type === "prompt";
   const isComponent = manifest.type === "component";
   const isPipeline = manifest.type === "pipeline";
+  const isRules = manifest.type === "rules";
 
-  if (isPipeline) {
+  if (isRules) {
+    // Rules packages: run template generation in the consumer repo (cwd)
+    const templates = manifest.provides?.templates ?? [];
+    if (templates.length) {
+      const consumerDir = opts.consumerDir ?? process.cwd();
+      const results = await generateRules(installPath, templates, consumerDir);
+      if (!opts.yes) {
+        for (const r of results) {
+          if (r.success && r.target) {
+            console.log(`  Generated ${r.target}`);
+          } else if (!r.success) {
+            console.log(`  ⚠ ${r.target}: ${r.error}`);
+          }
+        }
+      }
+    }
+  } else if (isPipeline) {
     // Pipelines: symlink repo root (or pipeline/ subdirectory) to pipelinesDir
     const pipelineSourceDir = join(installPath, "pipeline");
     const sourceDir = existsSync(pipelineSourceDir) ? pipelineSourceDir : installPath;
@@ -347,8 +367,9 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
 
   // 7. Record in database
   const now = new Date().toISOString();
-  const artifactType = isPipeline ? "pipeline" : isComponent ? "component" : isTool ? "tool" : isAgent ? "agent" : isPrompt ? "prompt" : "skill";
-  const artifactSourceDir = isPipeline ? (existsSync(join(installPath, "pipeline")) ? join(installPath, "pipeline") : installPath)
+  const artifactType = isRules ? "rules" : isPipeline ? "pipeline" : isComponent ? "component" : isTool ? "tool" : isAgent ? "agent" : isPrompt ? "prompt" : "skill";
+  const artifactSourceDir = isRules ? installPath
+    : isPipeline ? (existsSync(join(installPath, "pipeline")) ? join(installPath, "pipeline") : installPath)
     : isComponent ? installPath
     : isTool ? installPath
     : isAgent ? join(installPath, "agent")
