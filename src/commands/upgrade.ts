@@ -1,8 +1,8 @@
-import { existsSync } from "fs";
+import { existsSync, readdirSync } from "fs";
 import { join, dirname } from "path";
 import { mkdir } from "fs/promises";
 import { homedir } from "os";
-import type { PaiPaths, InstalledSkill, SourcesConfig } from "../types.js";
+import type { PaiPaths, InstalledSkill, SourcesConfig, RulesTemplate } from "../types.js";
 import type { Database } from "bun:sqlite";
 import { listSkills, getSkill } from "../lib/db.js";
 import { readManifest } from "../lib/manifest.js";
@@ -93,6 +93,43 @@ export async function checkUpgrades(
 }
 
 /**
+ * Find all repos that have a matching config file for a rules template.
+ * Scans ~/Developer/* for repos with the config file (e.g., agents-md.yaml).
+ */
+function findConsumerRepos(templates: RulesTemplate[]): string[] {
+  const configFiles = templates.map((t) => t.config);
+  const devRoot = process.env.BLUEPRINT_DEV_ROOT ?? join(homedir(), "Developer");
+  const dirs: string[] = [];
+
+  try {
+    const entries = readdirSync(devRoot, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const repoDir = join(devRoot, entry.name);
+      for (const config of configFiles) {
+        if (existsSync(join(repoDir, config))) {
+          dirs.push(repoDir);
+          break;
+        }
+      }
+    }
+  } catch (_err: unknown) {
+    // Dev root doesn't exist or can't be read — fall back to cwd
+  }
+
+  // Always include cwd if it has a config and isn't already in the list
+  const cwd = process.cwd();
+  for (const config of configFiles) {
+    if (existsSync(join(cwd, config)) && !dirs.includes(cwd)) {
+      dirs.push(cwd);
+      break;
+    }
+  }
+
+  return dirs;
+}
+
+/**
  * Upgrade a single installed package.
  * Pulls latest from git, re-reads manifest, updates DB version.
  */
@@ -136,6 +173,14 @@ export async function upgradePackage(
   const newVersion = manifest.version;
 
   if (compareSemver(oldVersion, newVersion) >= 0) {
+    // Version matches — but for rules packages, still regenerate templates
+    // (template content may have changed even if version was already bumped)
+    if (manifest.type === "rules" && manifest.provides?.templates?.length) {
+      const consumerDirs = findConsumerRepos(manifest.provides.templates);
+      for (const dir of consumerDirs) {
+        await generateRules(installPath, manifest.provides.templates, dir);
+      }
+    }
     return { success: true, name, oldVersion, newVersion: oldVersion };
   }
 
@@ -185,9 +230,12 @@ export async function upgradePackage(
   }
 
   // Re-generate rules templates if this is a rules package
+  // Scan all repos with matching config files, not just cwd
   if (manifest.type === "rules" && manifest.provides?.templates?.length) {
-    const consumerDir = process.cwd();
-    await generateRules(installPath, manifest.provides.templates, consumerDir);
+    const consumerDirs = findConsumerRepos(manifest.provides.templates);
+    for (const dir of consumerDirs) {
+      await generateRules(installPath, manifest.provides.templates, dir);
+    }
   }
 
   // Run postupgrade script if declared (falls back to postinstall)
