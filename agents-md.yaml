@@ -15,6 +15,7 @@ deploy_command: "arc upgrade arc"
 version_source: "arc-manifest.yaml and package.json"
 release_title_format: '"arc vX.Y.Z — Short Description"'
 worktree_pattern: "../arc-{slug}"
+sop_path_prefix: "compass/"
 
 # Repo-specific sections injected at marked positions in the template
 sections:
