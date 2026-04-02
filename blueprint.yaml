@@ -121,14 +121,14 @@ features:
   # Library support
   - id: A-404
     name: Library manifest support
-    status: planned
+    status: done
     iteration: 5
     depends: [A-100]
     description: "Parse library-type root manifest with artifacts array, discover per-artifact manifests in subdirectories"
 
   - id: A-405
     name: Library install command
-    status: planned
+    status: done
     iteration: 5
     depends: [A-404, A-101]
     description: "arc install library:artifact syntax, install single or all artifacts, per-artifact capability audit and DB tracking"
@@ -139,3 +139,18 @@ features:
     iteration: 5
     depends: [A-200]
     description: "Verify sha256 field in REGISTRY.yaml entries against manifest content at install time"
+
+  - id: A-407
+    name: Action artifact type
+    status: done
+    iteration: 5
+    depends: [A-102]
+    description: "type: action for pulse actions — install to ~/.config/arc/actions/, list/remove support"
+
+  # Remote info & inspection
+  - id: A-500
+    name: Remote package info
+    status: planned
+    iteration: 6
+    depends: [A-200, A-404]
+    description: "arc info <name> for uninstalled packages — resolve from registry, clone to cache, show manifest, capabilities, and library artifacts list"
