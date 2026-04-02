@@ -1,0 +1,6 @@
+- **arc-manifest.yaml wins** over package.json for version, name, and type. It is the single authority.
+- **Symlink discipline:** Never hardcopy files into `~/.claude/`. Always symlink from the cloned repo.
+- **Database integrity:** packages.db uses WAL mode. All writes use transactions. Never bypass the DB layer.
+- **Capability honesty:** Undeclared capabilities are security bugs. Every capability a package uses must be declared in its manifest.
+- **Test isolation:** All tests run in temp directories via `createTestEnv()`. Never touch real `~/.claude/` or `~/.config/` during tests.
+- **No silent failures:** Every error path must log or return a meaningful status. No empty catch blocks.

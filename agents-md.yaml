@@ -1,0 +1,32 @@
+# agents-md.yaml — repo-specific agent rules configuration
+# Used by `arc upgrade compass-standards` to generate agent rule files
+# See compass/docs/design-claude-md-sync.md for the full design spec.
+
+template: compass-standards
+
+# Which rule file formats to generate
+generate:
+  - format: claude-md
+
+# Placeholder values (substituted into templates)
+repo_name: arc
+repo_description: "Agentic Component Package Manager — CLI package manager for agentic skills, tools, agents, prompts, components, and pipelines. Think `apt install` for Claude Code artifacts."
+deploy_command: "arc upgrade arc"
+version_source: "arc-manifest.yaml and package.json"
+release_title_format: '"arc vX.Y.Z — Short Description"'
+worktree_pattern: "../arc-{slug}"
+
+# Repo-specific sections injected at marked positions in the template
+sections:
+  - position: "after:description"
+    file: docs/agents-md/architecture.md
+  - position: "after:description"
+    file: docs/agents-md/core-concepts.md
+  - position: "after:critical-rules"
+    file: docs/agents-md/critical-rules.md
+  - position: "after:sop-table"
+    file: docs/agents-md/implementation-workflow.md
+  - position: "after:versioning"
+    file: docs/agents-md/testing.md
+  - position: "after:versioning"
+    file: docs/agents-md/cli-reference.md
