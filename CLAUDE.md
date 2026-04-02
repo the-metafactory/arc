@@ -115,6 +115,21 @@ Packages are git-cloned to `~/.config/arc/pkg/repos/` and symlinked into `~/.cla
 
 ---
 
+## Standard Operating Procedures
+
+This repo follows ecosystem SOPs from [compass](https://github.com/the-metafactory/compass):
+
+- **Development pipeline:** `compass/sops/dev-pipeline.md` — branches, commits, PR workflow
+- **Versioning & releases:** `compass/sops/versioning.md` — semantic versioning, tags, GitHub releases
+- **Worktree discipline:** `compass/sops/worktree-discipline.md` — multi-agent isolation
+- **Design process:** `compass/sops/design-process.md` — research → decisions → specs → code
+- **Retrospectives:** `compass/sops/retrospective-and-process-mining.md` — post-work pattern extraction
+- **New repo onboarding:** `compass/sops/new-repo.md` — labels, webhooks, CLAUDE.md, bot.yaml
+
+Read the relevant SOP when starting that type of work.
+
+---
+
 ## Critical Rules
 
 - **arc-manifest.yaml wins** over package.json for version, name, and type. It is the single authority.
@@ -192,49 +207,21 @@ When working on a GitHub issue in this repo, keep the issue updated as you work.
 
 ## Versioning & Releases (mandatory)
 
-arc uses semantic versioning. The canonical version lives in `package.json` (currently v0.8.2).
+Follow `compass/sops/versioning.md` for the full release workflow. arc-specific:
 
-**When to bump:**
-- **Patch** (0.8.2 -> 0.8.3): Bug fixes, minor config changes
-- **Minor** (0.8.x -> 0.9.0): New features, new commands, new artifact types
-- **Major** (0.x -> 1.0): Breaking changes to manifest format, CLI interface, or DB schema
-
-**Release workflow:**
-```bash
-# 1. Bump version in package.json
-# 2. Commit: "chore: bump version to vX.Y.Z"
-# 3. Push to main
-# 4. Create GitHub release:
-gh release create vX.Y.Z --title "arc vX.Y.Z -- Summary" --generate-notes
-```
-
-**Rules:**
-- Every feature or fix should be followed by a version bump before deploying
-- GitHub releases use auto-generated notes plus a human-readable title
-- Tags are created by `gh release create` (don't manually `git tag`)
+- Version tracked in both `arc-manifest.yaml` and `package.json`
+- **Patch**: Bug fixes, dependency updates
+- **Minor**: New commands, new capabilities
+- **Major**: Breaking CLI changes, database schema changes
+- Release title format: `"arc vX.Y.Z — Short Description"`
 
 ---
 
 ## Multi-Agent Worktree Discipline (mandatory)
 
-Multiple agents may work on this repo concurrently. To prevent race conditions:
+Never switch branches or stash in the main worktree when another agent might be active. Use `git worktree` instead. See `compass/sops/worktree-discipline.md` for full setup and conventions.
 
-**Rule: Never switch branches or stash in the main worktree when another agent might be active.** Use `git worktree` instead.
-
-**Setup:**
-```bash
-# Create a worktree for feature work (from the repo root):
-git worktree add ../arc-{slug} -b feat/{branch-name} main
-
-# Install dependencies in the worktree:
-cd ../arc-{slug} && bun install
-```
-
-**Conventions:**
-- Main worktree stays on whatever branch the primary agent is using
-- Feature worktrees go in sibling directories (e.g., `../arc-list-json`)
-- Each worktree gets its own branch. Never check out the same branch in two worktrees.
-- Clean up worktrees when done: `git worktree remove ../arc-{slug}`
+Arc worktree directories: `../arc-{slug}`.
 
 ---
 
