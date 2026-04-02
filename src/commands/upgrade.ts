@@ -228,7 +228,7 @@ export async function upgradePackage(
     name,
   );
   if (resolvedHooks?.length) {
-    const settingsPath = join(homedir(), ".claude", "settings.json");
+    const settingsPath = paths.settingsPath;
     await removeHooks(name, settingsPath);
     await registerHooks(name, resolvedHooks, settingsPath);
   }

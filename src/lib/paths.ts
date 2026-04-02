@@ -43,6 +43,9 @@ export function createPaths(overrides?: Partial<PaiPaths>): PaiPaths {
     pipelinesDir:
       overrides?.pipelinesDir ??
       join(configRoot, "pipelines"),
+    settingsPath:
+      overrides?.settingsPath ??
+      join(claudeRoot, "settings.json"),
   };
 }
 

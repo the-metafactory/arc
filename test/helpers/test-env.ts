@@ -48,6 +48,7 @@ export async function createTestEnv(): Promise<TestEnv> {
     registryPath: join(root, "registry.yaml"),
     sourcesPath: join(root, ".config", "pai", "sources.yaml"),
     cachePath: join(root, ".config", "pai", "pkg", "cache"),
+    settingsPath: join(root, ".claude", "settings.json"),
   });
 
   await ensureDirectories(paths);

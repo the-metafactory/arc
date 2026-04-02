@@ -51,6 +51,7 @@ import {
 } from "./lib/remote-registry.js";
 import { homedir } from "os";
 import { join } from "path";
+import { parseLibraryRef } from "./lib/artifact-installer.js";
 
 const pkg = require("../package.json");
 
@@ -80,11 +81,13 @@ program
     let artifactName: string | undefined;
     let lookupName = nameOrUrl;
 
-    if (!isUrl && nameOrUrl.includes(":")) {
-      const [lib, art] = nameOrUrl.split(":", 2);
-      libraryName = lib;
-      artifactName = art;
-      lookupName = lib; // search for the library name in sources
+    if (!isUrl) {
+      const libRef = parseLibraryRef(nameOrUrl);
+      if (libRef?.artifactName) {
+        libraryName = libRef.libraryName;
+        artifactName = libRef.artifactName;
+        lookupName = libRef.libraryName;
+      }
     }
 
     if (isUrl) {
@@ -241,10 +244,8 @@ program
       }
     } else {
       // Parse library:artifact syntax
-      let removeName = name;
-      if (name.includes(":") && !name.includes("/")) {
-        removeName = name.split(":")[1];
-      }
+      const libRef = parseLibraryRef(name);
+      const removeName = libRef?.artifactName ?? name;
 
       const result = await remove(db, paths, removeName);
 
@@ -302,14 +303,12 @@ program
       }
     } else {
       // Check for library:artifact syntax
-      let upgradeName = name;
+      const libRef = parseLibraryRef(name);
+      let upgradeName = libRef?.artifactName ?? name;
       let isLibraryUpgrade = false;
 
-      if (name.includes(":") && !name.includes("/")) {
-        // library:artifact — upgrade single artifact
-        upgradeName = name.split(":")[1];
-      } else {
-        // Check if name matches a library — upgrade all its artifacts
+      if (!libRef?.artifactName) {
+        // No colon — check if name matches a library
         const { listByLibrary } = await import("./lib/db.js");
         const libArtifacts = listByLibrary(db, name);
         if (libArtifacts.length > 0) {

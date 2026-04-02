@@ -1,15 +1,12 @@
-import { join, dirname } from "path";
+import { join } from "path";
 import { existsSync } from "fs";
-import { mkdir } from "fs/promises";
-import { homedir } from "os";
 import type { PaiPaths, ArcManifest, ArtifactType, PackageTier } from "../types.js";
 import type { Database } from "bun:sqlite";
 import { readManifest, readLibraryArtifacts, assessRisk, formatCapabilities } from "../lib/manifest.js";
 import { recordInstall, getSkill } from "../lib/db.js";
-import { createSymlink, createCliShim, extractAllCliInfo } from "../lib/symlinks.js";
 import { runScript } from "../lib/scripts.js";
-import { registerHooks, resolveHooksFromManifest, hasHooks } from "../lib/hooks.js";
-import { generateRules } from "../lib/rules.js";
+import { registerHooks, resolveHooksFromManifest } from "../lib/hooks.js";
+import { createArtifactSymlinks, resolveArtifactSourceDir, installNodeDependencies } from "../lib/artifact-installer.js";
 
 export interface InstallOptions {
   paths: PaiPaths;
@@ -221,117 +218,14 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
   }
 
   // 4. Create symlinks based on artifact type
-  const isTool = manifest.type === "tool";
-  const isAgent = manifest.type === "agent";
-  const isPrompt = manifest.type === "prompt";
-  const isComponent = manifest.type === "component";
-  const isPipeline = manifest.type === "pipeline";
-  const isRules = manifest.type === "rules";
-
-  if (isRules) {
-    // Rules packages: run template generation in the consumer repo (cwd)
-    const templates = manifest.provides?.templates ?? [];
-    if (templates.length) {
-      const consumerDir = opts.consumerDir ?? process.cwd();
-      const results = await generateRules(installPath, templates, consumerDir);
-      if (!opts.yes) {
-        for (const r of results) {
-          if (r.success && r.target) {
-            console.log(`  Generated ${r.target}`);
-          } else if (!r.success) {
-            console.log(`  ⚠ ${r.target}: ${r.error}`);
-          }
-        }
-      }
-    }
-  } else if (isPipeline) {
-    // Pipelines: symlink repo root (or pipeline/ subdirectory) to pipelinesDir
-    const pipelineSourceDir = join(installPath, "pipeline");
-    const sourceDir = existsSync(pipelineSourceDir) ? pipelineSourceDir : installPath;
-    const pipelineLinkPath = join(paths.pipelinesDir, manifest.name);
-    await createSymlink(sourceDir, pipelineLinkPath);
-
-    // If the manifest declares CLI entries, also create shims
-    const cliEntries = extractAllCliInfo(manifest);
-    for (const entry of cliEntries) {
-      const binLinkPath = join(paths.binDir, entry.binName);
-      await createSymlink(installPath, binLinkPath);
-    }
-    if (cliEntries.length) {
-      await createCliShim(paths.shimDir, paths.binDir, manifest);
-    }
-  } else if (isComponent) {
-    // Components: symlink each provides.files entry from repo source to expanded target
-    const files = manifest.provides?.files ?? [];
-    for (const file of files) {
-      const sourcePath = join(installPath, file.source);
-      const targetPath = file.target.replace(/^~/, homedir());
-      await mkdir(dirname(targetPath), { recursive: true });
-      await createSymlink(sourcePath, targetPath);
-    }
-  } else if (isTool) {
-    // Tools: symlink repo root to binDir for each CLI entry
-    const cliEntries = extractAllCliInfo(manifest);
-    for (const entry of cliEntries) {
-      const binLinkPath = join(paths.binDir, entry.binName);
-      await createSymlink(installPath, binLinkPath);
-    }
-    if (!cliEntries.length) {
-      // Fallback: symlink under manifest name if no CLI declared
-      await createSymlink(installPath, join(paths.binDir, manifest.name));
-    }
-
-    // Create PATH-accessible shims for all CLI entries
-    await createCliShim(paths.shimDir, paths.binDir, manifest);
-  } else if (isAgent) {
-    // Agents: symlink the .md file directly into agentsDir for Claude auto-discovery
-    const agentSourceDir = join(installPath, "agent");
-    const sourceDir = existsSync(agentSourceDir) ? agentSourceDir : installPath;
-    const mdFile = `${manifest.name}.md`;
-    const sourcePath = join(sourceDir, mdFile);
-    const linkPath = join(paths.agentsDir, mdFile);
-
-    if (existsSync(sourcePath)) {
-      await createSymlink(sourcePath, linkPath);
-    } else {
-      // Fallback: symlink directory if .md file not found by convention name
-      await createSymlink(sourceDir, join(paths.agentsDir, manifest.name));
-    }
-  } else if (isPrompt) {
-    // Prompts: symlink the .md file directly into promptsDir for Claude auto-discovery
-    const promptSourceDir = join(installPath, "prompt");
-    const sourceDir = existsSync(promptSourceDir) ? promptSourceDir : installPath;
-    const mdFile = `${manifest.name}.md`;
-    const sourcePath = join(sourceDir, mdFile);
-    const linkPath = join(paths.promptsDir, mdFile);
-
-    if (existsSync(sourcePath)) {
-      await createSymlink(sourcePath, linkPath);
-    } else {
-      // Fallback: symlink directory if .md file not found by convention name
-      await createSymlink(sourceDir, join(paths.promptsDir, manifest.name));
-    }
-  } else {
-    // Skills: symlink skill/ subdirectory (or root) to skillsDir
-    const skillSourceDir = join(installPath, "skill");
-    const skillLinkPath = join(paths.skillsDir, manifest.name);
-
-    if (existsSync(skillSourceDir)) {
-      await createSymlink(skillSourceDir, skillLinkPath);
-    } else {
-      await createSymlink(installPath, skillLinkPath);
-    }
-
-    // Create bin symlinks and shims for all CLI entries (skills with CLI)
-    const cliEntries = extractAllCliInfo(manifest);
-    for (const entry of cliEntries) {
-      const binLinkPath = join(paths.binDir, entry.binName);
-      await createSymlink(installPath, binLinkPath);
-    }
-    if (cliEntries.length) {
-      await createCliShim(paths.shimDir, paths.binDir, manifest);
-    }
-  }
+  await createArtifactSymlinks({
+    type: manifest.type,
+    manifest,
+    paths,
+    installDir: installPath,
+    consumerDir: opts.consumerDir,
+    quiet: opts.yes,
+  });
 
   // 5b. Register hooks (if declared, with consent gating)
   const resolvedHooks = resolveHooksFromManifest(
@@ -348,7 +242,7 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
       opts.yes,
     );
     if (approved) {
-      const settingsPath = join(homedir(), ".claude", "settings.json");
+      const settingsPath = paths.settingsPath;
       await registerHooks(manifest.name, resolvedHooks, settingsPath);
       if (!opts.yes) {
         console.log("  \u2713 Hooks registered in settings.json");
@@ -361,14 +255,7 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
   }
 
   // 6. Run bun install if package.json exists
-  const packageJsonPath = join(installPath, "package.json");
-  if (existsSync(packageJsonPath)) {
-    Bun.spawnSync(["bun", "install"], {
-      cwd: installPath,
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-  }
+  installNodeDependencies(installPath);
 
   // 6b. Run postinstall script if declared
   if (manifest.scripts?.postinstall) {
@@ -388,14 +275,8 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
 
   // 7. Record in database
   const now = new Date().toISOString();
-  const artifactType = isRules ? "rules" : isPipeline ? "pipeline" : isComponent ? "component" : isTool ? "tool" : isAgent ? "agent" : isPrompt ? "prompt" : "skill";
-  const artifactSourceDir = isRules ? installPath
-    : isPipeline ? (existsSync(join(installPath, "pipeline")) ? join(installPath, "pipeline") : installPath)
-    : isComponent ? installPath
-    : isTool ? installPath
-    : isAgent ? join(installPath, "agent")
-    : isPrompt ? join(installPath, "prompt")
-    : join(installPath, "skill");
+  const artifactType = manifest.type as ArtifactType;
+  const artifactSourceDir = resolveArtifactSourceDir(manifest.type, installPath);
   recordInstall(
     db,
     {
@@ -568,99 +449,44 @@ async function installSingleArtifact(
   // Create symlinks based on artifact type
   const artifactType = manifest.type as ArtifactType;
 
-  if (artifactType === "rules") {
-    const templates = manifest.provides?.templates ?? [];
-    if (templates.length) {
-      const consumerDir = opts.consumerDir ?? process.cwd();
-      const results = await generateRules(artifactDir, templates, consumerDir);
-      if (!opts.yes) {
-        for (const r of results) {
-          if (r.success && r.target) {
-            console.log(`    Generated ${r.target}`);
-          } else if (!r.success) {
-            console.log(`    ⚠ ${r.target}: ${r.error}`);
-          }
-        }
-      }
-    }
-  } else if (artifactType === "pipeline") {
-    const pipelineSourceDir = join(artifactDir, "pipeline");
-    const sourceDir = existsSync(pipelineSourceDir) ? pipelineSourceDir : artifactDir;
-    await createSymlink(sourceDir, join(paths.pipelinesDir, manifest.name));
-  } else if (artifactType === "component") {
-    const files = manifest.provides?.files ?? [];
-    for (const file of files) {
-      const sourcePath = join(artifactDir, file.source);
-      const targetPath = file.target.replace(/^~/, homedir());
-      await mkdir(dirname(targetPath), { recursive: true });
-      await createSymlink(sourcePath, targetPath);
-    }
-  } else if (artifactType === "tool") {
-    const cliEntries = extractAllCliInfo(manifest);
-    for (const entry of cliEntries) {
-      await createSymlink(artifactDir, join(paths.binDir, entry.binName));
-    }
-    if (!cliEntries.length) {
-      await createSymlink(artifactDir, join(paths.binDir, manifest.name));
-    }
-    await createCliShim(paths.shimDir, paths.binDir, manifest);
-  } else if (artifactType === "agent") {
-    const agentSourceDir = join(artifactDir, "agent");
-    const sourceDir = existsSync(agentSourceDir) ? agentSourceDir : artifactDir;
-    const mdFile = `${manifest.name}.md`;
-    const sourcePath = join(sourceDir, mdFile);
-    if (existsSync(sourcePath)) {
-      await createSymlink(sourcePath, join(paths.agentsDir, mdFile));
-    } else {
-      await createSymlink(sourceDir, join(paths.agentsDir, manifest.name));
-    }
-  } else if (artifactType === "prompt") {
-    const promptSourceDir = join(artifactDir, "prompt");
-    const sourceDir = existsSync(promptSourceDir) ? promptSourceDir : artifactDir;
-    const mdFile = `${manifest.name}.md`;
-    const sourcePath = join(sourceDir, mdFile);
-    if (existsSync(sourcePath)) {
-      await createSymlink(sourcePath, join(paths.promptsDir, mdFile));
-    } else {
-      await createSymlink(sourceDir, join(paths.promptsDir, manifest.name));
-    }
-  } else {
-    // skill
-    const skillSourceDir = join(artifactDir, "skill");
-    if (existsSync(skillSourceDir)) {
-      await createSymlink(skillSourceDir, join(paths.skillsDir, manifest.name));
-    } else {
-      await createSymlink(artifactDir, join(paths.skillsDir, manifest.name));
-    }
-    const cliEntries = extractAllCliInfo(manifest);
-    for (const entry of cliEntries) {
-      await createSymlink(artifactDir, join(paths.binDir, entry.binName));
-    }
-    if (cliEntries.length) {
-      await createCliShim(paths.shimDir, paths.binDir, manifest);
-    }
-  }
+  await createArtifactSymlinks({
+    type: artifactType,
+    manifest,
+    paths,
+    installDir: artifactDir,
+    consumerDir: opts.consumerDir,
+    quiet: opts.yes,
+  });
 
-  // Register hooks
+  // Register hooks (with consent gating — same as standalone install)
   const resolvedHooks = resolveHooksFromManifest(
     manifest.provides?.hooks,
     artifactDir,
     manifest.name,
   );
   if (resolvedHooks?.length) {
-    const settingsPath = join(homedir(), ".claude", "settings.json");
-    await registerHooks(manifest.name, resolvedHooks, settingsPath);
+    const tier = opts.sourceTier ?? manifest.tier ?? "custom";
+    const approved = await promptHookConsent(
+      manifest.name,
+      tier,
+      resolvedHooks,
+      opts.yes,
+    );
+    if (approved) {
+      const settingsPath = paths.settingsPath;
+      await registerHooks(manifest.name, resolvedHooks, settingsPath);
+      if (!opts.yes) {
+        console.log("  \u2713 Hooks registered in settings.json");
+      }
+    } else {
+      if (!opts.yes) {
+        console.log("  \u2298 Hook registration declined");
+      }
+    }
   }
 
   // Run bun install if package.json exists in artifact dir
-  const packageJsonPath = join(artifactDir, "package.json");
-  if (existsSync(packageJsonPath)) {
-    Bun.spawnSync(["bun", "install"], {
-      cwd: artifactDir,
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-  }
+  installNodeDependencies(artifactDir);
 
   // Run postinstall script
   if (manifest.scripts?.postinstall) {
@@ -679,16 +505,7 @@ async function installSingleArtifact(
   }
 
   // Resolve the skill_dir for DB recording
-  const artifactSourceDir =
-    artifactType === "rules" || artifactType === "component" || artifactType === "tool"
-      ? artifactDir
-      : artifactType === "pipeline"
-        ? (existsSync(join(artifactDir, "pipeline")) ? join(artifactDir, "pipeline") : artifactDir)
-        : artifactType === "agent"
-          ? join(artifactDir, "agent")
-          : artifactType === "prompt"
-            ? join(artifactDir, "prompt")
-            : join(artifactDir, "skill");
+  const artifactSourceDir = resolveArtifactSourceDir(artifactType, artifactDir);
 
   const now = new Date().toISOString();
   recordInstall(

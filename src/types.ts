@@ -311,4 +311,6 @@ export interface PaiPaths {
   cachePath: string;
   /** Pipelines directory (~/.config/arc/pipelines/) */
   pipelinesDir: string;
+  /** Claude settings path (~/.claude/settings.json) */
+  settingsPath: string;
 }

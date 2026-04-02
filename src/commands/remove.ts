@@ -1,6 +1,5 @@
 import { join } from "path";
 import { rm } from "fs/promises";
-import { homedir } from "os";
 import type { Database } from "bun:sqlite";
 import type { PaiPaths } from "../types.js";
 import { getSkill, removeSkill, listByLibrary } from "../lib/db.js";
@@ -82,7 +81,7 @@ export async function remove(
 
   // Remove hooks from settings.json (before deleting repo)
   if (hasHooks(manifest?.provides?.hooks)) {
-    const settingsPath = join(homedir(), ".claude", "settings.json");
+    const settingsPath = paths.settingsPath;
     await removeHooks(name, settingsPath);
   }
 
