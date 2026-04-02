@@ -56,6 +56,7 @@ export async function fetchRemoteRegistry(
       parsed.registry.prompts ??= [];
       parsed.registry.tools ??= [];
       parsed.registry.components ??= [];
+      parsed.registry.rules ??= [];
       return parsed;
     } catch {
       return null;
@@ -193,7 +194,8 @@ export async function updateAllSources(
         registry.registry.agents.length +
         registry.registry.prompts.length +
         registry.registry.tools.length +
-        (registry.registry.components?.length ?? 0);
+        (registry.registry.components?.length ?? 0) +
+        (registry.registry.rules?.length ?? 0);
       results.push({ name: source.name, status: "ok", count });
     } else {
       results.push({ name: source.name, status: "failed" });

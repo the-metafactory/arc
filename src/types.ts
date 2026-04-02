@@ -37,6 +37,7 @@ export interface CatalogConfig {
     prompts: CatalogEntry[];
     tools: CatalogEntry[];
     components?: CatalogEntry[];
+    rules?: CatalogEntry[];
   };
 }
 
@@ -58,6 +59,7 @@ export interface RegistryConfig {
     prompts: RegistryEntry[];
     tools: RegistryEntry[];
     components?: RegistryEntry[];
+    rules?: RegistryEntry[];
   };
 }
 

@@ -4,8 +4,8 @@ import YAML from "yaml";
 import type { SourcesConfig, RegistrySource, PackageTier } from "../types.js";
 
 const DEFAULT_SOURCE: RegistrySource = {
-  name: "community",
-  url: "https://raw.githubusercontent.com/mellanon/pai-collab/main/skills/REGISTRY.yaml",
+  name: "metafactory",
+  url: "https://raw.githubusercontent.com/the-metafactory/meta-factory/main/REGISTRY.yaml",
   tier: "community",
   enabled: true,
 };

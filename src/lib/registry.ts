@@ -29,6 +29,7 @@ export async function loadRegistry(
     parsed.registry.prompts ??= [];
     parsed.registry.tools ??= [];
     parsed.registry.components ??= [];
+    parsed.registry.rules ??= [];
 
     return parsed;
   } catch (err: any) {
@@ -53,6 +54,7 @@ export function searchRegistry(
     { entries: config.registry.prompts, type: "prompt" },
     { entries: config.registry.tools, type: "tool" },
     { entries: config.registry.components ?? [], type: "component" },
+    { entries: config.registry.rules ?? [], type: "rules" },
   ];
 
   for (const { entries, type } of sections) {
@@ -91,6 +93,9 @@ export function findRegistryEntry(
   }
   for (const entry of config.registry.components ?? []) {
     if (entry.name.toLowerCase() === lower) return { entry, artifactType: "component" };
+  }
+  for (const entry of config.registry.rules ?? []) {
+    if (entry.name.toLowerCase() === lower) return { entry, artifactType: "rules" };
   }
   return null;
 }
@@ -138,7 +143,9 @@ export function addFromRegistry(
           ? catalog.catalog.tools
           : found.artifactType === "component"
             ? (catalog.catalog.components ??= [])
-            : catalog.catalog.prompts;
+            : found.artifactType === "rules"
+              ? (catalog.catalog.rules ??= [])
+              : catalog.catalog.prompts;
 
   section.push(catalogEntry);
 
