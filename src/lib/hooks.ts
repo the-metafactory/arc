@@ -108,7 +108,8 @@ export function resolveHooksFromManifest(
 }
 
 /**
- * Replace $PKG_DIR and $<NAME>_DIR in hook commands with the actual install path.
+ * Replace $PKG_DIR / ${PKG_DIR} and $<NAME>_DIR / ${<NAME>_DIR}
+ * in hook commands with the actual install path.
  */
 function resolveCommandPaths(
   hooks: InlineHook[],
@@ -116,12 +117,12 @@ function resolveCommandPaths(
   packageName: string,
 ): InlineHook[] {
   const nameUpper = packageName.toUpperCase().replace(/-/g, "_");
-  const namePattern = new RegExp(`\\$${nameUpper}_DIR`, "g");
+  const namePattern = new RegExp(`\\$\\{?${nameUpper}_DIR\\}?`, "g");
 
   return hooks.map((hook) => ({
     ...hook,
     command: hook.command
-      .replace(/\$PKG_DIR/g, installPath)
+      .replace(/\$\{?PKG_DIR\}?/g, installPath)
       .replace(namePattern, installPath),
   }));
 }
