@@ -78,8 +78,19 @@ export async function fetchRemoteRegistry(
 
   // Fetch from remote
   try {
+    const headers: Record<string, string> = {};
+
+    // Add GitHub token for private repos accessed via raw.githubusercontent.com or api.github.com
+    if (source.url.includes("github")) {
+      const token = process.env.GITHUB_TOKEN ?? getGhToken();
+      if (token) {
+        headers["Authorization"] = `token ${token}`;
+      }
+    }
+
     const response = await fetch(source.url, {
       signal: AbortSignal.timeout(10_000),
+      headers,
     });
 
     if (!response.ok) return null;
@@ -232,4 +243,17 @@ export function formatSourcedSearch(results: SourcedSearchResult[]): string {
   }
 
   return lines.join("\n");
+}
+
+/** Try to get GitHub token from gh CLI auth */
+function getGhToken(): string | null {
+  try {
+    const result = Bun.spawnSync(["gh", "auth", "token"], { stdout: "pipe", stderr: "pipe" });
+    if (result.exitCode === 0) {
+      return result.stdout.toString().trim();
+    }
+  } catch {
+    // gh not installed or not authenticated
+  }
+  return null;
 }
