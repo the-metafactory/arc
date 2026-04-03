@@ -181,7 +181,7 @@ No npm. No Docker. Just git clone, symlinks, and a manifest.
 arc supports multiple registry sources, like apt's sources.list:
 
 ```yaml
-# ~/.config/arc/sources.yaml (auto-created on first run)
+# ~/.config/metafactory/sources.yaml (auto-created on first run)
 sources:
   - name: community
     url: https://raw.githubusercontent.com/mellanon/pai-collab/main/skills/REGISTRY.yaml

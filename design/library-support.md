@@ -129,7 +129,7 @@ The colon separator (`:`) distinguishes library-scoped installs from standalone 
 ```
 arc install mf-library:code-review
   1. Resolve source (registry lookup or URL)
-  2. Git clone entire repo to ~/.config/arc/pkg/repos/mf-library/
+  2. Git clone entire repo to ~/.config/metafactory/pkg/repos/mf-library/
   3. Read root arc-manifest.yaml → detect type: library
   4. Parse artifacts array → resolve requested artifact path
   5. Read artifact's arc-manifest.yaml (skills/code-review/arc-manifest.yaml)
@@ -199,7 +199,7 @@ export interface ResolvedSource {
 
 The source resolver does not change how it clones repos — the entire repo is always cloned. The `subPath` field is set after clone when processing library artifacts:
 
-1. Clone repo as usual (full repo to `~/.config/arc/pkg/repos/<name>/`)
+1. Clone repo as usual (full repo to `~/.config/metafactory/pkg/repos/<name>/`)
 2. Read root `arc-manifest.yaml` to detect library type
 3. For each selected artifact, set `subPath` to the artifact's `path` value from the root manifest
 4. All subsequent operations (manifest reading, symlink creation) use `repoRoot + subPath` as the base directory

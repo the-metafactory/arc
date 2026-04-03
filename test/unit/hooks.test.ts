@@ -329,9 +329,9 @@ describe("resolveHooksFromManifest", () => {
     const inline = [
       { event: "SessionStart", command: "bun $MINER_DIR/src/hooks/EventLogger.hook.ts" },
     ];
-    const result = resolveHooksFromManifest(inline, "/home/user/.config/arc/pkg/repos/miner", "Miner");
+    const result = resolveHooksFromManifest(inline, "/home/user/.config/metafactory/pkg/repos/miner", "Miner");
     expect(result).toEqual([
-      { event: "SessionStart", command: "bun /home/user/.config/arc/pkg/repos/miner/src/hooks/EventLogger.hook.ts" },
+      { event: "SessionStart", command: "bun /home/user/.config/metafactory/pkg/repos/miner/src/hooks/EventLogger.hook.ts" },
     ]);
   });
 
@@ -349,9 +349,9 @@ describe("resolveHooksFromManifest", () => {
     const inline = [
       { event: "SessionStart", command: "bun ${MINER_DIR}/src/hooks/MinerEventLogger.hook.ts" },
     ];
-    const result = resolveHooksFromManifest(inline, "/home/user/.config/arc/pkg/repos/miner", "Miner");
+    const result = resolveHooksFromManifest(inline, "/home/user/.config/metafactory/pkg/repos/miner", "Miner");
     expect(result).toEqual([
-      { event: "SessionStart", command: "bun /home/user/.config/arc/pkg/repos/miner/src/hooks/MinerEventLogger.hook.ts" },
+      { event: "SessionStart", command: "bun /home/user/.config/metafactory/pkg/repos/miner/src/hooks/MinerEventLogger.hook.ts" },
     ]);
   });
 

@@ -13,8 +13,8 @@ The single source of truth for every package. Declares name, version, type, capa
 | `agent` | `~/.claude/agents/{name}.md` | Persona file, auto-discovered as subagent |
 | `prompt` | `~/.claude/commands/{name}.md` | Slash command template |
 | `component` | `~/.claude/components/{name}/` | Reusable component |
-| `pipeline` | `~/.config/arc/pipelines/{name}/` | Multi-step pipeline definition |
-| `action` | `~/.config/arc/actions/{name}/` | Pulse action (action.json + action.ts) |
+| `pipeline` | `~/.config/metafactory/pipelines/{name}/` | Multi-step pipeline definition |
+| `action` | `~/.config/metafactory/actions/{name}/` | Pulse action (action.json + action.ts) |
 
 ### Trust Tiers
 
@@ -28,16 +28,16 @@ Trust flows from the **source**, not the package:
 
 ### Symlink-Based Installation
 
-Packages are git-cloned to `~/.config/arc/pkg/repos/` and symlinked into `~/.claude/`. Never hardcopy files into `~/.claude/`. This allows `git pull` upgrades, clean removal, and integrity verification.
+Packages are git-cloned to `~/.config/metafactory/pkg/repos/` and symlinked into `~/.claude/`. Never hardcopy files into `~/.claude/`. This allows `git pull` upgrades, clean removal, and integrity verification.
 
 ### Key Paths
 
 | Path | Purpose |
 |------|---------|
-| `~/.config/arc/packages.db` | SQLite database tracking all installed packages |
-| `~/.config/arc/sources.yaml` | Configured registry sources |
-| `~/.config/arc/pkg/repos/` | Cloned package repositories |
-| `~/.config/arc/pkg/cache/` | Cached remote registry indexes |
+| `~/.config/metafactory/packages.db` | SQLite database tracking all installed packages |
+| `~/.config/metafactory/sources.yaml` | Configured registry sources |
+| `~/.config/metafactory/pkg/repos/` | Cloned package repositories |
+| `~/.config/metafactory/pkg/cache/` | Cached remote registry indexes |
 | `~/.claude/skills/` | Installed skill symlinks |
 | `~/.claude/agents/` | Installed agent symlinks |
 | `~/.claude/commands/` | Installed prompt/command symlinks |

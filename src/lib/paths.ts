@@ -14,7 +14,7 @@ export function createPaths(overrides?: Partial<PaiPaths>): PaiPaths {
     overrides?.configRoot ??
     (process.env.ARC_CONFIG_ROOT
       ? process.env.ARC_CONFIG_ROOT.replace(/^~/, home)
-      : join(home, ".config", "arc"));
+      : join(home, ".config", "metafactory"));
 
   return {
     claudeRoot,

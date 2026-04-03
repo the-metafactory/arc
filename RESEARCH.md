@@ -248,7 +248,7 @@ This is why Layer 2 (tool-call enforcement) is non-negotiable. Review is necessa
 | Asset | Value | Location |
 |-------|-------|----------|
 | User's filesystem | High (source code, credentials, personal data) | Local machine |
-| API keys and secrets | Critical (~/.config/arc/secrets/) | Local machine |
+| API keys and secrets | Critical (~/.config/metafactory/secrets/) | Local machine |
 | Conversation context | High (may contain sensitive business data) | Agent memory |
 | Agent tool access | Critical (shell, filesystem, network) | Runtime |
 | Registry integrity | High (trust anchor for all installs) | Git repository |

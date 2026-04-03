@@ -11,20 +11,20 @@ describe("createPaths", () => {
     expect(paths.claudeRoot).toBe(join(home, ".claude"));
     expect(paths.skillsDir).toBe(join(home, ".claude", "skills"));
     expect(paths.binDir).toBe(join(home, ".claude", "bin"));
-    expect(paths.configRoot).toBe(join(home, ".config", "arc"));
-    expect(paths.dbPath).toBe(join(home, ".config", "arc", "packages.db"));
+    expect(paths.configRoot).toBe(join(home, ".config", "metafactory"));
+    expect(paths.dbPath).toBe(join(home, ".config", "metafactory", "packages.db"));
   });
 
   test("accepts overrides for test isolation", () => {
     const paths = createPaths({
       claudeRoot: "/tmp/test/.claude",
-      configRoot: "/tmp/test/.config/pai",
+      configRoot: "/tmp/test/.config/metafactory",
     });
 
     expect(paths.claudeRoot).toBe("/tmp/test/.claude");
     expect(paths.skillsDir).toBe("/tmp/test/.claude/skills");
-    expect(paths.configRoot).toBe("/tmp/test/.config/pai");
-    expect(paths.dbPath).toBe("/tmp/test/.config/pai/packages.db");
+    expect(paths.configRoot).toBe("/tmp/test/.config/metafactory");
+    expect(paths.dbPath).toBe("/tmp/test/.config/metafactory/packages.db");
   });
 
   test("ARC_CONFIG_ROOT env var overrides default configRoot", () => {

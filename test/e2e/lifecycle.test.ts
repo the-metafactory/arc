@@ -455,7 +455,7 @@ describe("Full lifecycle: install → list → info → audit → disable → en
     // Verify test paths don't point to real directories
     expect(env.paths.claudeRoot).not.toContain(Bun.env.HOME + "/.claude");
     expect(env.paths.configRoot).not.toContain(
-      Bun.env.HOME + "/.config/arc"
+      Bun.env.HOME + "/.config/metafactory"
     );
     expect(env.paths.claudeRoot).toContain("arc-test-");
   });
