@@ -13,6 +13,7 @@ import { findInAllSources } from "../lib/remote-registry.js";
 import { runScript } from "../lib/scripts.js";
 import { registerHooks, removeHooks, resolveHooksFromManifest } from "../lib/hooks.js";
 import { generateRules } from "../lib/rules.js";
+import { wireExtensions } from "../lib/extensions.js";
 
 export interface UpgradeCheckResult {
   name: string;
@@ -239,6 +240,14 @@ export async function upgradePackage(
     const consumerDirs = findConsumerRepos(manifest.provides.templates);
     for (const dir of consumerDirs) {
       await generateRules(installPath, manifest.provides.templates, dir);
+    }
+  }
+
+  // Re-wire extensions (if declared)
+  if (manifest.extensions) {
+    const wired = await wireExtensions(manifest, installPath, paths.claudeRoot);
+    for (const ext of wired) {
+      console.log(`  \u2713 Extension wired: ${ext}`);
     }
   }
 

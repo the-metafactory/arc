@@ -7,6 +7,7 @@ import { recordInstall, getSkill } from "../lib/db.js";
 import { runScript } from "../lib/scripts.js";
 import { registerHooks, resolveHooksFromManifest } from "../lib/hooks.js";
 import { createArtifactSymlinks, resolveArtifactSourceDir, installNodeDependencies } from "../lib/artifact-installer.js";
+import { wireExtensions } from "../lib/extensions.js";
 
 export interface InstallOptions {
   paths: PaiPaths;
@@ -250,6 +251,16 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
     } else {
       if (!opts.yes) {
         console.log("  \u2298 Hook registration declined");
+      }
+    }
+  }
+
+  // 5c. Wire extensions (if declared)
+  if (manifest.extensions) {
+    const wired = await wireExtensions(manifest, installPath, paths.claudeRoot);
+    if (wired.length && !opts.yes) {
+      for (const ext of wired) {
+        console.log(`  \u2713 Extension wired: ${ext}`);
       }
     }
   }
