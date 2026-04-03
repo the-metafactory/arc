@@ -79,7 +79,6 @@ The single source of truth for every package. Declares name, version, type, capa
 | `prompt` | `~/.claude/commands/{name}.md` | Slash command template |
 | `component` | `~/.claude/components/{name}/` | Reusable component |
 | `pipeline` | `~/.config/arc/pipelines/{name}/` | Multi-step pipeline definition |
-| `action` | `~/.config/arc/actions/{name}/` | Pulse action (action.json + action.ts) |
 
 ### Trust Tiers
 
@@ -126,6 +125,36 @@ Packages are git-cloned to `~/.config/arc/pkg/repos/` and symlinked into `~/.cla
 - **Capability honesty:** Undeclared capabilities are security bugs. Every capability a package uses must be declared in its manifest.
 - **Test isolation:** All tests run in temp directories via `createTestEnv()`. Never touch real `~/.claude/` or `~/.config/` during tests.
 - **No silent failures:** Every error path must log or return a meaningful status. No empty catch blocks.
+
+## Instruction Precedence
+
+When instructions conflict, follow this priority order (highest first):
+
+1. Security constraints (never modify user's ~/.claude without consent)
+2. arc-manifest.yaml (single source of truth -- overrides code assumptions)
+3. This CLAUDE.md
+4. Ecosystem design decisions (from metafactory)
+5. Feature specs and iteration plans
+6. Runtime context (issue/PR description)
+
+## Anti-Rationalization Rules
+
+- Do not claim `arc install` works without running it in a test environment -- symlink creation has edge cases
+- Do not assume database migrations succeed from reading the SQL -- run `bun test` with createTestEnv()
+- Do not skip testing symlink cleanup in `arc remove` -- orphaned symlinks break user systems
+- Do not infer catalog correctness from YAML syntax -- validate with `arc audit`
+- Do not claim a command works based on the happy path -- test with missing manifests, network errors, existing installations
+- Do not modify test isolation helpers (createTestEnv) without running the FULL test suite
+
+## Tool Policy
+
+- File reading -> Read tool (never cat)
+- Search -> Grep/Glob (never find/bash grep)
+- Testing -> `bun test` (always run full suite for arc -- commands interact)
+- Test isolation -> Always use createTestEnv() (never test against real ~/.config/arc)
+- Manifest validation -> Read + validate against schema (never assume YAML structure)
+- Package database -> bun:sqlite via library functions (never raw SQL in commands)
+- If `arc install` fails in tests -> check symlink permissions, path resolution, AND database state
 
 
 ## GitHub Labels (ecosystem standard)
@@ -218,6 +247,16 @@ arc uses `blueprint.yaml` for feature tracking with the prefix convention `A-{se
 **Conventional commits:** `feat:`, `fix:`, `chore:`, `docs:`, `test:` prefixes.
 
 **Blueprint statuses:** `planned`, `in-progress`, `done` are settable. `ready`, `blocked`, `next` are computed from dependency graph. Cross-repo dependencies use `repo:id` format (e.g., `meta-factory:F2-200`).
+
+## Adding a New Command (Procedure)
+
+1. Read existing commands in src/commands/ for patterns
+2. Create command file following naming convention
+3. Add to command registry in cli.ts
+4. Write tests using createTestEnv() -- cover: happy path, missing args, missing manifest, already installed
+5. Run `bun test` -- ALL tests must pass (arc commands interact, so a new command can break existing ones)
+6. Update docs/agents-md/cli-reference.md with the new command
+7. Bump version in arc-manifest.yaml
 
 
 ## Blueprint-Driven Development
