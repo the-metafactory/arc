@@ -303,21 +303,30 @@ export async function upgradePackage(
 
 /**
  * Upgrade all installed packages that have newer versions.
+ * When force=true, skips the expensive checkUpgrades (git fetch + registry
+ * lookup per package) and instead gets all active packages directly from the DB.
  */
 export async function upgradeAll(
   db: Database,
   paths: PaiPaths,
   opts?: { force?: boolean }
 ): Promise<UpgradeResult[]> {
-  const checks = await checkUpgrades(db, paths);
-  const upgradable = opts?.force
-    ? checks // force: attempt all installed packages
-    : checks.filter((c) => c.upgradable);
   const results: UpgradeResult[] = [];
 
-  for (const check of upgradable) {
-    const result = await upgradePackage(db, paths, check.name, opts);
-    results.push(result);
+  if (opts?.force) {
+    // Skip checkUpgrades entirely — just get all active packages from DB
+    const active = listSkills(db).filter((s) => s.status === "active");
+    for (const pkg of active) {
+      const result = await upgradePackage(db, paths, pkg.name, opts);
+      results.push(result);
+    }
+  } else {
+    const checks = await checkUpgrades(db, paths);
+    const upgradable = checks.filter((c) => c.upgradable);
+    for (const check of upgradable) {
+      const result = await upgradePackage(db, paths, check.name);
+      results.push(result);
+    }
   }
 
   return results;

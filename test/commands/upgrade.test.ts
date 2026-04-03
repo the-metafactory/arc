@@ -4,6 +4,8 @@ import { install } from "../../src/commands/install.js";
 import {
   checkUpgrades,
   upgradePackage,
+  upgradeAll,
+  upgradeLibrary,
   formatCheckResults,
   formatUpgradeResults,
 } from "../../src/commands/upgrade.js";
@@ -158,7 +160,7 @@ describe("upgradePackage", () => {
     expect(result.error).toContain("not installed");
   });
 
-  test("with force flag, re-runs upgrade even when at latest version", async () => {
+  test("with force flag, re-runs upgrade pipeline and updates DB", async () => {
     const repo = await createMockSkillRepo(env.root, {
       name: "ForceUpgrade",
       version: "1.0.0",
@@ -171,11 +173,26 @@ describe("upgradePackage", () => {
     expect(normalResult.oldVersion).toBe("1.0.0");
     expect(normalResult.newVersion).toBe("1.0.0");
 
-    // With force: still returns success, but runs the full upgrade pipeline
+    // Manually set DB version to something old to prove the pipeline restores it
+    env.db.prepare("UPDATE skills SET version = ? WHERE name = ?").run("0.9.0", "ForceUpgrade");
+
+    // Verify DB was actually changed
+    const before = env.db
+      .prepare("SELECT version FROM skills WHERE name = ?")
+      .get("ForceUpgrade") as { version: string };
+    expect(before.version).toBe("0.9.0");
+
+    // With force: runs the full upgrade pipeline, updates DB back to manifest version
     const forceResult = await upgradePackage(env.db, env.paths, "ForceUpgrade", { force: true });
     expect(forceResult.success).toBe(true);
-    expect(forceResult.oldVersion).toBe("1.0.0");
+    expect(forceResult.oldVersion).toBe("0.9.0");
     expect(forceResult.newVersion).toBe("1.0.0");
+
+    // Verify DB version was restored by the pipeline
+    const after = env.db
+      .prepare("SELECT version FROM skills WHERE name = ?")
+      .get("ForceUpgrade") as { version: string };
+    expect(after.version).toBe("1.0.0");
   });
 });
 
@@ -236,5 +253,53 @@ describe("formatUpgradeResults", () => {
 
   test("returns nothing message for empty", () => {
     expect(formatUpgradeResults([])).toContain("Nothing to upgrade");
+  });
+});
+
+describe("upgradeAll", () => {
+  test("with force upgrades packages already at latest", async () => {
+    // Install a package at v1.0.0 (no registry advertising a newer version)
+    const repo = await createMockSkillRepo(env.root, {
+      name: "ForceAll",
+      version: "1.0.0",
+    });
+    await install({ paths: env.paths, db: env.db, repoUrl: repo.url, yes: true });
+
+    // Without force, upgradeAll would return empty (nothing upgradable)
+    const normalResults = await upgradeAll(env.db, env.paths);
+    expect(normalResults).toHaveLength(0);
+
+    // With force, upgradeAll should include all active packages
+    const forceResults = await upgradeAll(env.db, env.paths, { force: true });
+    expect(forceResults).toHaveLength(1);
+    expect(forceResults[0].name).toBe("ForceAll");
+    expect(forceResults[0].success).toBe(true);
+  });
+});
+
+describe("upgradeLibrary", () => {
+  test("with force re-runs upgrade for library artifacts", async () => {
+    // Install a regular package and set its library_name in the DB
+    const repo = await createMockSkillRepo(env.root, {
+      name: "LibArtifact",
+      version: "1.0.0",
+    });
+    await install({ paths: env.paths, db: env.db, repoUrl: repo.url, yes: true });
+
+    // Set a library_name so upgradeLibrary can find it
+    env.db.prepare("UPDATE skills SET library_name = ? WHERE name = ?").run("my-lib", "LibArtifact");
+
+    // upgradeLibrary with force should process the artifact without error
+    const results = await upgradeLibrary(env.db, env.paths, "my-lib", { force: true });
+    expect(results).toHaveLength(1);
+    expect(results[0].name).toBe("LibArtifact");
+    expect(results[0].success).toBe(true);
+  });
+
+  test("returns error for unknown library", async () => {
+    const results = await upgradeLibrary(env.db, env.paths, "nonexistent-lib");
+    expect(results).toHaveLength(1);
+    expect(results[0].success).toBe(false);
+    expect(results[0].error).toContain("No artifacts installed");
   });
 });

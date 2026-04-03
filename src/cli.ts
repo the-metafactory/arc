@@ -311,7 +311,7 @@ program
         console.log(formatUpgradeResults(results, { force: true }));
       }
     } else {
-      // Check for library:artifact syntax
+      // name is guaranteed non-null here — commander validates required args for single-package paths
       const libRef = parseLibraryRef(name!);
       let upgradeName = libRef?.artifactName ?? name!;
       let isLibraryUpgrade = false;
