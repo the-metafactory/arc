@@ -1,7 +1,28 @@
 import { join, dirname } from "path";
 import { homedir } from "os";
-import { existsSync } from "fs";
+import { existsSync, renameSync } from "fs";
 import type { PaiPaths } from "../types.js";
+
+// TODO: Remove migration logic after 2026-Q3. Only 2 users (founders) on arc currently,
+// so this migration path can be dropped once both have upgraded.
+/**
+ * Migrate config data from the old ~/.config/arc/ path to ~/.config/metafactory/.
+ * One-time, idempotent operation. Only runs when:
+ * - Using default paths (no ARC_CONFIG_ROOT env var, no configRoot override)
+ * - Old path exists AND new path does NOT exist
+ */
+export function migrateConfigIfNeeded(oldPath: string, newPath: string): void {
+  try {
+    if (existsSync(oldPath) && !existsSync(newPath)) {
+      renameSync(oldPath, newPath);
+      console.log(`Migrated config from ${oldPath} to ${newPath}`);
+    }
+  } catch (err) {
+    console.warn(
+      `Warning: failed to migrate config from ${oldPath} to ${newPath}: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+}
 
 /**
  * Create PaiPaths with default production paths.
@@ -10,11 +31,22 @@ import type { PaiPaths } from "../types.js";
 export function createPaths(overrides?: Partial<PaiPaths>): PaiPaths {
   const home = homedir();
   const claudeRoot = overrides?.claudeRoot ?? join(home, ".claude");
+
+  const usingEnvVar = !!process.env.ARC_CONFIG_ROOT;
+  const usingOverride = !!overrides?.configRoot;
+  const defaultConfigRoot = join(home, ".config", "metafactory");
+
   const configRoot =
     overrides?.configRoot ??
-    (process.env.ARC_CONFIG_ROOT
-      ? process.env.ARC_CONFIG_ROOT.replace(/^~/, home)
-      : join(home, ".config", "metafactory"));
+    (usingEnvVar
+      ? process.env.ARC_CONFIG_ROOT!.replace(/^~/, home)
+      : defaultConfigRoot);
+
+  // Migrate from old path only when using default paths
+  if (!usingEnvVar && !usingOverride) {
+    const oldConfigRoot = join(home, ".config", "arc");
+    migrateConfigIfNeeded(oldConfigRoot, configRoot);
+  }
 
   return {
     claudeRoot,
