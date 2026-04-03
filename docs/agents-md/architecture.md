@@ -48,7 +48,7 @@
 User command
   -> CLI routes to command handler
     -> resolve source (registry lookup or direct URL)
-      -> git clone to ~/.config/arc/pkg/repos/
+      -> git clone to ~/.config/metafactory/pkg/repos/
         -> read arc-manifest.yaml
           -> display capabilities + risk level
             -> user confirms

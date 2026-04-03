@@ -145,7 +145,7 @@ features:
     status: done
     iteration: 5
     depends: [A-102]
-    description: "type: action for pulse actions — install to ~/.config/arc/actions/, list/remove support"
+    description: "type: action for pulse actions — install to ~/.config/metafactory/actions/, list/remove support"
 
   # Remote info & inspection
   - id: A-500

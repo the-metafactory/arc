@@ -302,7 +302,7 @@ arc attest <skill>              # Positive attestation
 arc destate <skill>             # Negative attestation
 ```
 
-### Sources Configuration (~/.config/arc/sources.yaml)
+### Sources Configuration (~/.config/metafactory/sources.yaml)
 
 ```yaml
 registries:
@@ -363,7 +363,7 @@ arc install extract-wisdom
   4. Review: display capabilities, prompt user
   5. Place: copy to ~/.claude/skills/ExtractWisdom/
   6. Wire: bun install in Tools/, update skill-index.json
-  7. Record: write to ~/.config/arc/packages.db
+  7. Record: write to ~/.config/metafactory/packages.db
 ```
 
 ---

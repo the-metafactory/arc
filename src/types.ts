@@ -298,15 +298,15 @@ export interface PaiPaths {
   promptsDir: string;
   /** Bin directory (~/.claude/bin/) */
   binDir: string;
-  /** Package repos (~/.config/arc/pkg/repos/) */
+  /** Package repos (~/.config/metafactory/pkg/repos/) */
   reposDir: string;
-  /** Database path (~/.config/arc/packages.db) */
+  /** Database path (~/.config/metafactory/packages.db) */
   dbPath: string;
-  /** Config root (~/.config/arc/) */
+  /** Config root (~/.config/metafactory/) */
   configRoot: string;
-  /** Secrets directory (~/.config/arc/secrets/) */
+  /** Secrets directory (~/.config/metafactory/secrets/) */
   secretsDir: string;
-  /** Runtime state (~/.config/arc/skills/) */
+  /** Runtime state (~/.config/metafactory/skills/) */
   runtimeDir: string;
   /** PATH-accessible shim directory (~/bin/) */
   shimDir: string;
@@ -314,13 +314,13 @@ export interface PaiPaths {
   catalogPath: string;
   /** Registry file path (repo-root/registry.yaml) */
   registryPath: string;
-  /** Sources config path (~/.config/arc/sources.yaml) */
+  /** Sources config path (~/.config/metafactory/sources.yaml) */
   sourcesPath: string;
-  /** Remote registry cache directory (~/.config/arc/pkg/cache/) */
+  /** Remote registry cache directory (~/.config/metafactory/pkg/cache/) */
   cachePath: string;
-  /** Pipelines directory (~/.config/arc/pipelines/) */
+  /** Pipelines directory (~/.config/metafactory/pipelines/) */
   pipelinesDir: string;
-  /** Actions directory (~/.config/arc/actions/) */
+  /** Actions directory (~/.config/metafactory/actions/) */
   actionsDir: string;
   /** Claude settings path (~/.claude/settings.json) */
   settingsPath: string;
