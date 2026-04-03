@@ -25,8 +25,16 @@ sections:
     file: docs/agents-md/core-concepts.md
   - position: "after:critical-rules"
     file: docs/agents-md/critical-rules.md
+  - position: "after:critical-rules"
+    file: docs/agents-md/instruction-precedence.md
+  - position: "after:critical-rules"
+    file: docs/agents-md/anti-rationalization.md
+  - position: "after:critical-rules"
+    file: docs/agents-md/tool-policy.md
   - position: "after:sop-table"
     file: docs/agents-md/implementation-workflow.md
+  - position: "after:sop-table"
+    file: docs/agents-md/new-command-procedure.md
   - position: "after:versioning"
     file: docs/agents-md/testing.md
   - position: "after:versioning"
