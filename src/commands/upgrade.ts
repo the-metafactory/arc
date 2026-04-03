@@ -138,7 +138,8 @@ function findConsumerRepos(templates: RulesTemplate[]): string[] {
 export async function upgradePackage(
   db: Database,
   paths: PaiPaths,
-  name: string
+  name: string,
+  opts?: { force?: boolean }
 ): Promise<UpgradeResult> {
   const skill = getSkill(db, name);
   if (!skill) {
@@ -177,7 +178,7 @@ export async function upgradePackage(
   const oldVersion = skill.version;
   const newVersion = manifest.version;
 
-  if (compareSemver(oldVersion, newVersion) >= 0) {
+  if (compareSemver(oldVersion, newVersion) >= 0 && !opts?.force) {
     // Version matches — but for rules packages, still regenerate templates
     // (template content may have changed even if version was already bumped)
     if (manifest.type === "rules" && manifest.provides?.templates?.length) {
@@ -302,18 +303,30 @@ export async function upgradePackage(
 
 /**
  * Upgrade all installed packages that have newer versions.
+ * When force=true, skips the expensive checkUpgrades (git fetch + registry
+ * lookup per package) and instead gets all active packages directly from the DB.
  */
 export async function upgradeAll(
   db: Database,
-  paths: PaiPaths
+  paths: PaiPaths,
+  opts?: { force?: boolean }
 ): Promise<UpgradeResult[]> {
-  const checks = await checkUpgrades(db, paths);
-  const upgradable = checks.filter((c) => c.upgradable);
   const results: UpgradeResult[] = [];
 
-  for (const check of upgradable) {
-    const result = await upgradePackage(db, paths, check.name);
-    results.push(result);
+  if (opts?.force) {
+    // Skip checkUpgrades entirely — just get all active packages from DB
+    const active = listSkills(db).filter((s) => s.status === "active");
+    for (const pkg of active) {
+      const result = await upgradePackage(db, paths, pkg.name, opts);
+      results.push(result);
+    }
+  } else {
+    const checks = await checkUpgrades(db, paths);
+    const upgradable = checks.filter((c) => c.upgradable);
+    for (const check of upgradable) {
+      const result = await upgradePackage(db, paths, check.name);
+      results.push(result);
+    }
   }
 
   return results;
@@ -342,7 +355,7 @@ export function formatCheckResults(results: UpgradeCheckResult[]): string {
   return lines.join("\n");
 }
 
-export function formatUpgradeResults(results: UpgradeResult[]): string {
+export function formatUpgradeResults(results: UpgradeResult[], opts?: { force?: boolean }): string {
   if (!results.length) {
     return "Nothing to upgrade.";
   }
@@ -352,7 +365,11 @@ export function formatUpgradeResults(results: UpgradeResult[]): string {
   for (const r of results) {
     if (r.success) {
       if (r.oldVersion === r.newVersion) {
-        lines.push(`  ${r.name}: already at ${r.oldVersion}`);
+        if (opts?.force) {
+          lines.push(`  ${r.name}: force-upgraded at ${r.oldVersion}`);
+        } else {
+          lines.push(`  ${r.name}: already at ${r.oldVersion}`);
+        }
       } else {
         lines.push(`  ${r.name}: ${r.oldVersion} → ${r.newVersion}`);
       }
@@ -372,6 +389,7 @@ export async function upgradeLibrary(
   db: Database,
   paths: PaiPaths,
   libraryName: string,
+  opts?: { force?: boolean }
 ): Promise<UpgradeResult[]> {
   const artifacts = listByLibrary(db, libraryName);
   if (!artifacts.length) {
@@ -395,7 +413,7 @@ export async function upgradeLibrary(
   // This ensures per-artifact scripts, hooks, capabilities, and symlinks are all handled.
   const results: UpgradeResult[] = [];
   for (const artifact of artifacts) {
-    const result = await upgradePackage(db, paths, artifact.name);
+    const result = await upgradePackage(db, paths, artifact.name, opts);
     results.push(result);
   }
 
