@@ -157,6 +157,26 @@ describe("upgradePackage", () => {
     expect(result.success).toBe(false);
     expect(result.error).toContain("not installed");
   });
+
+  test("with force flag, re-runs upgrade even when at latest version", async () => {
+    const repo = await createMockSkillRepo(env.root, {
+      name: "ForceUpgrade",
+      version: "1.0.0",
+    });
+    await install({ paths: env.paths, db: env.db, repoUrl: repo.url, yes: true });
+
+    // Without force: returns success with same version (short-circuit)
+    const normalResult = await upgradePackage(env.db, env.paths, "ForceUpgrade");
+    expect(normalResult.success).toBe(true);
+    expect(normalResult.oldVersion).toBe("1.0.0");
+    expect(normalResult.newVersion).toBe("1.0.0");
+
+    // With force: still returns success, but runs the full upgrade pipeline
+    const forceResult = await upgradePackage(env.db, env.paths, "ForceUpgrade", { force: true });
+    expect(forceResult.success).toBe(true);
+    expect(forceResult.oldVersion).toBe("1.0.0");
+    expect(forceResult.newVersion).toBe("1.0.0");
+  });
 });
 
 describe("formatCheckResults", () => {

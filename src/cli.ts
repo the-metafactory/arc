@@ -275,13 +275,14 @@ program
   .command("upgrade [name]")
   .description("Upgrade installed packages to latest version")
   .option("--check", "Only check for available upgrades, don't install")
-  .action(async (name: string | undefined, opts: { check?: boolean }) => {
+  .option("--force", "Re-run upgrade pipeline even if already at latest version")
+  .action(async (name: string | undefined, opts: { check?: boolean; force?: boolean }) => {
     const paths = createPaths();
     await ensureDirectories(paths);
     const db = openDatabase(paths.dbPath);
 
-    if (opts.check || !name) {
-      // Check mode or upgrade-all: first show what's available
+    if (opts.check || (!name && !opts.force)) {
+      // Check mode or upgrade-all (without force): first show what's available
       const checks = await checkUpgrades(db, paths);
 
       if (opts.check) {
@@ -301,29 +302,41 @@ program
           console.log(formatUpgradeResults(results));
         }
       }
+    } else if (!name && opts.force) {
+      // Force upgrade all
+      const results = await upgradeAll(db, paths, { force: true });
+      if (!results.length) {
+        console.log("No packages installed.");
+      } else {
+        console.log(formatUpgradeResults(results, { force: true }));
+      }
     } else {
       // Check for library:artifact syntax
-      const libRef = parseLibraryRef(name);
-      let upgradeName = libRef?.artifactName ?? name;
+      const libRef = parseLibraryRef(name!);
+      let upgradeName = libRef?.artifactName ?? name!;
       let isLibraryUpgrade = false;
 
       if (!libRef?.artifactName) {
         // No colon — check if name matches a library
         const { listByLibrary } = await import("./lib/db.js");
-        const libArtifacts = listByLibrary(db, name);
+        const libArtifacts = listByLibrary(db, name!);
         if (libArtifacts.length > 0) {
           isLibraryUpgrade = true;
         }
       }
 
       if (isLibraryUpgrade) {
-        const results = await upgradeLibrary(db, paths, name);
-        console.log(formatUpgradeResults(results));
+        const results = await upgradeLibrary(db, paths, name!, { force: opts.force });
+        console.log(formatUpgradeResults(results, { force: opts.force }));
       } else {
-        const result = await upgradePackage(db, paths, upgradeName);
+        const result = await upgradePackage(db, paths, upgradeName, { force: opts.force });
         if (result.success) {
           if (result.oldVersion === result.newVersion) {
-            console.log(`${result.name} is already at ${result.oldVersion}`);
+            if (opts.force) {
+              console.log(`${result.name}: force-upgraded at ${result.oldVersion}`);
+            } else {
+              console.log(`${result.name} is already at ${result.oldVersion}`);
+            }
           } else {
             console.log(`${result.name}: ${result.oldVersion} → ${result.newVersion}`);
           }
