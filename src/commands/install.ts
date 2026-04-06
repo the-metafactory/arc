@@ -418,7 +418,7 @@ async function installLibrary(
  * Install a single artifact from a library (or standalone).
  * The artifactDir is the resolved directory containing the artifact's manifest.
  */
-async function installSingleArtifact(
+export async function installSingleArtifact(
   opts: InstallOptions,
   artifactDir: string,
   manifest: ArcManifest,

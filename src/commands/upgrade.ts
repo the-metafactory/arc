@@ -5,7 +5,8 @@ import { homedir } from "os";
 import type { PaiPaths, InstalledSkill, SourcesConfig, RulesTemplate } from "../types.js";
 import type { Database } from "bun:sqlite";
 import { listSkills, getSkill, listByLibrary } from "../lib/db.js";
-import { readManifest } from "../lib/manifest.js";
+import { readManifest, readLibraryArtifacts } from "../lib/manifest.js";
+import { installSingleArtifact } from "./install.js";
 import { createSymlink } from "../lib/symlinks.js";
 import { findGitRoot } from "../lib/paths.js";
 import { loadSources } from "../lib/sources.js";
@@ -409,12 +410,48 @@ export async function upgradeLibrary(
     }
   }
 
-  // Upgrade each artifact via upgradePackage (git pull is a no-op since we already pulled).
+  // Upgrade each existing artifact via upgradePackage (git pull is a no-op since we already pulled).
   // This ensures per-artifact scripts, hooks, capabilities, and symlinks are all handled.
   const results: UpgradeResult[] = [];
   for (const artifact of artifacts) {
     const result = await upgradePackage(db, paths, artifact.name, opts);
     results.push(result);
+  }
+
+  // Discover and install new artifacts added to the library manifest since last install
+  if (gitRoot) {
+    const rootManifest = await readManifest(gitRoot);
+    if (rootManifest && rootManifest.type === "library") {
+      const manifestArtifacts = await readLibraryArtifacts(gitRoot, rootManifest);
+      const existingNames = new Set(artifacts.map((a) => a.name));
+
+      for (const { entry, manifest: artifactManifest } of manifestArtifacts) {
+        if (existingNames.has(artifactManifest.name)) continue;
+
+        // New artifact — install it
+        console.log(`  📦 New artifact discovered: ${artifactManifest.name} v${artifactManifest.version}`);
+        const artifactDir = join(gitRoot, entry.path);
+        const installResult = await installSingleArtifact(
+          {
+            paths,
+            db,
+            repoUrl: artifacts[0].repo_url,
+            yes: true,
+          },
+          artifactDir,
+          artifactManifest,
+          libraryName,
+        );
+
+        results.push({
+          success: installResult.success,
+          name: artifactManifest.name,
+          oldVersion: "new",
+          newVersion: installResult.version,
+          error: installResult.error,
+        });
+      }
+    }
   }
 
   return results;
