@@ -429,6 +429,7 @@ export async function upgradeLibrary(
         if (existingNames.has(artifactManifest.name)) continue;
 
         // New artifact — install it
+        console.log(`  📦 New artifact discovered: ${artifactManifest.name} v${artifactManifest.version}`);
         const artifactDir = join(gitRoot, entry.path);
         const installResult = await installSingleArtifact(
           {
