@@ -5,7 +5,7 @@ import { createPaths, ensureDirectories } from "./lib/paths.js";
 import { openDatabase } from "./lib/db.js";
 import { install } from "./commands/install.js";
 import { list, formatList, formatListJson } from "./commands/list.js";
-import { info, formatInfo } from "./commands/info.js";
+import { info, formatInfo, formatInfoJson } from "./commands/info.js";
 import { audit, formatAudit } from "./commands/audit.js";
 import { disable } from "./commands/disable.js";
 import { enable } from "./commands/enable.js";
@@ -162,12 +162,13 @@ program
 
 program
   .command("info <name>")
-  .description("Show details about an installed skill")
-  .action(async (name: string) => {
+  .description("Show details about a package (installed or from registry)")
+  .option("--json", "Output as JSON")
+  .action(async (name: string, opts: { json?: boolean }) => {
     const paths = createPaths();
     const db = openDatabase(paths.dbPath);
-    const result = await info(db, name);
-    console.log(formatInfo(result));
+    const result = await info(db, name, paths);
+    console.log(opts.json ? formatInfoJson(result) : formatInfo(result));
     db.close();
   });
 
