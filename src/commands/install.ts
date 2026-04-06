@@ -8,6 +8,7 @@ import { runScript } from "../lib/scripts.js";
 import { registerHooks, resolveHooksFromManifest } from "../lib/hooks.js";
 import { createArtifactSymlinks, resolveArtifactSourceDir, installNodeDependencies } from "../lib/artifact-installer.js";
 import { wireExtensions } from "../lib/extensions.js";
+import { extractRepoName } from "../lib/repo-name.js";
 
 export interface InstallOptions {
   paths: PaiPaths;
@@ -597,24 +598,4 @@ function readLine(): Promise<string> {
       resolve(data);
     });
   });
-}
-
-/**
- * Extract a reasonable name from a repo URL.
- * Handles: /path/to/repo, git@github.com:user/repo.git, https://github.com/user/repo
- */
-function extractRepoName(url: string): string {
-  // Local path
-  if (url.startsWith("/") || url.startsWith(".")) {
-    const parts = url.split("/").filter(Boolean);
-    return parts[parts.length - 1].replace(/\.git$/, "");
-  }
-
-  // SSH: git@github.com:user/repo.git
-  const sshMatch = url.match(/[:\/]([^\/]+)\.git$/);
-  if (sshMatch) return sshMatch[1];
-
-  // HTTPS: https://github.com/user/repo
-  const parts = url.split("/").filter(Boolean);
-  return parts[parts.length - 1].replace(/\.git$/, "");
 }

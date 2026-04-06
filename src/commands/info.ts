@@ -4,6 +4,7 @@ import type { Database } from "bun:sqlite";
 import { getSkill, listByLibrary } from "../lib/db.js";
 import { readManifest, readLibraryArtifacts, assessRisk, formatCapabilities } from "../lib/manifest.js";
 import { findGitRoot } from "../lib/paths.js";
+import { extractRepoName } from "../lib/repo-name.js";
 import { parseLibraryRef } from "../lib/artifact-installer.js";
 import { loadSources } from "../lib/sources.js";
 import { findInAllSources } from "../lib/remote-registry.js";
@@ -25,78 +26,98 @@ export interface InfoResult {
 }
 
 /**
- * Get detailed info about an installed skill or library.
- * If not installed, attempts to resolve from registry and clone to cache for inspection.
+ * Get detailed info about a package (installed or from registry).
+ * If not installed, attempts to resolve from configured sources.
  */
 export async function info(
   db: Database,
   name: string,
   paths?: PaiPaths
 ): Promise<InfoResult> {
-  // Parse library:artifact syntax
   const libRef = parseLibraryRef(name);
   const lookupName = libRef?.artifactName ? libRef.libraryName : name;
   const artifactFilter = libRef?.artifactName;
 
-  // 1. Check installed packages first
-  const skill = getSkill(db, lookupName);
+  // 1. Try installed packages
+  const installed = await resolveInstalled(db, lookupName, artifactFilter);
+  if (installed) return installed;
 
-  if (skill) {
-    // If filtering by artifact name within an installed standalone package, that doesn't make sense
-    if (artifactFilter) {
-      // Check if lookupName is a library with this artifact installed
-      const libraryArtifacts = listByLibrary(db, lookupName);
-      if (libraryArtifacts.length > 0) {
-        const match = libraryArtifacts.find((a) => a.name === artifactFilter);
-        if (match) {
-          const manifest = await readManifest(match.install_path);
-          const releaseNotes = await fetchReleaseNotesFromUrl(match.repo_url, match.version);
-          return { skill: match, manifest, releaseNotes };
-        }
-        return { skill: null, manifest: null, releaseNotes: null, error: `Artifact '${artifactFilter}' not found in library '${lookupName}'` };
-      }
-    }
-    const manifest = await readManifest(skill.install_path);
-    const releaseNotes = await fetchReleaseNotes(skill);
-    return { skill, manifest, releaseNotes };
-  }
-
-  // Check if name matches an installed library
-  if (!artifactFilter) {
-    const libraryArtifacts = listByLibrary(db, lookupName);
-    if (libraryArtifacts.length > 0) {
-      const gitRoot = findGitRoot(libraryArtifacts[0].install_path);
-      const manifest = gitRoot ? await readManifest(gitRoot) : null;
-      const releaseNotes = gitRoot ? await fetchReleaseNotesFromUrl(libraryArtifacts[0].repo_url, manifest?.version ?? libraryArtifacts[0].version) : null;
-      return { skill: null, manifest, releaseNotes, libraryArtifacts };
-    }
-  } else {
-    // library:artifact — check if library is installed
-    const libraryArtifacts = listByLibrary(db, lookupName);
-    if (libraryArtifacts.length > 0) {
-      const match = libraryArtifacts.find((a) => a.name === artifactFilter);
-      if (match) {
-        const manifest = await readManifest(match.install_path);
-        const releaseNotes = await fetchReleaseNotesFromUrl(match.repo_url, match.version);
-        return { skill: match, manifest, releaseNotes };
-      }
-      return { skill: null, manifest: null, releaseNotes: null, error: `Artifact '${artifactFilter}' not found in library '${lookupName}'` };
-    }
-  }
-
-  // 2. Not installed — try to resolve from registry
+  // 2. Not installed — try registry
   if (!paths) {
-    return { skill: null, manifest: null, releaseNotes: null, error: `'${name}' is not installed` };
+    return errorResult(`'${name}' is not installed`);
   }
 
-  return resolveRemoteInfo(name, lookupName, artifactFilter, paths);
+  return resolveRemote(name, lookupName, artifactFilter, paths);
 }
 
 /**
- * Resolve info for an uninstalled package by looking it up in configured sources,
- * cloning to cache, and reading the manifest.
+ * Look up a package from installed DB entries.
+ * Returns null if not found in installed packages.
  */
-async function resolveRemoteInfo(
+async function resolveInstalled(
+  db: Database,
+  lookupName: string,
+  artifactFilter: string | undefined
+): Promise<InfoResult | null> {
+  // Direct skill match
+  const skill = getSkill(db, lookupName);
+  if (skill && !artifactFilter) {
+    const manifest = await readManifest(skill.install_path);
+    const releaseNotes = await fetchReleaseNotesFromUrl(skill.repo_url, skill.version);
+    return { skill, manifest, releaseNotes };
+  }
+
+  // Library artifact lookup (handles both "skill exists but filtering" and "no skill but library installed")
+  if (artifactFilter) {
+    return findInstalledLibraryArtifact(db, lookupName, artifactFilter);
+  }
+
+  // Whole library lookup (no artifact filter)
+  const libraryArtifacts = listByLibrary(db, lookupName);
+  if (libraryArtifacts.length > 0) {
+    const gitRoot = findGitRoot(libraryArtifacts[0].install_path);
+    const manifest = gitRoot ? await readManifest(gitRoot) : null;
+    const releaseNotes = gitRoot
+      ? await fetchReleaseNotesFromUrl(libraryArtifacts[0].repo_url, manifest?.version ?? libraryArtifacts[0].version)
+      : null;
+    return { skill: null, manifest, releaseNotes, libraryArtifacts };
+  }
+
+  // Not installed at all — also check for the standalone skill case when skill exists but artifactFilter wasn't set
+  if (skill) {
+    const manifest = await readManifest(skill.install_path);
+    const releaseNotes = await fetchReleaseNotesFromUrl(skill.repo_url, skill.version);
+    return { skill, manifest, releaseNotes };
+  }
+
+  return null;
+}
+
+/**
+ * Find a specific artifact within an installed library.
+ */
+async function findInstalledLibraryArtifact(
+  db: Database,
+  libraryName: string,
+  artifactName: string
+): Promise<InfoResult | null> {
+  const libraryArtifacts = listByLibrary(db, libraryName);
+  if (libraryArtifacts.length === 0) return null;
+
+  const match = libraryArtifacts.find((a) => a.name === artifactName);
+  if (match) {
+    const manifest = await readManifest(match.install_path);
+    const releaseNotes = await fetchReleaseNotesFromUrl(match.repo_url, match.version);
+    return { skill: match, manifest, releaseNotes };
+  }
+
+  return errorResult(`Artifact '${artifactName}' not found in library '${libraryName}'`);
+}
+
+/**
+ * Resolve info for an uninstalled package via registry lookup and shallow clone.
+ */
+async function resolveRemote(
   originalName: string,
   lookupName: string,
   artifactFilter: string | undefined,
@@ -106,32 +127,20 @@ async function resolveRemoteInfo(
   const found = await findInAllSources(sources, lookupName, paths.cachePath);
 
   if (!found) {
-    return { skill: null, manifest: null, releaseNotes: null, error: `'${originalName}' not found (not installed and not in any configured source)` };
+    return errorResult(`'${originalName}' not found (not installed and not in any configured source)`);
   }
 
-  // Clone to cache dir (not repos dir — this is just for inspection)
   const repoUrl = found.entry.source;
-  const repoName = extractRepoName(repoUrl);
-  const cacheCloneDir = join(paths.cachePath, "info", repoName);
+  const cacheCloneDir = join(paths.cachePath, "info", extractRepoName(repoUrl));
 
-  if (!existsSync(cacheCloneDir)) {
-    const cloneResult = Bun.spawnSync(["git", "clone", "--depth", "1", repoUrl, cacheCloneDir], {
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    if (cloneResult.exitCode !== 0) {
-      return {
-        skill: null,
-        manifest: null,
-        releaseNotes: null,
-        error: `Failed to fetch package info: ${cloneResult.stderr.toString().trim()}`,
-      };
-    }
+  const cloneError = cloneToCache(repoUrl, cacheCloneDir);
+  if (cloneError) {
+    return errorResult(`Failed to fetch package info: ${cloneError}`);
   }
 
   const manifest = await readManifest(cacheCloneDir);
   if (!manifest) {
-    return { skill: null, manifest: null, releaseNotes: null, error: `'${lookupName}' has no arc-manifest.yaml` };
+    return errorResult(`'${lookupName}' has no arc-manifest.yaml`);
   }
 
   const remote = {
@@ -142,42 +151,53 @@ async function resolveRemoteInfo(
 
   const releaseNotes = await fetchReleaseNotesFromUrl(repoUrl, manifest.version);
 
-  // Library: if filtering by artifact, find the specific one
   if (manifest.type === "library" && artifactFilter) {
-    try {
-      const artifacts = await readLibraryArtifacts(cacheCloneDir, manifest);
-      const match = artifacts.find((a) => a.manifest.name === artifactFilter);
-      if (!match) {
-        const available = artifacts.map((a) => a.manifest.name).join(", ");
-        return { skill: null, manifest: null, releaseNotes: null, error: `Artifact '${artifactFilter}' not found in library '${lookupName}'. Available: ${available}` };
-      }
-      return { skill: null, manifest: match.manifest, releaseNotes: null, remote };
-    } catch (err: any) {
-      return { skill: null, manifest: null, releaseNotes: null, error: `Failed to read library artifacts: ${err.message}` };
-    }
+    return resolveRemoteLibraryArtifact(cacheCloneDir, manifest, lookupName, artifactFilter, remote);
   }
 
-  // Library: return full library info with artifacts read from manifest
-  if (manifest.type === "library") {
-    return { skill: null, manifest, releaseNotes, remote };
-  }
-
-  // Standalone package
   return { skill: null, manifest, releaseNotes, remote };
 }
 
 /**
- * Extract repo name from a URL for cache directory naming.
+ * Find a specific artifact within a remote (uninstalled) library.
  */
-function extractRepoName(url: string): string {
-  return url.replace(/\.git$/, "").split("/").pop() ?? "unknown";
+async function resolveRemoteLibraryArtifact(
+  cacheCloneDir: string,
+  manifest: ArcManifest,
+  libraryName: string,
+  artifactName: string,
+  remote: InfoResult["remote"]
+): Promise<InfoResult> {
+  const artifacts = await readLibraryArtifacts(cacheCloneDir, manifest);
+  const match = artifacts.find((a) => a.manifest.name === artifactName);
+  if (!match) {
+    const available = artifacts.map((a) => a.manifest.name).join(", ");
+    return errorResult(`Artifact '${artifactName}' not found in library '${libraryName}'. Available: ${available}`);
+  }
+  return { skill: null, manifest: match.manifest, releaseNotes: null, remote };
 }
 
 /**
- * Fetch release notes for the installed version.
+ * Shallow-clone a repo to cache dir if not already present.
+ * Returns an error string on failure, null on success.
  */
-async function fetchReleaseNotes(skill: InstalledSkill): Promise<string | null> {
-  return fetchReleaseNotesFromUrl(skill.repo_url, skill.version);
+function cloneToCache(repoUrl: string, cacheCloneDir: string): string | null {
+  if (existsSync(cacheCloneDir)) return null;
+
+  const result = Bun.spawnSync(["git", "clone", "--depth", "1", repoUrl, cacheCloneDir], {
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+
+  if (result.exitCode !== 0) {
+    return result.stderr.toString().trim();
+  }
+
+  return null;
+}
+
+function errorResult(error: string): InfoResult {
+  return { skill: null, manifest: null, releaseNotes: null, error };
 }
 
 /**
@@ -199,8 +219,10 @@ async function fetchReleaseNotesFromUrl(repoUrl: string, version: string): Promi
       const body = result.stdout.toString().trim();
       if (body) return body;
     }
-  } catch {
-    // gh not available or network issue — skip
+  } catch (err: unknown) {
+    // gh CLI not available or network timeout — release notes are non-critical
+    const message = err instanceof Error ? err.message : String(err);
+    console.debug(`Skipping release notes for ${nwo}@${tag}: ${message}`);
   }
 
   return null;
@@ -224,7 +246,7 @@ export function formatInfo(result: InfoResult): string {
 
   // Installed library — no skill entry, but has artifacts
   if (!result.skill && result.libraryArtifacts?.length) {
-    return formatLibraryInfo(result);
+    return formatInstalledLibraryInfo(result);
   }
 
   const { skill, manifest } = result;
@@ -262,16 +284,7 @@ export function formatInfo(result: InfoResult): string {
     }
   }
 
-  if (result.releaseNotes) {
-    lines.push("");
-    lines.push("  Release Notes:");
-    for (const line of result.releaseNotes.split("\n").slice(0, 15)) {
-      lines.push(`    ${line}`);
-    }
-    if (result.releaseNotes.split("\n").length > 15) {
-      lines.push("    ...(truncated)");
-    }
-  }
+  appendReleaseNotes(lines, result.releaseNotes);
 
   return lines.join("\n");
 }
@@ -309,16 +322,7 @@ function formatRemoteInfo(result: InfoResult): string {
     }
   }
 
-  if (result.releaseNotes) {
-    lines.push("");
-    lines.push("  Release Notes:");
-    for (const line of result.releaseNotes.split("\n").slice(0, 15)) {
-      lines.push(`    ${line}`);
-    }
-    if (result.releaseNotes.split("\n").length > 15) {
-      lines.push("    ...(truncated)");
-    }
-  }
+  appendReleaseNotes(lines, result.releaseNotes);
 
   lines.push("");
   lines.push(`  Install: arc install ${manifest.name}`);
@@ -348,22 +352,12 @@ function formatRemoteLibraryInfo(result: InfoResult): string {
     lines.push(`  Artifacts (${manifest.artifacts.length}):`);
     for (const a of manifest.artifacts) {
       const desc = a.description ? ` — ${a.description}` : "";
-      // Use the path's last segment as a display name if no description
       const displayName = a.path.split("/").pop() ?? a.path;
       lines.push(`    ${displayName}${desc}`);
     }
   }
 
-  if (result.releaseNotes) {
-    lines.push("");
-    lines.push("  Release Notes:");
-    for (const line of result.releaseNotes.split("\n").slice(0, 15)) {
-      lines.push(`    ${line}`);
-    }
-    if (result.releaseNotes.split("\n").length > 15) {
-      lines.push("    ...(truncated)");
-    }
-  }
+  appendReleaseNotes(lines, result.releaseNotes);
 
   lines.push("");
   lines.push(`  Install all:  arc install ${manifest.name}`);
@@ -435,9 +429,9 @@ export function formatInfoJson(result: InfoResult): string {
 }
 
 /**
- * Format library info from its installed artifacts.
+ * Format installed library info from its artifacts.
  */
-function formatLibraryInfo(result: InfoResult): string {
+function formatInstalledLibraryInfo(result: InfoResult): string {
   const { manifest, libraryArtifacts } = result;
   const artifacts = libraryArtifacts ?? [];
 
@@ -474,16 +468,24 @@ function formatLibraryInfo(result: InfoResult): string {
     }
   }
 
-  if (result.releaseNotes) {
-    lines.push("");
-    lines.push("  Release Notes:");
-    for (const line of result.releaseNotes.split("\n").slice(0, 15)) {
-      lines.push(`    ${line}`);
-    }
-    if (result.releaseNotes.split("\n").length > 15) {
-      lines.push("    ...(truncated)");
-    }
-  }
+  appendReleaseNotes(lines, result.releaseNotes);
 
   return lines.join("\n");
+}
+
+/**
+ * Append truncated release notes to output lines.
+ */
+function appendReleaseNotes(lines: string[], releaseNotes: string | null): void {
+  if (!releaseNotes) return;
+
+  const noteLines = releaseNotes.split("\n");
+  lines.push("");
+  lines.push("  Release Notes:");
+  for (const line of noteLines.slice(0, 15)) {
+    lines.push(`    ${line}`);
+  }
+  if (noteLines.length > 15) {
+    lines.push("    ...(truncated)");
+  }
 }
