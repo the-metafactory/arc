@@ -422,7 +422,13 @@ export async function upgradeLibrary(
   if (gitRoot) {
     const rootManifest = await readManifest(gitRoot);
     if (rootManifest && rootManifest.type === "library") {
-      const manifestArtifacts = await readLibraryArtifacts(gitRoot, rootManifest);
+      let manifestArtifacts: Awaited<ReturnType<typeof readLibraryArtifacts>>;
+      try {
+        manifestArtifacts = await readLibraryArtifacts(gitRoot, rootManifest);
+      } catch {
+        // Some artifacts may not have manifests yet (WIP) — skip new artifact discovery
+        return results;
+      }
       const existingNames = new Set(artifacts.map((a) => a.name));
 
       for (const { entry, manifest: artifactManifest } of manifestArtifacts) {
