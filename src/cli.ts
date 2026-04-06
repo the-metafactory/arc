@@ -9,7 +9,7 @@ import { info, formatInfo } from "./commands/info.js";
 import { audit, formatAudit } from "./commands/audit.js";
 import { disable } from "./commands/disable.js";
 import { enable } from "./commands/enable.js";
-import { remove } from "./commands/remove.js";
+import { remove, removeLibrary } from "./commands/remove.js";
 import { verify, formatVerify } from "./commands/verify.js";
 import { init } from "./commands/init.js";
 import { upgradeCore, formatUpgrade } from "./commands/upgrade-core.js";
@@ -253,7 +253,6 @@ program
         console.log(`🗑️  Removed ${result.name}`);
       } else {
         // Artifact not found — check if name matches a library
-        const { removeLibrary } = await import("./commands/remove.js");
         const libResult = await removeLibrary(db, paths, removeName);
         if (libResult.success) {
           console.log(`🗑️  Removed ${libResult.removedCount} artifact(s) from library '${removeName}'`);
