@@ -13,6 +13,7 @@ export interface RemoveResult {
   success: boolean;
   name?: string;
   error?: string;
+  removedCount?: number;
 }
 
 /**
@@ -118,4 +119,36 @@ export async function remove(
   }
 
   return { success: true, name };
+}
+
+/**
+ * Remove all artifacts belonging to a library package.
+ * Falls back from artifact lookup to library lookup.
+ */
+export async function removeLibrary(
+  db: Database,
+  paths: PaiPaths,
+  libraryName: string
+): Promise<RemoveResult> {
+  const artifacts = listByLibrary(db, libraryName);
+  if (!artifacts.length) {
+    return {
+      success: false,
+      error: `Package '${libraryName}' is not installed (checked as both artifact and library)`,
+    };
+  }
+
+  const results: RemoveResult[] = [];
+  for (const artifact of artifacts) {
+    const result = await remove(db, paths, artifact.name);
+    results.push(result);
+  }
+
+  const removedCount = results.filter((r) => r.success).length;
+  const allSuccess = results.every((r) => r.success);
+  return {
+    success: allSuccess,
+    name: libraryName,
+    removedCount,
+  };
 }

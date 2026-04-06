@@ -252,8 +252,15 @@ program
       if (result.success) {
         console.log(`🗑️  Removed ${result.name}`);
       } else {
-        console.error(`❌ ${result.error}`);
-        process.exit(1);
+        // Artifact not found — check if name matches a library
+        const { removeLibrary } = await import("./commands/remove.js");
+        const libResult = await removeLibrary(db, paths, removeName);
+        if (libResult.success) {
+          console.log(`🗑️  Removed ${libResult.removedCount} artifact(s) from library '${removeName}'`);
+        } else {
+          console.error(`❌ ${libResult.error}`);
+          process.exit(1);
+        }
       }
     }
 
