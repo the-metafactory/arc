@@ -154,3 +154,13 @@ features:
     iteration: 6
     depends: [A-200, A-404]
     description: "arc info <name> for uninstalled packages — resolve from registry, clone to cache, show manifest, capabilities, and library artifacts list"
+
+  # External runtime dependencies — DD-72 plug-and-play prerequisite
+  - id: A-600
+    name: External runtime dependency shims
+    status: planned
+    iteration: 10
+    effort: m
+    issue: 47
+    depends: [A-100, A-101]
+    description: "externalDeps[] manifest field + install postcheck. arc detects external binaries (claude, gh, bun, etc.) declared by a package, finds them across known paths (native installer, npm, fnm, homebrew), and creates shims in paths.shimDir (~/bin) so spawned subprocesses on stripped PATH (launchd, nohup, system services) can resolve them. Includes arc doctor command for first-run diagnosis. Closes the DD-72 gap surfaced by 2026-04-07 grove-bot/Luna outage where Bun.spawn(['claude', ...]) hit ENOENT because the bot inherited a minimal PATH without ~/.local/bin."
