@@ -80,15 +80,28 @@ export async function fetchRemoteRegistry(
   try {
     const headers: Record<string, string> = {};
 
+    // raw.githubusercontent.com does NOT honor Authorization headers for
+    // private repos — only browser session cookies. For private repos we
+    // have to go through the Contents API, which respects PAT auth.
+    // Rewrite raw URLs transparently so existing sources.yaml entries
+    // keep working unchanged.
+    let fetchUrl = source.url;
+    const rewritten = rewriteRawToContentsApi(source.url);
+    if (rewritten) {
+      fetchUrl = rewritten;
+      headers["Accept"] = "application/vnd.github.raw";
+      headers["X-GitHub-Api-Version"] = "2022-11-28";
+    }
+
     // Add GitHub token for private repos accessed via raw.githubusercontent.com or api.github.com
-    if (source.url.includes("github")) {
+    if (fetchUrl.includes("github")) {
       const token = process.env.GITHUB_TOKEN ?? getGhToken();
       if (token) {
-        headers["Authorization"] = `token ${token}`;
+        headers["Authorization"] = `Bearer ${token}`;
       }
     }
 
-    const response = await fetch(source.url, {
+    const response = await fetch(fetchUrl, {
       signal: AbortSignal.timeout(10_000),
       headers,
     });
@@ -243,6 +256,28 @@ export function formatSourcedSearch(results: SourcedSearchResult[]): string {
   }
 
   return lines.join("\n");
+}
+
+/**
+ * Rewrite a raw.githubusercontent.com URL to the equivalent GitHub
+ * Contents API URL. Returns null if the URL doesn't match the raw
+ * pattern (in which case the caller should fetch the original URL
+ * unchanged).
+ *
+ * Input:  https://raw.githubusercontent.com/OWNER/REPO/REF/PATH/TO/FILE
+ * Output: https://api.github.com/repos/OWNER/REPO/contents/PATH/TO/FILE?ref=REF
+ *
+ * The Contents API honors PAT authentication for private repos, which
+ * raw.githubusercontent.com does not. With Accept: application/vnd.github.raw
+ * the response body is the raw file content (same shape as the raw URL).
+ */
+export function rewriteRawToContentsApi(url: string): string | null {
+  const match = url.match(
+    /^https:\/\/raw\.githubusercontent\.com\/([^/]+)\/([^/]+)\/([^/]+)\/(.+)$/,
+  );
+  if (!match) return null;
+  const [, owner, repo, ref, path] = match;
+  return `https://api.github.com/repos/${owner}/${repo}/contents/${path}?ref=${encodeURIComponent(ref!)}`;
 }
 
 /** Try to get GitHub token from gh CLI auth */
