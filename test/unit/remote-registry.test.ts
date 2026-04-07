@@ -4,6 +4,7 @@ import {
   fetchRemoteRegistry,
   searchAllSources,
   formatSourcedSearch,
+  rewriteRawToContentsApi,
 } from "../../src/lib/remote-registry.js";
 import type { RegistryConfig, SourcesConfig, RegistrySource } from "../../src/types.js";
 import YAML from "yaml";
@@ -171,6 +172,42 @@ describe("searchAllSources", () => {
 
     // Should not find anything (disabled source skipped, no local fallback since no registry)
     expect(results).toHaveLength(0);
+  });
+});
+
+describe("rewriteRawToContentsApi", () => {
+  test("rewrites a raw.githubusercontent.com URL to the Contents API", () => {
+    const out = rewriteRawToContentsApi(
+      "https://raw.githubusercontent.com/the-metafactory/meta-factory/main/REGISTRY.yaml",
+    );
+    expect(out).toBe(
+      "https://api.github.com/repos/the-metafactory/meta-factory/contents/REGISTRY.yaml?ref=main",
+    );
+  });
+
+  test("preserves nested paths", () => {
+    const out = rewriteRawToContentsApi(
+      "https://raw.githubusercontent.com/owner/repo/branch/path/to/file.yaml",
+    );
+    expect(out).toBe(
+      "https://api.github.com/repos/owner/repo/contents/path/to/file.yaml?ref=branch",
+    );
+  });
+
+  test("encodes refs containing slashes", () => {
+    const out = rewriteRawToContentsApi(
+      "https://raw.githubusercontent.com/owner/repo/release%2Fv1/file.yaml",
+    );
+    expect(out).not.toBeNull();
+    expect(out).toContain("?ref=");
+  });
+
+  test("returns null for non-raw URLs", () => {
+    expect(rewriteRawToContentsApi("https://example.com/file.yaml")).toBeNull();
+    expect(
+      rewriteRawToContentsApi("https://api.github.com/repos/o/r/contents/f.yaml"),
+    ).toBeNull();
+    expect(rewriteRawToContentsApi("file:///tmp/registry.yaml")).toBeNull();
   });
 });
 
