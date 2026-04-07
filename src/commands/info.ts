@@ -83,13 +83,6 @@ async function resolveInstalled(
     return { skill: null, manifest, releaseNotes, libraryArtifacts };
   }
 
-  // Not installed at all — also check for the standalone skill case when skill exists but artifactFilter wasn't set
-  if (skill) {
-    const manifest = await readManifest(skill.install_path);
-    const releaseNotes = await fetchReleaseNotesFromUrl(skill.repo_url, skill.version);
-    return { skill, manifest, releaseNotes };
-  }
-
   return null;
 }
 
