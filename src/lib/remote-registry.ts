@@ -44,10 +44,10 @@ export async function fetchRemoteRegistry(
   cachePath: string,
   forceRefresh?: boolean
 ): Promise<RegistryConfig | null> {
-  // metafactory API sources are handled by a dedicated client (F-3).
-  // Skip gracefully here so arc search/update don't choke on HTML responses.
+  // metafactory API sources use the dedicated API client
   if (source.type === "metafactory") {
-    return null;
+    const { fetchMetafactoryRegistry } = await import("./metafactory-api.js");
+    return fetchMetafactoryRegistry(source, cachePath, forceRefresh);
   }
 
   // Local file source — read directly, no caching

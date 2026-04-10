@@ -277,6 +277,54 @@ export interface DeviceAuthResult {
   errorCode?: "expired" | "denied" | "timeout" | "network" | "no_source" | "wrong_type";
 }
 
+/** Package summary from metafactory API list endpoint */
+export interface MetafactoryPackageListItem {
+  namespace: string;
+  name: string;
+  display_name: string | null;
+  description: string | null;
+  type: string;
+  license: string;
+  latest_version: string | null;
+  publisher: {
+    display_name: string | null;
+    tier: string | null;
+    mfa_enabled: boolean;
+  };
+  created_at: number;
+  updated_at: number;
+}
+
+/** Paginated list response from metafactory API */
+export interface MetafactoryPackageListResponse {
+  packages: MetafactoryPackageListItem[];
+  total: number;
+  page: number;
+  per_page: number;
+}
+
+
+/** Detailed package info from metafactory API */
+export interface MetafactoryPackageDetail {
+  namespace: string;
+  name: string;
+  display_name: string | null;
+  description: string | null;
+  type: string;
+  license: string;
+  latest_version: string | null;
+  versions: string[];
+  publisher: {
+    display_name: string | null;
+    tier: string | null;
+    mfa_enabled: boolean;
+    github_username: string | null;
+  };
+  sponsor: { display_name: string; tier: string; github_username: string | null } | null;
+  created_at: number;
+  updated_at: number;
+}
+
 /** A search result annotated with its source */
 export interface SourcedSearchResult {
   entry: RegistryEntry;
