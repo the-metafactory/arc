@@ -35,6 +35,8 @@ import {
   formatCatalogSearch,
 } from "./commands/catalog.js";
 import type { CatalogEntry, ArtifactType, PackageTier, RegistrySource, SourceType } from "./types.js";
+import { login } from "./commands/login.js";
+import { logout } from "./commands/logout.js";
 import { loadCatalog, saveCatalog, findEntry } from "./lib/catalog.js";
 import {
   loadSources,
@@ -558,6 +560,43 @@ source
       console.log(`Removed source "${name}"`);
     } catch (err: any) {
       console.error(`Error: ${err.message}`);
+      process.exit(1);
+    }
+  });
+
+// ── Auth commands ──────────────────────────────────────────
+
+program
+  .command("login")
+  .description("Authenticate with metafactory registry")
+  .option("-s, --source <name>", "Target source name (default: first metafactory source)")
+  .option("-f, --force", "Re-authenticate even if already logged in")
+  .action(async (opts: { source?: string; force?: boolean }) => {
+    const paths = createPaths();
+    const result = await login({ paths, sourceName: opts.source, force: opts.force });
+
+    if (result.success) {
+      console.log(`Logged in to ${result.sourceName}`);
+      if (result.scope) console.log(`  Scope: ${result.scope}`);
+      if (result.expiresAt) console.log(`  Expires: ${new Date(result.expiresAt * 1000).toISOString()}`);
+    } else {
+      console.error(`Error: ${result.error}`);
+      process.exit(1);
+    }
+  });
+
+program
+  .command("logout")
+  .description("Remove authentication from metafactory source")
+  .option("-s, --source <name>", "Target source name (default: first metafactory source)")
+  .action(async (opts: { source?: string }) => {
+    const paths = createPaths();
+    const result = await logout({ paths, sourceName: opts.source });
+
+    if (result.success) {
+      console.log(`Logged out from ${result.sourceName}`);
+    } else {
+      console.error(`Error: ${result.error}`);
       process.exit(1);
     }
   });

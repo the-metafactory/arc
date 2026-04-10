@@ -248,6 +248,35 @@ export interface SourcesConfig {
   sources: RegistrySource[];
 }
 
+/** Response from POST /api/v1/auth/cli/initiate */
+export interface DeviceCodeResponse {
+  device_code: string;
+  user_code: string;
+  verification_uri: string;
+  expires_in: number;
+  interval: number;
+}
+
+/** Response from POST /api/v1/auth/cli/verify */
+export interface DeviceVerifyResponse {
+  status: "pending" | "approved" | "denied";
+  token?: string;
+  token_id?: string;
+  scope?: string;
+  expires_at?: number;
+  expires_in?: number;
+}
+
+/** Result of the complete device code auth flow */
+export interface DeviceAuthResult {
+  success: boolean;
+  token?: string;
+  expiresAt?: number;
+  scope?: string;
+  error?: string;
+  errorCode?: "expired" | "denied" | "timeout" | "network" | "no_source" | "wrong_type";
+}
+
 /** A search result annotated with its source */
 export interface SourcedSearchResult {
   entry: RegistryEntry;
