@@ -119,6 +119,27 @@ export function removeSource(
   config.sources.splice(idx, 1);
 }
 
+/** Find a metafactory source by name or return the first one. */
+export function findMetafactorySource(
+  config: SourcesConfig,
+  sourceName?: string,
+): { source: RegistrySource } | { error: string } {
+  if (sourceName) {
+    const source = config.sources.find((s) => s.name === sourceName);
+    if (!source) return { error: `Source "${sourceName}" not found` };
+    if (getSourceType(source) !== "metafactory") {
+      return { error: `Source "${source.name}" is type "${getSourceType(source)}", not "metafactory". Login is only for metafactory sources.` };
+    }
+    return { source };
+  }
+
+  const source = config.sources.find((s) => getSourceType(s) === "metafactory");
+  if (!source) {
+    return { error: "No metafactory source configured. Run: arc source add metafactory https://meta-factory.ai --type metafactory" };
+  }
+  return { source };
+}
+
 export function formatSourceList(config: SourcesConfig): string {
   if (!config.sources.length) return "No sources configured.";
 
