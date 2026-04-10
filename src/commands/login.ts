@@ -1,5 +1,5 @@
 import type { PaiPaths } from "../types.js";
-import { loadSources, saveSources, getSourceType } from "../lib/sources.js";
+import { loadSources, saveSources, findMetafactorySource } from "../lib/sources.js";
 import { initiateDeviceCode, pollForToken, openBrowser } from "../lib/device-auth.js";
 
 export interface LoginOptions {
@@ -19,30 +19,11 @@ export interface LoginResult {
 export async function login(opts: LoginOptions): Promise<LoginResult> {
   const config = await loadSources(opts.paths.sourcesPath);
 
-  // Find target source
-  let source;
-  if (opts.sourceName) {
-    source = config.sources.find((s) => s.name === opts.sourceName);
-    if (!source) {
-      return { success: false, error: `Source "${opts.sourceName}" not found` };
-    }
-  } else {
-    source = config.sources.find((s) => getSourceType(s) === "metafactory");
-    if (!source) {
-      return {
-        success: false,
-        error: "No metafactory source configured. Run: arc source add metafactory https://meta-factory.ai --type metafactory",
-      };
-    }
+  const found = findMetafactorySource(config, opts.sourceName);
+  if ("error" in found) {
+    return { success: false, error: found.error };
   }
-
-  // Validate type
-  if (getSourceType(source) !== "metafactory") {
-    return {
-      success: false,
-      error: `Source "${source.name}" is type "${getSourceType(source)}", not "metafactory". Login is only for metafactory sources.`,
-    };
-  }
+  const source = found.source;
 
   // Check existing token
   if (source.token && !opts.force) {

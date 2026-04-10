@@ -1,5 +1,5 @@
 import type { PaiPaths } from "../types.js";
-import { loadSources, saveSources, getSourceType } from "../lib/sources.js";
+import { loadSources, saveSources, findMetafactorySource } from "../lib/sources.js";
 
 export interface LogoutOptions {
   paths: PaiPaths;
@@ -15,27 +15,11 @@ export interface LogoutResult {
 export async function logout(opts: LogoutOptions): Promise<LogoutResult> {
   const config = await loadSources(opts.paths.sourcesPath);
 
-  // Find target source
-  let source;
-  if (opts.sourceName) {
-    source = config.sources.find((s) => s.name === opts.sourceName);
-    if (!source) {
-      return { success: false, error: `Source "${opts.sourceName}" not found` };
-    }
-  } else {
-    source = config.sources.find((s) => getSourceType(s) === "metafactory");
-    if (!source) {
-      return { success: false, error: "No metafactory source configured" };
-    }
+  const found = findMetafactorySource(config, opts.sourceName);
+  if ("error" in found) {
+    return { success: false, error: found.error };
   }
-
-  // Validate type
-  if (getSourceType(source) !== "metafactory") {
-    return {
-      success: false,
-      error: `Source "${source.name}" is type "${getSourceType(source)}", not "metafactory".`,
-    };
-  }
+  const source = found.source;
 
   // Check token exists
   if (!source.token) {

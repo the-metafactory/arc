@@ -88,8 +88,8 @@ export async function pollForToken(
 
       // Unexpected status
       await sleep(intervalMs);
-    } catch {
-      // Network error -- retry, don't abort
+    } catch (_err) {
+      // Network error -- retry, don't abort. Caller handles timeout.
       await sleep(intervalMs);
     }
   }
@@ -106,7 +106,8 @@ export function openBrowser(url: string): boolean {
     const cmd = process.platform === "darwin" ? "open" : "xdg-open";
     Bun.spawn([cmd, url], { stdout: "ignore", stderr: "ignore" });
     return true;
-  } catch {
+  } catch (_err) {
+    // spawn failed -- caller handles via return value
     return false;
   }
 }
