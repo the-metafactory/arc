@@ -26,12 +26,16 @@ afterEach(async () => {
 describe("loadSources", () => {
   test("creates default sources.yaml if missing", async () => {
     const config = await loadSources(env.paths.sourcesPath);
-    expect(config.sources).toHaveLength(1);
+    expect(config.sources).toHaveLength(2);
+    // Primary: metafactory API source
     expect(config.sources[0].name).toBe("metafactory");
     expect(config.sources[0].url).toBe("https://meta-factory.ai");
     expect(config.sources[0].type).toBe("metafactory");
     expect(config.sources[0].tier).toBe("official");
-    expect(config.sources[0].enabled).toBe(true);
+    // Fallback: REGISTRY.yaml (works until F-3 lands)
+    expect(config.sources[1].name).toBe("metafactory-registry");
+    expect(config.sources[1].tier).toBe("community");
+    expect(config.sources[1].type).toBeUndefined();
   });
 
   test("loads valid sources.yaml", async () => {
@@ -53,7 +57,7 @@ describe("loadSources", () => {
     await Bun.write(env.paths.sourcesPath, "foo: bar\n");
 
     const config = await loadSources(env.paths.sourcesPath);
-    expect(config.sources).toHaveLength(1);
+    expect(config.sources).toHaveLength(2);
     expect(config.sources[0].name).toBe("metafactory");
   });
 
@@ -61,7 +65,7 @@ describe("loadSources", () => {
     await Bun.write(env.paths.sourcesPath, "");
 
     const config = await loadSources(env.paths.sourcesPath);
-    expect(config.sources).toHaveLength(1);
+    expect(config.sources).toHaveLength(2);
   });
 });
 
@@ -89,8 +93,8 @@ describe("addSource", () => {
       tier: "official",
       enabled: true,
     });
-    expect(config.sources).toHaveLength(2);
-    expect(config.sources[1].name).toBe("new-hub");
+    expect(config.sources).toHaveLength(3);
+    expect(config.sources[2].name).toBe("new-hub");
   });
 
   test("throws on duplicate name", () => {
@@ -110,7 +114,8 @@ describe("removeSource", () => {
   test("removes existing source", () => {
     const config = createDefaultSources();
     removeSource(config, "metafactory");
-    expect(config.sources).toHaveLength(0);
+    expect(config.sources).toHaveLength(1);
+    expect(config.sources[0].name).toBe("metafactory-registry");
   });
 
   test("throws for non-existent source", () => {
@@ -196,6 +201,24 @@ describe("validateSource", () => {
       tier: "community", enabled: true,
     });
     expect(result.valid).toBe(true);
+  });
+
+  test("rejects invalid URL scheme for registry type", () => {
+    const result = validateSource({
+      name: "bad", url: "garbage://nonsense",
+      tier: "community", enabled: true, type: "registry",
+    });
+    expect(result.valid).toBe(false);
+    expect(result.error).toContain("Must start with https://");
+  });
+
+  test("rejects invalid URL scheme for implicit registry type", () => {
+    const result = validateSource({
+      name: "bad", url: "ftp://example.com/REG.yaml",
+      tier: "community", enabled: true,
+    });
+    expect(result.valid).toBe(false);
+    expect(result.error).toContain("Must start with https://");
   });
 
   test("rejects invalid type value", () => {

@@ -6,11 +6,21 @@ import type { SourcesConfig, RegistrySource, SourceType } from "../types.js";
 /** Valid source types */
 export const VALID_SOURCE_TYPES: readonly SourceType[] = ["registry", "metafactory"];
 
-const DEFAULT_SOURCE: RegistrySource = {
+// API source -- becomes the primary once F-3 (registry API client) lands.
+// Until then, fetchRemoteRegistry skips type:"metafactory" sources gracefully.
+const DEFAULT_API_SOURCE: RegistrySource = {
   name: "metafactory",
   url: "https://meta-factory.ai",
   type: "metafactory",
   tier: "official",
+  enabled: true,
+};
+
+// REGISTRY.yaml fallback -- works today, keeps arc search functional during F-1..F-3 window.
+const DEFAULT_REGISTRY_SOURCE: RegistrySource = {
+  name: "metafactory-registry",
+  url: "https://raw.githubusercontent.com/the-metafactory/meta-factory/main/REGISTRY.yaml",
+  tier: "community",
   enabled: true,
 };
 
@@ -35,7 +45,7 @@ export async function loadSources(
 
 export function createDefaultSources(): SourcesConfig {
   return {
-    sources: [DEFAULT_SOURCE],
+    sources: [DEFAULT_API_SOURCE, DEFAULT_REGISTRY_SOURCE],
   };
 }
 
@@ -59,6 +69,13 @@ export function validateSource(source: RegistrySource): { valid: boolean; error?
   // Validate type value
   if (source.type && !VALID_SOURCE_TYPES.includes(source.type as SourceType)) {
     return { valid: false, error: `Invalid source type "${source.type}". Valid types: ${VALID_SOURCE_TYPES.join(", ")}` };
+  }
+
+  if (type === "registry") {
+    // Basic URL scheme validation (same as the old CLI check)
+    if (!source.url.startsWith("https://") && !source.url.startsWith("http://") && !source.url.startsWith("file://")) {
+      return { valid: false, error: `Invalid URL "${source.url}". Must start with https://, http://, or file://` };
+    }
   }
 
   if (type === "metafactory") {
