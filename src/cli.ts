@@ -37,6 +37,14 @@ import {
 import type { CatalogEntry, ArtifactType, PackageTier, RegistrySource, SourceType } from "./types.js";
 import { login } from "./commands/login.js";
 import { logout } from "./commands/logout.js";
+import {
+  parsePackageRef,
+  formatPackageRef,
+  resolveFromRegistry,
+  downloadPackage,
+  verifyChecksum,
+  extractPackage,
+} from "./lib/registry-install.js";
 import { loadCatalog, saveCatalog, findEntry } from "./lib/catalog.js";
 import {
   loadSources,
@@ -74,17 +82,20 @@ program
     await ensureDirectories(paths);
     const db = openDatabase(paths.dbPath);
 
+    // Check if input is a registry package ref (@scope/name[@version])
+    const pkgRef = parsePackageRef(nameOrUrl);
+
     // Parse library:artifact colon syntax (only for non-URL names)
     const isUrl =
-      nameOrUrl.includes("/") ||
       nameOrUrl.startsWith("git@") ||
-      nameOrUrl.startsWith("http");
+      nameOrUrl.startsWith("http") ||
+      nameOrUrl.startsWith("file://");
 
     let libraryName: string | undefined;
     let artifactName: string | undefined;
     let lookupName = nameOrUrl;
 
-    if (!isUrl) {
+    if (!isUrl && !pkgRef) {
       const libRef = parseLibraryRef(nameOrUrl);
       if (libRef?.artifactName) {
         libraryName = libRef.libraryName;
@@ -93,7 +104,62 @@ program
       }
     }
 
-    if (isUrl) {
+    if (pkgRef) {
+      // Registry install: @scope/name[@version] → download from metafactory API
+      const sources = await loadSources(paths.sourcesPath);
+      const resolved = await resolveFromRegistry(pkgRef, sources.sources);
+
+      if (!resolved) {
+        console.error(`Package "${formatPackageRef(pkgRef)}" not found in any metafactory registry.`);
+        console.error(`Try: arc search ${pkgRef.name}`);
+        process.exit(1);
+      }
+
+      console.log(`Found ${formatPackageRef(pkgRef)} v${resolved.version} in ${resolved.source.name} [${resolved.source.tier}]`);
+
+      // Download
+      console.log(`Downloading...`);
+      const download = await downloadPackage(resolved.downloadUrl, paths.reposDir, resolved.source.token);
+      if (!download.success || !download.tempPath) {
+        console.error(`${download.error}`);
+        process.exit(1);
+      }
+      console.log(`Downloaded ${(download.bytesDownloaded! / 1024).toFixed(0)} KB`);
+
+      // Verify SHA-256
+      const verify = await verifyChecksum(download.tempPath, resolved.sha256);
+      if (!verify.valid) {
+        console.error(`Checksum verification failed!`);
+        console.error(`  Expected: ${verify.expected}`);
+        console.error(`  Actual:   ${verify.actual}`);
+        console.error(`This could indicate a corrupted download or compromised package.`);
+        await Bun.file(download.tempPath).exists() && Bun.spawnSync(["rm", "-f", download.tempPath]);
+        process.exit(1);
+      }
+      console.log(`SHA-256 verified`);
+
+      // Extract
+      const packageDir = `${resolved.scope}__${resolved.name}`;
+      const extract = await extractPackage(download.tempPath, paths.reposDir, packageDir);
+      if (!extract.success) {
+        console.error(`${extract.error}`);
+        process.exit(1);
+      }
+
+      // Continue with standard install flow (manifest, symlinks, hooks, DB)
+      const result = await install({
+        paths,
+        db,
+        repoUrl: formatPackageRef({ scope: resolved.scope, name: resolved.name, version: resolved.version }),
+        yes: opts.yes,
+      });
+      if (result.success) {
+        console.log(`Installed ${result.name} v${result.version} (verified)`);
+      } else {
+        console.error(`${result.error}`);
+        process.exit(1);
+      }
+    } else if (isUrl) {
       // Direct git install
       const result = await install({ paths, db, repoUrl: nameOrUrl, yes: opts.yes, artifactName });
       if (result.success) {
@@ -112,7 +178,7 @@ program
       const found = await findInAllSources(sources, lookupName, paths.cachePath);
 
       if (!found) {
-        console.error(`❌ "${lookupName}" not found in any source. Try: arc search <keyword>`);
+        console.error(`"${lookupName}" not found in any source. Try: arc search <keyword>`);
         process.exit(1);
       }
 
@@ -136,7 +202,7 @@ program
           console.log(`✅ Installed ${result.name} v${result.version}`);
         }
       } else {
-        console.error(`❌ ${result.error}`);
+        console.error(`${result.error}`);
         process.exit(1);
       }
     }
