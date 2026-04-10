@@ -34,7 +34,7 @@ import {
   formatCatalogList,
   formatCatalogSearch,
 } from "./commands/catalog.js";
-import type { CatalogEntry, ArtifactType, PackageTier } from "./types.js";
+import type { CatalogEntry, ArtifactType, PackageTier, RegistrySource, SourceType } from "./types.js";
 import { loadCatalog, saveCatalog, findEntry } from "./lib/catalog.js";
 import {
   loadSources,
@@ -42,6 +42,7 @@ import {
   addSource,
   removeSource,
   formatSourceList,
+  validateSource,
 } from "./lib/sources.js";
 import {
   searchAllSources,
@@ -498,25 +499,29 @@ source
   .command("add <name> <url>")
   .description("Add a new registry source")
   .option("-t, --tier <tier>", "Trust tier (official|community|custom)", "community")
-  .action(async (name: string, url: string, opts: { tier: string }) => {
+  .option("--type <type>", "Source type (registry|metafactory)", "registry")
+  .action(async (name: string, url: string, opts: { tier: string; type: string }) => {
     const paths = createPaths();
     const config = await loadSources(paths.sourcesPath);
 
-    // Validate URL format
-    if (!url.startsWith("https://") && !url.startsWith("http://") && !url.startsWith("file://")) {
-      console.error(`Error: Invalid URL "${url}". Must start with https://, http://, or file://`);
+    const newSource: RegistrySource = {
+      name,
+      url,
+      tier: opts.tier as PackageTier,
+      enabled: true,
+      ...(opts.type !== "registry" ? { type: opts.type as SourceType } : {}),
+    };
+
+    const validation = validateSource(newSource);
+    if (!validation.valid) {
+      console.error(`Error: ${validation.error}`);
       process.exit(1);
     }
 
     try {
-      addSource(config, {
-        name,
-        url,
-        tier: opts.tier as PackageTier,
-        enabled: true,
-      });
+      addSource(config, newSource);
       await saveSources(paths.sourcesPath, config);
-      console.log(`Added source "${name}" [${opts.tier}]`);
+      console.log(`Added source "${name}" [${opts.tier}] (${opts.type})`);
     } catch (err: any) {
       console.error(`Error: ${err.message}`);
       process.exit(1);
