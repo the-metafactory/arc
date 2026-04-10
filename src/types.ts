@@ -228,12 +228,19 @@ export interface ArcManifest {
 /** Trust tier for installed packages */
 export type PackageTier = "official" | "community" | "custom";
 
+/** Source type discriminator: registry (YAML file) or metafactory (API) */
+export type SourceType = "registry" | "metafactory";
+
 /** A configured registry source (apt-get style) */
 export interface RegistrySource {
   name: string;
   url: string;
   tier: PackageTier;
   enabled: boolean;
+  /** Source type. Defaults to "registry" when absent (backward compat). */
+  type?: SourceType;
+  /** Bearer token for authenticated API access. Only used with type "metafactory". */
+  token?: string;
 }
 
 /** Top-level sources.yaml structure */

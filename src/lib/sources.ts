@@ -1,12 +1,16 @@
 import { readFile, writeFile } from "fs/promises";
 import { existsSync } from "fs";
 import YAML from "yaml";
-import type { SourcesConfig, RegistrySource, PackageTier } from "../types.js";
+import type { SourcesConfig, RegistrySource, SourceType } from "../types.js";
+
+/** Valid source types */
+export const VALID_SOURCE_TYPES: readonly SourceType[] = ["registry", "metafactory"];
 
 const DEFAULT_SOURCE: RegistrySource = {
   name: "metafactory",
-  url: "https://raw.githubusercontent.com/the-metafactory/meta-factory/main/REGISTRY.yaml",
-  tier: "community",
+  url: "https://meta-factory.ai",
+  type: "metafactory",
+  tier: "official",
   enabled: true,
 };
 
@@ -43,10 +47,43 @@ export async function saveSources(
   await writeFile(sourcesPath, content, "utf-8");
 }
 
+/** Get effective source type (defaults to "registry" for backward compat) */
+export function getSourceType(source: RegistrySource): SourceType {
+  return source.type ?? "registry";
+}
+
+/** Validate source configuration based on its type */
+export function validateSource(source: RegistrySource): { valid: boolean; error?: string } {
+  const type = getSourceType(source);
+
+  // Validate type value
+  if (source.type && !VALID_SOURCE_TYPES.includes(source.type as SourceType)) {
+    return { valid: false, error: `Invalid source type "${source.type}". Valid types: ${VALID_SOURCE_TYPES.join(", ")}` };
+  }
+
+  if (type === "metafactory") {
+    // Must be HTTPS
+    if (!source.url.startsWith("https://")) {
+      return { valid: false, error: "metafactory sources require HTTPS URLs" };
+    }
+    // Must not be a YAML file path
+    if (source.url.endsWith(".yaml") || source.url.endsWith(".yml")) {
+      return { valid: false, error: "metafactory source URL should be a base URL, not a file path. Did you mean --type registry?" };
+    }
+  }
+
+  return { valid: true };
+}
+
 export function addSource(
   config: SourcesConfig,
   source: RegistrySource
 ): void {
+  const validation = validateSource(source);
+  if (!validation.valid) {
+    throw new Error(validation.error);
+  }
+
   const existing = config.sources.find((s) => s.name === source.name);
   if (existing) {
     throw new Error(`Source "${source.name}" already exists`);
@@ -71,7 +108,8 @@ export function formatSourceList(config: SourcesConfig): string {
   const lines: string[] = ["Configured sources:", ""];
   for (const s of config.sources) {
     const status = s.enabled ? "enabled" : "disabled";
-    lines.push(`  ${s.name} [${s.tier}] (${status})`);
+    const type = getSourceType(s);
+    lines.push(`  ${s.name} [${s.tier}] (${type}) (${status})`);
     lines.push(`    ${s.url}`);
   }
   return lines.join("\n");
