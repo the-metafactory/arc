@@ -131,6 +131,9 @@ function convertToRegistryConfig(packages: MetafactoryPackageListItem[]): Regist
 
   for (const pkg of packages) {
     const { entry, artifactType } = mapApiPackageToRegistryEntry(pkg);
+    // pipeline, action, rules all route to skills — arc's registry model treats them
+    // as skill subtypes. Separate arrays exist in RegistryConfig but are only used
+    // by REGISTRY.yaml sources that explicitly categorize them.
     const target = artifactType === "tool" ? config.registry.tools!
       : artifactType === "agent" ? config.registry.agents!
       : artifactType === "prompt" ? config.registry.prompts!
@@ -194,6 +197,10 @@ export async function fetchMetafactoryRegistry(
       }
 
       const body = (await response.json()) as MetafactoryPackageListResponse;
+      if (!body.packages || !Array.isArray(body.packages)) {
+        debugLog(`Invalid response from ${source.name}: missing packages array`);
+        return readCachedRegistry(cachePath, source);
+      }
       allPackages.push(...body.packages);
 
       // Check if there are more pages
@@ -201,6 +208,10 @@ export async function fetchMetafactoryRegistry(
         break;
       }
       page++;
+    }
+
+    if (page > MAX_PAGES) {
+      debugLog(`Hit MAX_PAGES (${MAX_PAGES}) for ${source.name} — ${allPackages.length} of ${allPackages.length}+ packages fetched. Some packages may be missing.`);
     }
   } catch (_err) {
     // Network error -- try stale cache
@@ -235,7 +246,7 @@ export async function fetchMetafactoryPackageDetail(
   scope: string,
   name: string,
 ): Promise<MetafactoryPackageDetail | null> {
-  const url = `${source.url}/api/v1/packages/${scope}/${name}`;
+  const url = `${source.url}/api/v1/packages/${encodeURIComponent(scope)}/${encodeURIComponent(name)}`;
   debugLog(`Fetching detail: ${url}`);
 
   try {

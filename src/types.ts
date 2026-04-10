@@ -303,14 +303,6 @@ export interface MetafactoryPackageListResponse {
   per_page: number;
 }
 
-/** Version info from metafactory API */
-export interface MetafactoryVersionInfo {
-  version: string;
-  sha256: string;
-  size_bytes: number;
-  published_by: { id: string; display_name: string | null };
-  created_at: number;
-}
 
 /** Detailed package info from metafactory API */
 export interface MetafactoryPackageDetail {

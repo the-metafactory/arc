@@ -225,6 +225,43 @@ describe("fetchMetafactoryRegistry", () => {
       globalThis.fetch = originalFetch;
     }
   });
+
+  test("returns null and logs on 401 (token expired)", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mockFetch(async () => new Response("Unauthorized", { status: 401 }));
+
+    try {
+      const result = await fetchMetafactoryRegistry(metafactorySource("expired-token"), env.paths.cachePath, true);
+      // Returns null (or stale cache) -- not a crash
+      expect(result).toBeNull();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("returns null on 429 (rate limited)", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mockFetch(async () => new Response("Too Many Requests", { status: 429 }));
+
+    try {
+      const result = await fetchMetafactoryRegistry(metafactorySource(), env.paths.cachePath, true);
+      expect(result).toBeNull();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("returns null on invalid JSON response", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mockFetch(async () => new Response("<html>not json</html>", { status: 200 }));
+
+    try {
+      const result = await fetchMetafactoryRegistry(metafactorySource(), env.paths.cachePath, true);
+      expect(result).toBeNull();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------
