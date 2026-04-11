@@ -38,6 +38,14 @@ import type { CatalogEntry, ArtifactType, PackageTier, RegistrySource, SourceTyp
 import { login } from "./commands/login.js";
 import { logout } from "./commands/logout.js";
 import {
+  searchAcrossSources,
+  formatSearch,
+  formatSearchJson,
+  formatWarnings,
+  parseArtifactType,
+  parsePackageTier,
+} from "./commands/search.js";
+import {
   parsePackageRef,
   formatPackageRef,
   resolveFromRegistry,
@@ -545,11 +553,46 @@ program
 program
   .command("search [keyword]")
   .description("Search all configured sources (omit keyword to list all)")
-  .action(async (keyword?: string) => {
+  .option("--json", "Output as JSON for machine consumption")
+  .option("--type <type>", "Filter by artifact type (skill, tool, agent, prompt, component, pipeline, action)")
+  .option("--tier <tier>", "Filter by source tier (official, community, custom)")
+  .action(async (keyword: string | undefined, opts: { json?: boolean; type?: string; tier?: string }) => {
     const paths = createPaths();
     const sources = await loadSources(paths.sourcesPath);
-    const results = await searchAllSources(sources, keyword ?? "", paths.cachePath);
-    console.log(formatSourcedSearch(results));
+
+    // Validate filters
+    let typeFilter;
+    if (opts.type) {
+      typeFilter = parseArtifactType(opts.type);
+      if (!typeFilter) {
+        console.error(`Error: invalid --type "${opts.type}". Valid: skill, tool, agent, prompt, component, pipeline, action`);
+        process.exit(1);
+      }
+    }
+    let tierFilter;
+    if (opts.tier) {
+      tierFilter = parsePackageTier(opts.tier);
+      if (!tierFilter) {
+        console.error(`Error: invalid --tier "${opts.tier}". Valid: official, community, custom`);
+        process.exit(1);
+      }
+    }
+
+    const result = await searchAcrossSources(sources, paths.cachePath, {
+      keyword,
+      type: typeFilter,
+      tier: tierFilter,
+    });
+
+    // Emit warnings to stderr
+    const warnings = formatWarnings(result);
+    if (warnings) console.error(warnings);
+
+    if (opts.json) {
+      console.log(formatSearchJson(result));
+    } else {
+      console.log(formatSearch(result));
+    }
   });
 
 // ── Source commands ─────────────────────────────────────────

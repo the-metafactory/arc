@@ -333,6 +333,30 @@ export interface SourcedSearchResult {
   sourceTier: PackageTier;
 }
 
+/** Search command options */
+export interface SearchOptions {
+  keyword?: string;
+  json?: boolean;
+  type?: ArtifactType;
+  tier?: PackageTier;
+}
+
+/** Warning about a source that failed during search */
+export interface SearchWarning {
+  sourceName: string;
+  reason: "unreachable" | "auth_required" | "rate_limited" | "malformed";
+  message: string;
+  usedStaleCache: boolean;
+}
+
+/** Search result with metadata and warnings */
+export interface SearchResult {
+  results: SourcedSearchResult[];
+  warnings: SearchWarning[];
+  totalSources: number;
+  successfulSources: number;
+}
+
 /** Parsed package reference from CLI input */
 export interface PackageRef {
   scope: string;
