@@ -333,6 +333,20 @@ export interface SourcedSearchResult {
   sourceTier: PackageTier;
 }
 
+/** Parsed package reference from CLI input */
+export interface PackageRef {
+  scope: string;
+  name: string;
+  version?: string;
+}
+
+/** SHA-256 verification result */
+export interface VerifyResult {
+  valid: boolean;
+  expected: string;
+  actual: string;
+}
+
 /** Installed package record in packages.db (skills and tools) */
 export interface InstalledSkill {
   name: string;
