@@ -63,10 +63,8 @@ import {
   validateSource,
 } from "./lib/sources.js";
 import {
-  searchAllSources,
   findInAllSources,
   updateAllSources,
-  formatSourcedSearch,
 } from "./lib/remote-registry.js";
 import { homedir } from "os";
 import { join } from "path";
