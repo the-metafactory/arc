@@ -26,6 +26,11 @@ export interface InstallOptions {
   artifactName?: string;
   /** When installing from a library, the library name (for DB tracking) */
   libraryName?: string;
+  /**
+   * Pre-extracted install path (for registry installs from F-4).
+   * When provided, skips git clone and uses this directory as the source.
+   */
+  preExtractedPath?: string;
 }
 
 export interface InstallResult {
@@ -53,9 +58,11 @@ export interface InstallResult {
 export async function install(opts: InstallOptions): Promise<InstallResult> {
   const { paths, db, repoUrl } = opts;
 
-  // 1. Clone repo
-  const repoName = extractRepoName(repoUrl);
-  const installPath = join(paths.reposDir, repoName);
+  // 1. Clone repo (or use pre-extracted path for registry installs)
+  const repoName = opts.preExtractedPath
+    ? opts.preExtractedPath.split("/").pop() ?? extractRepoName(repoUrl)
+    : extractRepoName(repoUrl);
+  const installPath = opts.preExtractedPath ?? join(paths.reposDir, repoName);
 
   // S2: Path traversal guard — ensure installPath stays inside reposDir
   const normalizedInstall = join(installPath); // resolves ../ segments
@@ -101,8 +108,8 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
     }
   }
 
-  // Only clone if not already present (library repos may already be cloned)
-  if (!existsSync(installPath)) {
+  // Only clone if not already present and no pre-extracted path (registry installs skip git)
+  if (!existsSync(installPath) && !opts.preExtractedPath) {
     const cloneResult = Bun.spawnSync(["git", "clone", repoUrl, installPath], {
       stdout: "pipe",
       stderr: "pipe",

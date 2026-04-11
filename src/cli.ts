@@ -146,12 +146,16 @@ program
         process.exit(1);
       }
 
-      // Continue with standard install flow (manifest, symlinks, hooks, DB)
+      // Continue with standard install flow (manifest, symlinks, hooks, DB).
+      // Use preExtractedPath so install() skips git clone.
       const result = await install({
         paths,
         db,
         repoUrl: formatPackageRef({ scope: resolved.scope, name: resolved.name, version: resolved.version }),
         yes: opts.yes,
+        preExtractedPath: extract.extractedPath,
+        sourceName: resolved.source.name,
+        sourceTier: resolved.source.tier,
       });
       if (result.success) {
         console.log(`Installed ${result.name} v${result.version} (verified)`);

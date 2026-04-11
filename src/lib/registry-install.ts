@@ -13,7 +13,7 @@ import { fetchMetafactoryPackageDetail } from "./metafactory-api.js";
 // Package reference parsing
 // ---------------------------------------------------------------------------
 
-const PACKAGE_REF_RE = /^@?([a-zA-Z0-9._-]+)\/([a-zA-Z0-9._-]+)(?:@(.+))?$/;
+const PACKAGE_REF_RE = /^@?([a-zA-Z0-9._-]+)\/([a-zA-Z0-9._-]+)(?:@([^@]+))?$/;
 
 /** Parse @scope/name[@version] from CLI input. Returns null for URLs/paths. */
 export function parsePackageRef(input: string): PackageRef | null {
@@ -67,7 +67,7 @@ export async function resolveFromRegistry(
     if (!targetVersion) continue;
 
     // Fetch version detail to get SHA-256
-    const versionDetailUrl = `${source.url}/api/v1/packages/@${ref.scope}/${ref.name}/versions`;
+    const versionDetailUrl = `${source.url}/api/v1/packages/${encodeURIComponent(`@${ref.scope}`)}/${encodeURIComponent(ref.name)}/versions`;
     try {
       const headers: Record<string, string> = { Accept: "application/json" };
       if (source.token) headers.Authorization = `Bearer ${source.token}`;
@@ -224,8 +224,8 @@ export async function extractPackage(
     };
   }
 
-  // Clean up tarball
-  await unlink(tarballPath).catch(() => {});
+  // Clean up tarball -- cleanup failure is non-fatal
+  await unlink(tarballPath).catch((_err) => {});
 
   // Verify manifest exists
   const hasManifest = existsSync(join(extractedPath, "arc-manifest.yaml")) ||

@@ -7,7 +7,27 @@ import {
   formatPackageRef,
   verifyChecksum,
   extractPackage,
+  resolveFromRegistry,
+  downloadPackage,
 } from "../../src/lib/registry-install.js";
+import type { RegistrySource } from "../../src/types.js";
+
+function mockFetch(handler: (input: any, init?: any) => Promise<Response>): typeof fetch {
+  const fn = handler as typeof fetch;
+  (fn as any).preconnect = () => {};
+  return fn;
+}
+
+function metafactorySource(token?: string): RegistrySource {
+  return {
+    name: "mf-test",
+    url: "https://meta-factory.test",
+    tier: "official",
+    enabled: true,
+    type: "metafactory",
+    ...(token ? { token } : {}),
+  };
+}
 
 let env: TestEnv;
 
@@ -54,6 +74,11 @@ describe("parsePackageRef", () => {
   test("returns null for simple names without scope", () => {
     expect(parsePackageRef("grove")).toBeNull();
     expect(parsePackageRef("my-skill")).toBeNull();
+  });
+
+  test("rejects ambiguous multi-@ version", () => {
+    // @scope/name@version@evil should not parse as valid
+    expect(parsePackageRef("@scope/name@1.0.0@evil")).toBeNull();
   });
 });
 
@@ -132,5 +157,187 @@ describe("extractPackage", () => {
     const result = await extractPackage(badTarball, env.paths.reposDir, "test-pkg");
     expect(result.success).toBe(false);
     expect(result.error).toContain("Extraction failed");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resolveFromRegistry tests
+// ---------------------------------------------------------------------------
+
+describe("resolveFromRegistry", () => {
+  test("returns null when no metafactory sources configured", async () => {
+    const result = await resolveFromRegistry(
+      { scope: "foo", name: "bar" },
+      [{ name: "reg", url: "https://example.com/R.yaml", tier: "community", enabled: true }],
+    );
+    expect(result).toBeNull();
+  });
+
+  test("resolves package with latest version", async () => {
+    const originalFetch = globalThis.fetch;
+    let callCount = 0;
+    globalThis.fetch = mockFetch(async (input: any) => {
+      callCount++;
+      const url = typeof input === "string" ? input : input.url;
+      if (url.includes("/versions")) {
+        return new Response(JSON.stringify({
+          versions: [{ version: "1.2.0", sha256: "abc123" }, { version: "1.1.0", sha256: "def456" }],
+        }), { status: 200 });
+      }
+      // Package detail endpoint
+      return new Response(JSON.stringify({
+        namespace: "@metafactory",
+        name: "grove",
+        display_name: null,
+        description: "",
+        type: "tool",
+        license: "MIT",
+        latest_version: "1.2.0",
+        versions: ["1.2.0", "1.1.0"],
+        publisher: { display_name: "Test", tier: "official", mfa_enabled: true, github_username: null },
+        sponsor: null,
+        created_at: 0,
+        updated_at: 0,
+      }), { status: 200 });
+    });
+
+    try {
+      const result = await resolveFromRegistry(
+        { scope: "metafactory", name: "grove" },
+        [metafactorySource()],
+      );
+      expect(result).not.toBeNull();
+      expect(result!.version).toBe("1.2.0");
+      expect(result!.sha256).toBe("abc123");
+      expect(result!.downloadUrl).toContain("/api/v1/storage/download/abc123");
+      expect(callCount).toBeGreaterThanOrEqual(2);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("resolves specific version when provided", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mockFetch(async (input: any) => {
+      const url = typeof input === "string" ? input : input.url;
+      if (url.includes("/versions")) {
+        return new Response(JSON.stringify({
+          versions: [{ version: "1.2.0", sha256: "abc" }, { version: "1.1.0", sha256: "def" }],
+        }), { status: 200 });
+      }
+      return new Response(JSON.stringify({
+        namespace: "@metafactory", name: "grove",
+        display_name: null, description: "", type: "tool", license: "MIT",
+        latest_version: "1.2.0", versions: ["1.2.0", "1.1.0"],
+        publisher: { display_name: "Test", tier: "official", mfa_enabled: true, github_username: null },
+        sponsor: null, created_at: 0, updated_at: 0,
+      }), { status: 200 });
+    });
+
+    try {
+      const result = await resolveFromRegistry(
+        { scope: "metafactory", name: "grove", version: "1.1.0" },
+        [metafactorySource()],
+      );
+      expect(result!.version).toBe("1.1.0");
+      expect(result!.sha256).toBe("def");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("returns null when package not found", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mockFetch(async () => new Response("Not found", { status: 404 }));
+
+    try {
+      const result = await resolveFromRegistry(
+        { scope: "nobody", name: "nothing" },
+        [metafactorySource()],
+      );
+      expect(result).toBeNull();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// downloadPackage tests
+// ---------------------------------------------------------------------------
+
+describe("downloadPackage", () => {
+  test("downloads successfully and writes to temp", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mockFetch(async () => new Response(new ArrayBuffer(1024), { status: 200 }));
+
+    try {
+      const result = await downloadPackage("https://example.com/pkg.tar.gz", env.paths.reposDir);
+      expect(result.success).toBe(true);
+      expect(result.bytesDownloaded).toBe(1024);
+      expect(result.tempPath).toBeDefined();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("sends Bearer token when provided", async () => {
+    const originalFetch = globalThis.fetch;
+    let capturedAuth: string | undefined;
+    globalThis.fetch = mockFetch(async (_input: any, init?: any) => {
+      capturedAuth = new Headers(init?.headers).get("Authorization") ?? undefined;
+      return new Response(new ArrayBuffer(10), { status: 200 });
+    });
+
+    try {
+      await downloadPackage("https://example.com/pkg.tar.gz", env.paths.reposDir, "my-token");
+      expect(capturedAuth).toBe("Bearer my-token");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("returns error on 401", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mockFetch(async () => new Response("Unauthorized", { status: 401 }));
+
+    try {
+      const result = await downloadPackage("https://example.com/pkg.tar.gz", env.paths.reposDir);
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("arc login");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("returns error on 404", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mockFetch(async () => new Response("Not found", { status: 404 }));
+
+    try {
+      const result = await downloadPackage("https://example.com/pkg.tar.gz", env.paths.reposDir);
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("not found");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("retries once on network error then fails", async () => {
+    const originalFetch = globalThis.fetch;
+    let attempts = 0;
+    globalThis.fetch = mockFetch(async () => {
+      attempts++;
+      throw new Error("ECONNREFUSED");
+    });
+
+    try {
+      const result = await downloadPackage("https://example.com/pkg.tar.gz", env.paths.reposDir);
+      expect(result.success).toBe(false);
+      expect(attempts).toBe(2); // original + 1 retry
+      expect(result.error).toContain("network");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 });
