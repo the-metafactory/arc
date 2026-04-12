@@ -223,6 +223,12 @@ export interface ArcManifest {
     preupgrade?: string;
     postupgrade?: string;
   };
+  /** Optional namespace for publishing (alternative to account default) */
+  namespace?: string;
+  /** Bundle configuration for arc publish */
+  bundle?: BundleConfig;
+  /** Package description */
+  description?: string;
 }
 
 /** Trust tier for installed packages */
@@ -446,4 +452,57 @@ export interface PaiPaths {
   actionsDir: string;
   /** Claude settings path (~/.claude/settings.json) */
   settingsPath: string;
+}
+
+// ── Bundle and publish types ─────────────────────────────────
+
+/** Bundle exclusion configuration (from arc-manifest.yaml) */
+export interface BundleConfig {
+  exclude?: string[];
+  include?: string[];
+}
+
+/** Result of tarball creation */
+export interface BundleResult {
+  success: boolean;
+  tarballPath: string;
+  sha256: string;
+  sizeBytes: number;
+  fileCount: number;
+  manifest: ArcManifest;
+  warnings: string[];
+  error?: string;
+}
+
+/** Manifest validation for publishing (stricter than install) */
+export interface PublishValidation {
+  valid: boolean;
+  errors: string[];
+  warnings: string[];
+  name: string;
+  version: string;
+}
+
+/** Result of R2 storage upload */
+export interface UploadResult {
+  success: boolean;
+  sha256: string;
+  r2Key: string;
+  sizeBytes: number;
+  error?: string;
+}
+
+/** Result of version registration */
+export interface RegisterResult {
+  success: boolean;
+  versionId?: string;
+  error?: string;
+  statusCode?: number;
+}
+
+/** Result of package existence check/creation */
+export interface EnsurePackageResult {
+  exists: boolean;
+  created: boolean;
+  error?: string;
 }

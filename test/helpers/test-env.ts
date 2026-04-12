@@ -5,10 +5,11 @@
  * Every test gets its own fresh environment — no cross-test contamination.
  */
 
-import { mkdtemp, rm } from "fs/promises";
+import { mkdtemp, rm, writeFile, mkdir } from "fs/promises";
 import { join } from "path";
 import { tmpdir } from "os";
 import { Database } from "bun:sqlite";
+import YAML from "yaml";
 import { createPaths } from "../../src/lib/paths.js";
 import { openDatabase } from "../../src/lib/db.js";
 import { ensureDirectories } from "../../src/lib/paths.js";
@@ -335,6 +336,35 @@ export async function createMockLibraryRepo(
   );
 
   return { path: repoDir, url: repoDir };
+}
+
+/**
+ * Create an isolated package directory with an arc-manifest.yaml.
+ * Used across bundle and publish tests to reduce boilerplate.
+ */
+export async function createPackageDir(
+  dir: string,
+  manifest: Record<string, any>,
+  opts?: { withReadme?: boolean; withSkillDir?: boolean; extraFiles?: Record<string, string> },
+): Promise<string> {
+  const pkgDir = join(dir, "pkg");
+  await mkdir(pkgDir, { recursive: true });
+  await writeFile(join(pkgDir, "arc-manifest.yaml"), YAML.stringify(manifest));
+  if (opts?.withSkillDir !== false) {
+    await mkdir(join(pkgDir, "skill"), { recursive: true });
+    await writeFile(join(pkgDir, "skill/SKILL.md"), "# Test\n\nSkill content.\n");
+  }
+  if (opts?.withReadme !== false) {
+    await writeFile(join(pkgDir, "README.md"), "# Test Package\n");
+  }
+  if (opts?.extraFiles) {
+    for (const [filePath, content] of Object.entries(opts.extraFiles)) {
+      const fullPath = join(pkgDir, filePath);
+      await mkdir(join(fullPath, ".."), { recursive: true });
+      await writeFile(fullPath, content);
+    }
+  }
+  return pkgDir;
 }
 
 /**
