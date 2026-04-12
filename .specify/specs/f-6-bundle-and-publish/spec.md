@@ -217,22 +217,34 @@ Before bundling, validate the manifest meets publishing requirements (stricter t
 - `version` is valid semver
 - `type` is a recognized artifact type
 - `description` is present (warning if missing, not blocking)
-- Scope is derivable: manifest `name` should be unscoped; scope comes from the authenticated user's namespace
+
+**Scope derivation:** The scope (namespace) for publishing is resolved in this order:
+1. Explicit `--scope` flag on the CLI (e.g., `arc publish --scope mellanon`)
+2. `namespace` field in arc-manifest.yaml (if present)
+3. Fetched from `GET /api/v1/auth/me` — the account's reserved namespace
+
+Step 3 requires a metafactory API change: add `namespace` to the `/auth/me` response (the `accounts` table already has this column, it's just not exposed). This is a one-line change in `meta-factory/src/index.ts:188`. Until that lands, steps 1 or 2 are required — arc errors with: `Cannot determine publish scope. Add namespace to arc-manifest.yaml or use --scope.`
 
 ```typescript
 interface PublishValidation {
   valid: boolean;
   errors: string[];     // blocking
   warnings: string[];   // informational
-  scope?: string;       // from auth context
+  scope?: string;       // resolved from CLI, manifest, or API
   name: string;
   version: string;
 }
 
+async function resolvePublishScope(
+  manifest: ArcManifest,
+  source: RegistrySource,
+  cliScope?: string,
+): Promise<string | null>
+
 function validateForPublish(manifest: ArcManifest): PublishValidation
 ```
 
-**Validation:** Unit tests with valid/invalid manifests.
+**Validation:** Unit tests with valid/invalid manifests; test scope resolution order.
 
 ### FR-3: Upload to R2 storage
 
@@ -299,7 +311,7 @@ async function registerVersion(
 - 409 Conflict → version already published (DD-14)
 - 400 Bad Request → manifest validation failed (show server errors)
 - 403 Forbidden → namespace not owned by user
-- 404 Not Found → package doesn't exist (suggest `arc publish --create`)
+- 404 Not Found → package doesn't exist; `ensurePackageExists()` (FR-5) handles this automatically before version registration
 
 **Validation:** Unit test with mocked API.
 
@@ -380,6 +392,7 @@ Options:
   --tarball, -t <path>  Publish from existing tarball (skip bundling)
   --dry-run             Validate and show what would be published, but don't upload
   --source <name>       Use specific metafactory source (default: first metafactory source)
+  --scope <namespace>   Override publish scope (default: from manifest or account)
 
 Output (dry run):
   [DRY RUN] Would publish @scope/name v1.0.0
@@ -408,7 +421,7 @@ Publishing is a server-side operation — the registry is the source of truth fo
 
 - **Security:** Bearer tokens never logged. Tarball never contains `.env` or secrets. SHA-256 verified client-side vs server-side — mismatch aborts. Temp tarballs cleaned up on all code paths (success and failure).
 - **Performance:** Tarball creation uses `tar czf` via Bun.spawn — fast for typical package sizes (< 50MB). Upload timeout: 120 seconds. Version registration timeout: 10 seconds.
-- **Reliability:** If upload succeeds but version registration fails, display the R2 key so the user can retry registration without re-uploading. SHA-256 double-check (client vs server) catches upload corruption.
+- **Reliability:** If upload succeeds but version registration fails, arc automatically retries registration once. If the retry also fails, display the error and advise re-running `arc publish` — the upload endpoint returns 409 for duplicate content (DD-14 immutability), so re-uploading the same tarball is safe and idempotent. No `--r2-key` recovery flag needed. SHA-256 double-check (client vs server) catches upload corruption.
 - **Usability:** `--dry-run` validates everything without side effects. Clear error messages with suggested recovery. Progress feedback during upload.
 
 ## Error Handling
@@ -537,9 +550,9 @@ The `createBundle()` function and tarball format remain identical. Only the uplo
 | Question | Impact | Owner |
 |----------|--------|-------|
 | ~~Does `POST /api/v1/storage/upload` return the R2 key in the response?~~ **RESOLVED:** Yes, returns `{ sha256, r2_key, size_bytes }` (201). Duplicate content returns 409. | — | Verified in `meta-factory/src/routes/storage.ts:101-108` |
-| Should `arc publish` auto-create the package if it doesn't exist? | UX for first-time publishers | Design decision needed |
+| ~~Should `arc publish` auto-create the package if it doesn't exist?~~ **RESOLVED:** Yes. FR-5 `ensurePackageExists()` auto-creates on first publish. The metafactory `POST /api/v1/packages` endpoint supports this — it checks namespace ownership (DD-15) and creates the package record. No separate step needed. | — | Luna review R2, verified against packages.ts:500-600 |
 | ~~Should we support `.arcignore` in Phase 1?~~ **RESOLVED:** No separate file. Use `bundle.exclude`/`bundle.include` in arc-manifest.yaml instead. Keeps config in one place. | — | Luna review feedback |
-| What's the namespace claiming flow for new publishers? | First publish may fail if namespace unclaimed | Document prerequisite |
+| ~~What's the namespace claiming flow for new publishers?~~ **RESOLVED:** Namespace reservation is part of the metafactory onboarding flow (identity verification + sponsor approval grants IDENTIFIED tier and reserves a namespace in the `namespace_reservations` table). `arc publish` checks namespace ownership via `ensurePackageExists()` → the server returns 403 if the namespace isn't owned. Error message: `You do not own namespace @{scope}. Complete identity verification at meta-factory.ai.` This is a prerequisite, not a bug — DD-3 and DD-9 require identity verification before publishing. | — | Verified against packages.ts:551-559 and namespace_reservations schema |
 
 ## Review Incorporation Log
 
@@ -555,3 +568,8 @@ The `createBundle()` function and tarball format remain identical. Only the uplo
 | #8: Temp file cleanup | Luna (#61) | Added FR-8: `withTempDir()` helper with try/finally guarantee |
 | #9: No DB for publishes | Luna (#61) | Added FR-10: deliberate decision — registry is source of truth, local DB would be stale mirror |
 | #10: Test strategy | Luna (#61) | Split: CI tests use mocked HTTP; round-trip is manual release gate against staging instance |
+| #11: Scope derivation underspecified | Luna R2 (#61) | FR-2: three-tier resolution (--scope flag > manifest namespace > /auth/me API). Needs one-line metafactory change to expose namespace |
+| #12: FR-5 vs Open Questions contradiction | Luna R2 (#61) | Resolved OQ: yes, auto-create on first publish via ensurePackageExists() |
+| #13: --create flag doesn't exist | Luna R2 (#61) | Removed from FR-4 error mapping; FR-5 auto-creates, no flag needed |
+| #14: No retry for partial publish | Luna R2 (#61) | Auto-retry registration once; re-running arc publish is safe (upload is idempotent via DD-14) |
+| #15: Namespace claiming blocker | Luna R2 (#61) | Resolved OQ: namespace reserved during onboarding (DD-3/DD-9); 403 error with clear guidance |
