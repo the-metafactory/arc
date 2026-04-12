@@ -229,6 +229,8 @@ export interface ArcManifest {
   bundle?: BundleConfig;
   /** Package description */
   description?: string;
+  /** SPDX license identifier */
+  license?: string;
 }
 
 /** Trust tier for installed packages */

@@ -29,6 +29,59 @@ function buildPublishHeaders(source: RegistrySource): Record<string, string> {
   return { Authorization: `Bearer ${source.token}` };
 }
 
+// ── Manifest transformation ───────────────────────────────────
+
+/**
+ * Convert an arc-format manifest (arc/v1) to the server-expected
+ * metafactory/v1 format before sending to the registry API.
+ */
+export function toServerManifest(manifest: ArcManifest, scope: string): Record<string, unknown> {
+  const caps = manifest.capabilities ?? {};
+
+  // Filesystem: arc uses { read: [path], write: [path] }, server uses [{ path, access }]
+  const filesystem: Array<{ path: string; access: string }> = [];
+  for (const p of (caps.filesystem?.read ?? [])) {
+    filesystem.push({ path: p, access: "read" });
+  }
+  for (const p of (caps.filesystem?.write ?? [])) {
+    filesystem.push({ path: p, access: "write" });
+  }
+
+  // Network: arc uses [{ domain, reason }], server uses [{ domain }]
+  const network = (caps.network ?? []).map((n) => ({ domain: n.domain }));
+
+  // Bash → subprocess
+  const subprocess: Array<{ command: string }> = [];
+  if (caps.bash?.allowed) {
+    for (const cmd of (caps.bash.restricted_to ?? [])) {
+      subprocess.push({ command: cmd });
+    }
+    if (!caps.bash.restricted_to?.length) {
+      subprocess.push({ command: "*" });
+    }
+  }
+
+  // Secrets → environment
+  const environment = (caps.secrets ?? []).map((v) => ({ variable: v }));
+
+  const serverCaps: Record<string, unknown> = {};
+  if (filesystem.length) serverCaps.filesystem = filesystem;
+  if (network.length) serverCaps.network = network;
+  if (subprocess.length) serverCaps.subprocess = subprocess;
+  if (environment.length) serverCaps.environment = environment;
+
+  return {
+    schema: "metafactory/v1",
+    name: `@${scope}/${manifest.name}`,
+    version: manifest.version,
+    type: manifest.type,
+    author: { name: manifest.author?.name ?? scope },
+    license: manifest.license ?? "MIT",
+    ...(manifest.description ? { description: manifest.description } : {}),
+    capabilities: serverCaps,
+  };
+}
+
 // ── README extraction ────────────────────────────────────────
 
 /** Extract raw README markdown from a package directory */
@@ -108,11 +161,14 @@ export async function uploadBundle(
     const body = (await resp.json()) as { sha256?: string; r2_key?: string; size_bytes?: number; error?: string };
 
     // 409 = content already exists — treat as success (idempotent)
+    // Server may not return sha256/r2_key on 409, so fall back to client-known values.
     if (resp.status === 409) {
-      if (!body.sha256 || !body.r2_key) {
-        return { success: false, sha256: "", r2Key: "", sizeBytes: 0, error: "Server returned 409 with missing sha256/r2_key fields." };
-      }
-      return { success: true, sha256: body.sha256, r2Key: body.r2_key, sizeBytes: body.size_bytes ?? 0 };
+      return {
+        success: true,
+        sha256: body.sha256 ?? clientSha256,
+        r2Key: body.r2_key ?? `packages/${clientSha256}.tar.gz`,
+        sizeBytes: body.size_bytes ?? buffer.byteLength,
+      };
     }
 
     if (!resp.ok) {
@@ -169,7 +225,7 @@ export async function ensurePackageExists(
     const createResp = await fetch(`${source.url}/api/v1/packages`, {
       method: "POST",
       headers: { ...headers, "Content-Type": "application/json" },
-      body: JSON.stringify({ namespace: scope, name, type: manifest.type, description: manifest.description ?? "" }),
+      body: JSON.stringify({ namespace: scope, name, type: manifest.type, description: manifest.description ?? "", license: manifest.license ?? "MIT" }),
       signal: AbortSignal.timeout(API_TIMEOUT_MS),
     });
 
@@ -196,6 +252,7 @@ export interface RegisterPayload {
   r2_key: string;
   size_bytes: number;
   manifest: ArcManifest;
+  scope: string;
   readme?: string;
 }
 
@@ -209,12 +266,22 @@ export async function registerVersion(
   const url = `${source.url}/api/v1/packages/${encodeURIComponent(`@${scope}`)}/${encodeURIComponent(name)}/versions`;
   const headers = { ...buildPublishHeaders(source), "Content-Type": "application/json" };
 
+  const serverPayload = {
+    version: payload.version,
+    sha256: payload.sha256,
+    r2_key: payload.r2_key,
+    size_bytes: payload.size_bytes,
+    manifest: toServerManifest(payload.manifest, payload.scope),
+    readme: payload.readme,
+  };
+  debugLog(`registerVersion payload: ${JSON.stringify(serverPayload)}`);
+
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       const resp = await fetch(url, {
         method: "POST",
         headers,
-        body: JSON.stringify(payload),
+        body: JSON.stringify(serverPayload),
         signal: AbortSignal.timeout(API_TIMEOUT_MS),
       });
 

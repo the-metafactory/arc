@@ -117,6 +117,7 @@ export async function publish(opts: PublishOptions): Promise<PublishCommandResul
       r2_key: uploadResult.r2Key,
       size_bytes: uploadResult.sizeBytes,
       manifest,
+      scope,
       readme: readme ?? undefined,
     });
 
