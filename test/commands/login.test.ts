@@ -1,9 +1,24 @@
 import { describe, test, expect, beforeEach, afterEach, mock } from "bun:test";
 import { createTestEnv, type TestEnv } from "../helpers/test-env.js";
 import { login } from "../../src/commands/login.js";
-import { saveSources, loadSources } from "../../src/lib/sources.js";
+import { saveSources } from "../../src/lib/sources.js";
 import type { SourcesConfig } from "../../src/types.js";
-import YAML from "yaml";
+
+// Mock device-auth to prevent real network calls and browser opens
+mock.module("../../src/lib/device-auth.js", () => ({
+  initiateDeviceCode: async () => ({
+    device_code: "test-device-code",
+    user_code: "TEST-CODE",
+    verification_uri: "https://example.com/auth",
+    interval: 1,
+    expires_in: 5,
+  }),
+  pollForToken: async () => ({
+    success: false,
+    error: "Mock: approval timed out",
+  }),
+  openBrowser: () => false,
+}));
 
 let env: TestEnv;
 
@@ -70,9 +85,9 @@ describe("login - source finding", () => {
       ],
     };
     await saveSources(env.paths.sourcesPath, config);
-    // Will fail at network call, but proves it found the right source
+    // Mocked device-auth returns a failed poll — proves it found the right source
+    // and reached the auth flow (not "no source" error)
     const result = await login({ paths: env.paths });
-    // Either network error (expected) or already logged in -- not "no source" error
     expect(result.error).not.toContain("No metafactory source configured");
   });
 });
@@ -87,7 +102,7 @@ describe("login - already logged in", () => {
 
   test("proceeds when token exists and --force", async () => {
     await saveSources(env.paths.sourcesPath, metafactorySource("existing-token"));
-    // Will fail at network call, but proves it didn't stop at "already logged in"
+    // Mocked device-auth returns a failed poll — proves it bypassed "already logged in"
     const result = await login({ paths: env.paths, force: true });
     expect(result.error).not.toContain("Already logged in");
   });
