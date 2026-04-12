@@ -225,6 +225,7 @@ describe("registerVersion", () => {
     r2_key: "packages/abc123.tar.gz",
     size_bytes: 1000,
     manifest: makeManifest(),
+    scope: "ns",
   };
 
   test("successful registration", async () => {
