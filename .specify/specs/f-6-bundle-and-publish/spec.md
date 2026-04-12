@@ -114,7 +114,22 @@ Add `arc bundle` and `arc publish` commands to create distributable tarballs fro
 - **When** I run `arc publish` with version 1.0.0 in my manifest
 - **Then** arc fails with: `Version 1.0.0 already published. Bump version in arc-manifest.yaml. Published versions are immutable (DD-14).`
 
-### Scenario 7: Dry run
+### Scenario 7: Library type packages
+
+**As a** library author with multiple artifacts
+**I want** to bundle the entire library as one tarball
+**So that** install can discover and install individual artifacts from it
+
+**Acceptance Criteria:**
+- **Given** the package has `type: library` with an `artifacts` array in the manifest
+- **When** I run `arc bundle`
+- **Then** arc creates a single tarball containing the root manifest and all artifact subdirectories
+- **And** arc validates each artifact's sub-manifest exists
+- **And** the bundle summary shows the library name and lists constituent artifacts
+
+**Note:** The install side (`installLibrary()` in install.ts) already handles extracting individual artifacts from a library directory. The tarball just needs to preserve the directory structure. Per-artifact tarballs are out of scope — one tarball per library, matching the git-clone model.
+
+### Scenario 8: Dry run
 
 **As a** package author who wants to validate before publishing
 **I want** to see what would happen without actually uploading
@@ -134,6 +149,8 @@ Add `arc bundle` and `arc publish` commands to create distributable tarballs fro
 
 Create a `.tar.gz` from a package directory, excluding files that should not be published.
 
+**Implementation:** Shell out to `tar czf` via `Bun.spawn`. No archive library dependency — system `tar` is available on all target platforms (macOS, Linux) and matches the extraction path in F-4's `extractPackage()` which also uses system `tar`. This keeps the install/publish symmetry clean.
+
 ```typescript
 interface BundleResult {
   success: boolean;
@@ -152,7 +169,11 @@ async function createBundle(
 ): Promise<BundleResult>
 ```
 
-**Excluded patterns** (hardcoded, not configurable in Phase 1):
+**Tarball structure:** The tarball contains all included files rooted at the package directory name. When extracted with `tar xzf --strip-components=1`, the result is the package contents flat in the target directory. This matches F-4's `extractPackage()` expectations.
+
+**Excluded patterns** (two-tier: hardcoded defaults + manifest overrides):
+
+Default exclusions (always applied):
 - `.git/` — version control
 - `node_modules/` — dependencies (installed via `bun install` post-extract)
 - `.env`, `.env.*` — secrets
@@ -160,13 +181,33 @@ async function createBundle(
 - `.DS_Store`, `Thumbs.db` — OS artifacts
 - `.specify/` — spec tooling
 - `test/`, `tests/` — test files (not needed at runtime)
+- `dist/` — build output (consumers build locally)
+- `*.log` — log files
+- `.wrangler/` — Cloudflare dev artifacts
+- `.claude/` — Claude Code project files
+
+Manifest-level overrides via optional `bundle` key in arc-manifest.yaml:
+```yaml
+bundle:
+  exclude:          # additional patterns to exclude (appended to defaults)
+    - "fixtures/"
+    - "*.test.ts"
+  include:          # override defaults to force-include specific paths
+    - "test/fixtures/"   # e.g., a skill that ships test fixtures
+```
+
+The `include` list takes precedence over both default and custom `exclude` patterns. This replaces `.arcignore` — keeping config in the manifest avoids a new config file.
+
+**Size limits:**
+- Client-side pre-check: reject if tarball > 50MB (matches server `MAX_PACKAGE_SIZE` in `meta-factory/src/lib/storage.ts`)
+- Warning at > 10MB (most packages should be well under this)
 
 **Warnings** (displayed but not blocking):
-- No README.md found
-- Tarball exceeds 10MB (metafactory limit is 50MB, but warn early)
+- No README.md found (publish will still succeed, but package page will lack docs)
+- Tarball exceeds 10MB
 - Manifest has no `description` field
 
-**Validation:** Unit test with mock package directory.
+**Validation:** Unit test with mock package directory; test exclusion patterns; test manifest `bundle.exclude`/`include` overrides.
 
 ### FR-2: Manifest validation for publishing
 
@@ -284,15 +325,38 @@ async function ensurePackageExists(
 
 ### FR-6: README extraction
 
-Extract README.md from the package directory and include it in the version registration payload. This enables render-on-publish (CP-7, DD-81).
+Extract README.md from the package directory and include it in the version registration payload as **raw markdown**. The server renders HTML via `renderReadme()` (CP-7, DD-81). If no README is found, the field is omitted (null) — the server accepts this and the package page shows a "no README" fallback. This is a warning, not a blocker.
 
 ```typescript
 async function extractReadme(packageDir: string): Promise<string | null>
 ```
 
-Looks for (in order): `README.md`, `readme.md`, `Readme.md`. Returns contents or null.
+Looks for (in order): `README.md`, `readme.md`, `Readme.md`. Returns raw markdown string or null.
 
-### FR-7: CLI commands
+### FR-7: Source resolution for publish
+
+The `--source` flag selects which metafactory source to publish to. Default: use `findMetafactorySource()` from `src/lib/sources.ts` — same logic as `arc login`. This returns the first enabled metafactory-type source. Error if no metafactory source exists: `No metafactory source configured. Add one with: arc source add metafactory https://meta-factory.ai --type metafactory`.
+
+### FR-8: Temp file management
+
+All temp tarballs use a `withTempDir()` helper that guarantees cleanup via `try/finally`:
+
+```typescript
+async function withTempDir<T>(
+  fn: (tempDir: string) => Promise<T>,
+): Promise<T> {
+  const tempDir = await mkdtemp(join(tmpdir(), "arc-publish-"));
+  try {
+    return await fn(tempDir);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+```
+
+Located in `src/lib/bundle.ts` alongside tarball creation. When `--tarball` is used (publish from existing bundle), the original tarball is NOT cleaned up — only temp files created by arc are managed.
+
+### FR-9: CLI commands
 
 **`arc bundle [path]`**
 
@@ -336,6 +400,10 @@ Output (actual):
     URL:      https://meta-factory.ai/package/@scope/name
 ```
 
+### FR-10: No local DB tracking for publishes (deliberate)
+
+Publishing is a server-side operation — the registry is the source of truth for what's published. Adding a local `publish_history` table would create a stale mirror. If `arc list --published` is needed later, it should query the registry API (`GET /api/v1/packages?publisher=me`), not a local DB. This is explicitly deferred, not forgotten.
+
 ## Non-Functional Requirements
 
 - **Security:** Bearer tokens never logged. Tarball never contains `.env` or secrets. SHA-256 verified client-side vs server-side — mismatch aborts. Temp tarballs cleaned up on all code paths (success and failure).
@@ -353,7 +421,7 @@ Output (actual):
 | SHA-256 mismatch | Client != server hash | `Upload integrity check failed. Client and server SHA-256 do not match. Do not proceed — this may indicate data corruption in transit.` | Retry |
 | Version exists | 409 from server | `Version {v} already published. Bump version in arc-manifest.yaml. (DD-14)` | Bump version |
 | Namespace not owned | 403 from server | `You do not own namespace @{scope}. Check your account at meta-factory.ai.` | Contact admin |
-| Upload too large | > 50MB | `Package exceeds 50MB limit ({size}). Reduce package size.` | Reduce size |
+| Upload too large | > 50MB (client pre-check before upload) | `Package exceeds 50MB limit ({size}). Reduce package size or add exclusions via bundle.exclude in arc-manifest.yaml.` | Add exclusions or reduce content |
 | Network error | Connection failure | `Upload failed: {error}. Check your connection and try again.` | Retry |
 
 ## Key Entities
@@ -386,9 +454,15 @@ Output (actual):
 
 | File | Coverage |
 |------|----------|
-| `test/unit/bundle.test.ts` | Tarball creation, exclusions, manifest validation |
+| `test/unit/bundle.test.ts` | Tarball creation, exclusions, manifest `bundle.exclude`/`include`, library bundling |
 | `test/commands/bundle.test.ts` | CLI integration for bundle |
 | `test/commands/publish.test.ts` | CLI integration for publish (mocked API) |
+
+### Test strategy (addressing CI vs manual gate)
+
+**CI tests (automated):** All tests use mocked HTTP endpoints via intercepted fetch or fixture responses. No real metafactory instance required. Covers: tarball creation, exclusion logic, manifest validation, upload/register request shaping, error handling, temp cleanup.
+
+**Manual gate (pre-release):** The "full round-trip" in the success criteria is a manual verification: `arc publish` from a real package directory against the staging metafactory instance, then `arc install @scope/name` on a clean machine. This is a release gate, not a CI test — it requires a running metafactory with auth credentials. Document the manual test procedure in the PR description.
 
 ## Success Criteria
 
@@ -441,7 +515,7 @@ Output (actual):
 - `/intake/v1/` endpoint migration (Phase 2)
 - Presigned R2 direct uploads (Phase 2 — currently uploads through the Worker)
 - Bundle publishing (library-type packages with multiple artifacts) — separate feature
-- `.arcignore` file for custom exclusion patterns — future enhancement
+- `.arcignore` file — replaced by `bundle.exclude`/`bundle.include` in arc-manifest.yaml
 - Submission tracking (`arc submissions status/follow`) — separate feature after publish works
 
 ## Migration Path to Phase 2 (DD-97)
@@ -464,5 +538,20 @@ The `createBundle()` function and tarball format remain identical. Only the uplo
 |----------|--------|-------|
 | ~~Does `POST /api/v1/storage/upload` return the R2 key in the response?~~ **RESOLVED:** Yes, returns `{ sha256, r2_key, size_bytes }` (201). Duplicate content returns 409. | — | Verified in `meta-factory/src/routes/storage.ts:101-108` |
 | Should `arc publish` auto-create the package if it doesn't exist? | UX for first-time publishers | Design decision needed |
-| Should we support `.arcignore` in Phase 1? | More flexible exclusions | Defer to Phase 2 unless requested |
+| ~~Should we support `.arcignore` in Phase 1?~~ **RESOLVED:** No separate file. Use `bundle.exclude`/`bundle.include` in arc-manifest.yaml instead. Keeps config in one place. | — | Luna review feedback |
 | What's the namespace claiming flow for new publishers? | First publish may fail if namespace unclaimed | Document prerequisite |
+
+## Review Incorporation Log
+
+| Finding | Source | Resolution |
+|---------|--------|------------|
+| #1: No tarball utilities | Luna (#61) | Specified: shell out to system `tar` via `Bun.spawn` — matches F-4 extraction path |
+| #2: Exclusion patterns incomplete | Luna (#61) | Expanded defaults (dist/, *.log, .wrangler/, .claude/); added manifest-level `bundle.exclude`/`bundle.include` |
+| #3: Library type bundles | Luna (#61) | Added Scenario 7: one tarball per library, preserves directory structure for `installLibrary()` |
+| #4: 409 UX underspecified | Luna (#61) | Error message already in Scenario 6 and error table — verified explicit |
+| #5: --source flag default | Luna (#61) | Added FR-7: uses `findMetafactorySource()` from sources.ts (same as login) |
+| #6: Package size limits | Luna (#61) | Client-side 50MB pre-check (matches server MAX_PACKAGE_SIZE); 10MB warning |
+| #7: README format | Luna (#61) | Clarified: raw markdown sent to server, server renders HTML (CP-7); missing README is warning not blocker |
+| #8: Temp file cleanup | Luna (#61) | Added FR-8: `withTempDir()` helper with try/finally guarantee |
+| #9: No DB for publishes | Luna (#61) | Added FR-10: deliberate decision — registry is source of truth, local DB would be stale mirror |
+| #10: Test strategy | Luna (#61) | Split: CI tests use mocked HTTP; round-trip is manual release gate against staging instance |
