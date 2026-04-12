@@ -37,6 +37,8 @@ import {
 import type { CatalogEntry, ArtifactType, PackageTier, RegistrySource, SourceType } from "./types.js";
 import { login } from "./commands/login.js";
 import { logout } from "./commands/logout.js";
+import { bundle, formatBundle } from "./commands/bundle.js";
+import { publish, formatPublish } from "./commands/publish.js";
 import {
   searchAcrossSources,
   formatSearch,
@@ -710,6 +712,46 @@ program
       console.error(`Error: ${result.error}`);
       process.exit(1);
     }
+  });
+
+// ── Bundle and publish commands ────────────────────────────
+
+program
+  .command("bundle [path]")
+  .description("Create a distributable tarball from a package directory")
+  .option("-o, --output <path>", "Output path for the tarball")
+  .action(async (path: string | undefined, opts: { output?: string }) => {
+    const paths = createPaths();
+    const result = await bundle({
+      paths,
+      packageDir: path ?? process.cwd(),
+      outputPath: opts.output,
+    });
+
+    console.log(formatBundle(result));
+    if (!result.success) process.exit(1);
+  });
+
+program
+  .command("publish [path]")
+  .description("Publish a package to the metafactory registry")
+  .option("-t, --tarball <path>", "Publish from existing tarball (skip bundling)")
+  .option("--dry-run", "Validate and show what would be published without uploading")
+  .option("-s, --source <name>", "Use a specific metafactory source")
+  .option("--scope <namespace>", "Override publish scope/namespace")
+  .action(async (path: string | undefined, opts: { tarball?: string; dryRun?: boolean; source?: string; scope?: string }) => {
+    const paths = createPaths();
+    const result = await publish({
+      paths,
+      packageDir: path ?? process.cwd(),
+      tarballPath: opts.tarball,
+      dryRun: opts.dryRun,
+      sourceName: opts.source,
+      scope: opts.scope,
+    });
+
+    console.log(formatPublish(result));
+    if (!result.success) process.exit(1);
   });
 
 // ── Catalog commands ────────────────────────────────────────
