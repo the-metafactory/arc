@@ -8,10 +8,28 @@ import type {
   RegisterResult,
   EnsurePackageResult,
 } from "../types.js";
+import { README_VARIANTS } from "./bundle.js";
+
+// ── Constants ────────────────────────────────────────────────
+
+const API_TIMEOUT_MS = 10_000;
+const UPLOAD_TIMEOUT_MS = 120_000;
+
+// ── Debug logging ────────────────────────────────────────────
+
+function debugLog(msg: string): void {
+  if (process.env.ARC_DEBUG === "1") {
+    process.stderr.write(`[arc:publish] ${msg}\n`);
+  }
+}
+
+// ── HTTP helpers ─────────────────────────────────────────────
+
+function buildPublishHeaders(source: RegistrySource): Record<string, string> {
+  return { Authorization: `Bearer ${source.token}` };
+}
 
 // ── README extraction ────────────────────────────────────────
-
-const README_VARIANTS = ["README.md", "readme.md", "Readme.md"];
 
 /** Extract raw README markdown from a package directory */
 export async function extractReadme(packageDir: string): Promise<string | null> {
@@ -43,15 +61,16 @@ export async function resolvePublishScope(
 
   try {
     const resp = await fetch(`${source.url}/api/v1/auth/me`, {
-      headers: { Authorization: `Bearer ${source.token}` },
-      signal: AbortSignal.timeout(10_000),
+      headers: buildPublishHeaders(source),
+      signal: AbortSignal.timeout(API_TIMEOUT_MS),
     });
 
     if (!resp.ok) return null;
 
     const body = (await resp.json()) as { namespace?: string };
     return body.namespace ?? null;
-  } catch {
+  } catch (err) {
+    debugLog(`/auth/me scope resolution failed: ${(err as Error).message}`);
     return null;
   }
 }
@@ -71,11 +90,11 @@ export async function uploadBundle(
     const resp = await fetch(`${source.url}/api/v1/storage/upload`, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${source.token}`,
+        ...buildPublishHeaders(source),
         "Content-Type": "application/octet-stream",
       },
       body: buffer,
-      signal: AbortSignal.timeout(120_000),
+      signal: AbortSignal.timeout(UPLOAD_TIMEOUT_MS),
     });
 
     if (resp.status === 401) {
@@ -86,44 +105,35 @@ export async function uploadBundle(
       return { success: false, sha256: "", r2Key: "", sizeBytes: 0, error: "Package too large for server." };
     }
 
-    const body = (await resp.json()) as { sha256: string; r2_key: string; size_bytes: number; error?: string };
+    const body = (await resp.json()) as { sha256?: string; r2_key?: string; size_bytes?: number; error?: string };
 
     // 409 = content already exists — treat as success (idempotent)
     if (resp.status === 409) {
-      return {
-        success: true,
-        sha256: body.sha256,
-        r2Key: body.r2_key,
-        sizeBytes: body.size_bytes ?? 0,
-      };
+      if (!body.sha256 || !body.r2_key) {
+        return { success: false, sha256: "", r2Key: "", sizeBytes: 0, error: "Server returned 409 with missing sha256/r2_key fields." };
+      }
+      return { success: true, sha256: body.sha256, r2Key: body.r2_key, sizeBytes: body.size_bytes ?? 0 };
     }
 
     if (!resp.ok) {
       return { success: false, sha256: "", r2Key: "", sizeBytes: 0, error: body.error ?? `Upload failed: HTTP ${resp.status}` };
     }
 
-    // Verify SHA-256 match
-    if (body.sha256 !== clientSha256) {
-      return {
-        success: false,
-        sha256: body.sha256,
-        r2Key: body.r2_key,
-        sizeBytes: body.size_bytes,
-        error: `SHA-256 mismatch: client=${clientSha256}, server=${body.sha256}`,
-      };
+    if (!body.sha256 || !body.r2_key) {
+      return { success: false, sha256: "", r2Key: "", sizeBytes: 0, error: "Server response missing sha256 or r2_key fields." };
     }
 
-    return {
-      success: true,
-      sha256: body.sha256,
-      r2Key: body.r2_key,
-      sizeBytes: body.size_bytes,
-    };
+    // Verify SHA-256 match
+    if (body.sha256 !== clientSha256) {
+      return { success: false, sha256: body.sha256, r2Key: body.r2_key, sizeBytes: body.size_bytes ?? 0, error: `SHA-256 mismatch: client=${clientSha256}, server=${body.sha256}` };
+    }
+
+    return { success: true, sha256: body.sha256, r2Key: body.r2_key, sizeBytes: body.size_bytes ?? 0 };
   } catch (err) {
     if (err instanceof DOMException && err.name === "AbortError") {
       return { success: false, sha256: "", r2Key: "", sizeBytes: 0, error: "Upload timed out (120s limit)." };
     }
-    return { success: false, sha256: "", r2Key: "", sizeBytes: 0, error: "Upload failed: network error." };
+    return { success: false, sha256: "", r2Key: "", sizeBytes: 0, error: `Upload failed: ${(err as Error).message}` };
   }
 }
 
@@ -136,15 +146,12 @@ export async function ensurePackageExists(
   name: string,
   manifest: ArcManifest,
 ): Promise<EnsurePackageResult> {
-  const headers: Record<string, string> = {
-    Authorization: `Bearer ${source.token}`,
-  };
+  const headers = buildPublishHeaders(source);
 
   try {
-    // Check existence
     const getResp = await fetch(
       `${source.url}/api/v1/packages/${encodeURIComponent(`@${scope}`)}/${encodeURIComponent(name)}`,
-      { headers, signal: AbortSignal.timeout(10_000) },
+      { headers, signal: AbortSignal.timeout(API_TIMEOUT_MS) },
     );
 
     if (getResp.status === 200) {
@@ -159,17 +166,11 @@ export async function ensurePackageExists(
       return { exists: false, created: false, error: body.error ?? `Unexpected status: ${getResp.status}` };
     }
 
-    // Package doesn't exist — create it
     const createResp = await fetch(`${source.url}/api/v1/packages`, {
       method: "POST",
       headers: { ...headers, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        namespace: scope,
-        name,
-        type: manifest.type,
-        description: manifest.description ?? "",
-      }),
-      signal: AbortSignal.timeout(10_000),
+      body: JSON.stringify({ namespace: scope, name, type: manifest.type, description: manifest.description ?? "" }),
+      signal: AbortSignal.timeout(API_TIMEOUT_MS),
     });
 
     if (createResp.status === 201 || createResp.status === 200) {
@@ -182,8 +183,8 @@ export async function ensurePackageExists(
     }
 
     return { exists: false, created: false, error: createBody.error ?? `Failed to create package: HTTP ${createResp.status}` };
-  } catch {
-    return { exists: false, created: false, error: "Network error checking package existence." };
+  } catch (err) {
+    return { exists: false, created: false, error: `Network error checking package existence: ${(err as Error).message}` };
   }
 }
 
@@ -206,10 +207,7 @@ export async function registerVersion(
   payload: RegisterPayload,
 ): Promise<RegisterResult> {
   const url = `${source.url}/api/v1/packages/${encodeURIComponent(`@${scope}`)}/${encodeURIComponent(name)}/versions`;
-  const headers: Record<string, string> = {
-    Authorization: `Bearer ${source.token}`,
-    "Content-Type": "application/json",
-  };
+  const headers = { ...buildPublishHeaders(source), "Content-Type": "application/json" };
 
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
@@ -217,7 +215,7 @@ export async function registerVersion(
         method: "POST",
         headers,
         body: JSON.stringify(payload),
-        signal: AbortSignal.timeout(10_000),
+        signal: AbortSignal.timeout(API_TIMEOUT_MS),
       });
 
       if (resp.status === 201 || resp.status === 200) {
@@ -228,11 +226,7 @@ export async function registerVersion(
       const body = (await resp.json().catch(() => ({}))) as { error?: string };
 
       if (resp.status === 409) {
-        return {
-          success: false,
-          error: `Version ${payload.version} already exists. Published versions are immutable — bump the version in arc-manifest.yaml.`,
-          statusCode: 409,
-        };
+        return { success: false, error: `Version ${payload.version} already exists. Published versions are immutable — bump the version in arc-manifest.yaml.`, statusCode: 409 };
       }
 
       if (resp.status === 400) {
@@ -247,13 +241,12 @@ export async function registerVersion(
         return { success: false, error: 'Not authenticated. Run "arc login" first.', statusCode: 401 };
       }
 
-      // Retry on server error
       if (resp.status >= 500 && attempt === 0) continue;
 
       return { success: false, error: body.error ?? `Registration failed: HTTP ${resp.status}`, statusCode: resp.status };
-    } catch {
+    } catch (err) {
       if (attempt === 0) continue;
-      return { success: false, error: "Network error during version registration." };
+      return { success: false, error: `Network error during version registration: ${(err as Error).message}` };
     }
   }
 

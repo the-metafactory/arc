@@ -1,9 +1,9 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtemp, rm, writeFile, mkdir } from "fs/promises";
+import { mkdtemp, rm } from "fs/promises";
 import { join } from "path";
 import { tmpdir } from "os";
-import YAML from "yaml";
-import { createTestEnv, type TestEnv } from "../helpers/test-env.js";
+import { createTestEnv, createPackageDir, type TestEnv } from "../helpers/test-env.js";
+import { mockFetch } from "../helpers/mock-fetch.js";
 import { publish, formatPublish } from "../../src/commands/publish.js";
 import { saveSources } from "../../src/lib/sources.js";
 import type { SourcesConfig } from "../../src/types.js";
@@ -11,10 +11,6 @@ import type { SourcesConfig } from "../../src/types.js";
 let env: TestEnv;
 let testDir: string;
 let savedFetch: typeof fetch;
-
-function mockFetch(fn: (...args: any[]) => Promise<Response>): void {
-  (globalThis as any).fetch = fn;
-}
 
 beforeEach(async () => {
   env = await createTestEnv();
@@ -41,16 +37,6 @@ function metafactorySource(token = "test-token"): SourcesConfig {
   };
 }
 
-async function createPackage(dir: string, manifest: Record<string, any>): Promise<string> {
-  const pkgDir = join(dir, "pkg");
-  await mkdir(pkgDir, { recursive: true });
-  await writeFile(join(pkgDir, "arc-manifest.yaml"), YAML.stringify(manifest));
-  await mkdir(join(pkgDir, "skill"), { recursive: true });
-  await writeFile(join(pkgDir, "skill/SKILL.md"), "# Test\n");
-  await writeFile(join(pkgDir, "README.md"), "# Test Package\n");
-  return pkgDir;
-}
-
 const validManifest = {
   name: "my-skill",
   version: "1.0.0",
@@ -63,7 +49,7 @@ const validManifest = {
 describe("arc publish command", () => {
   test("fails without metafactory source", async () => {
     await saveSources(env.paths.sourcesPath, { sources: [] });
-    const pkgDir = await createPackage(testDir, validManifest);
+    const pkgDir = await createPackageDir(testDir, validManifest);
 
     const result = await publish({ paths: env.paths, packageDir: pkgDir });
     expect(result.success).toBe(false);
@@ -71,8 +57,6 @@ describe("arc publish command", () => {
   });
 
   test("fails without authentication", async () => {
-    await saveSources(env.paths.sourcesPath, metafactorySource(undefined as any));
-    // Remove token by saving without it
     await saveSources(env.paths.sourcesPath, {
       sources: [{
         name: "mf-test",
@@ -82,7 +66,7 @@ describe("arc publish command", () => {
         type: "metafactory",
       }],
     });
-    const pkgDir = await createPackage(testDir, validManifest);
+    const pkgDir = await createPackageDir(testDir, validManifest);
 
     const result = await publish({ paths: env.paths, packageDir: pkgDir });
     expect(result.success).toBe(false);
@@ -91,7 +75,7 @@ describe("arc publish command", () => {
 
   test("dry-run validates without uploading", async () => {
     await saveSources(env.paths.sourcesPath, metafactorySource());
-    const pkgDir = await createPackage(testDir, validManifest);
+    const pkgDir = await createPackageDir(testDir, validManifest);
 
     // No fetch mock needed — dry run should not make any HTTP calls
     const result = await publish({ paths: env.paths, packageDir: pkgDir, dryRun: true });
@@ -104,7 +88,7 @@ describe("arc publish command", () => {
 
   test("scope override via --scope flag", async () => {
     await saveSources(env.paths.sourcesPath, metafactorySource());
-    const pkgDir = await createPackage(testDir, validManifest);
+    const pkgDir = await createPackageDir(testDir, validManifest);
 
     const result = await publish({
       paths: env.paths,
@@ -118,7 +102,7 @@ describe("arc publish command", () => {
 
   test("full publish flow with mocked API", async () => {
     await saveSources(env.paths.sourcesPath, metafactorySource());
-    const pkgDir = await createPackage(testDir, validManifest);
+    const pkgDir = await createPackageDir(testDir, validManifest);
 
     let uploadCalled = false;
     let ensureCalled = false;
@@ -159,7 +143,7 @@ describe("arc publish command", () => {
 
   test("version exists error (409)", async () => {
     await saveSources(env.paths.sourcesPath, metafactorySource());
-    const pkgDir = await createPackage(testDir, validManifest);
+    const pkgDir = await createPackageDir(testDir, validManifest);
 
     mockFetch(async (url: any) => {
       const urlStr = String(url);

@@ -12,6 +12,7 @@ import {
   createBundle,
   DEFAULT_EXCLUSIONS,
 } from "../../src/lib/bundle.js";
+import { createPackageDir } from "../helpers/test-env.js";
 import type { ArcManifest } from "../../src/types.js";
 
 // ── Helper ───────────────────────────────────────────────────
@@ -31,29 +32,12 @@ async function createMockPackage(
   manifest: Partial<ArcManifest> & { name: string; version: string; type: string },
   opts?: { withReadme?: boolean; extraFiles?: Record<string, string> },
 ): Promise<string> {
-  const pkgDir = join(dir, "pkg");
-  await mkdir(pkgDir, { recursive: true });
-
   const fullManifest = {
     schema: "arc/v1",
     ...manifest,
     capabilities: manifest.capabilities ?? { filesystem: { read: [], write: [] }, network: [], bash: { allowed: false }, secrets: [] },
   };
-  await writeFile(join(pkgDir, "arc-manifest.yaml"), YAML.stringify(fullManifest));
-
-  if (opts?.withReadme !== false) {
-    await writeFile(join(pkgDir, "README.md"), `# ${manifest.name}\n\nTest package.\n`);
-  }
-
-  if (opts?.extraFiles) {
-    for (const [path, content] of Object.entries(opts.extraFiles)) {
-      const fullPath = join(pkgDir, path);
-      await mkdir(join(fullPath, ".."), { recursive: true });
-      await writeFile(fullPath, content);
-    }
-  }
-
-  return pkgDir;
+  return createPackageDir(dir, fullManifest, { ...opts, withSkillDir: false });
 }
 
 // ── computeChecksum ──────────────────────────────────────────

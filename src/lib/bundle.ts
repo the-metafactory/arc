@@ -5,6 +5,8 @@ import { existsSync } from "fs";
 import { readManifest } from "./manifest.js";
 import type { ArcManifest, BundleResult, PublishValidation } from "../types.js";
 
+export const README_VARIANTS = ["README.md", "readme.md", "Readme.md"];
+
 // ── Constants ────────────────────────────────────────────────
 
 export const DEFAULT_EXCLUSIONS = [
@@ -110,6 +112,28 @@ export function validateForPublish(manifest: ArcManifest): PublishValidation {
   };
 }
 
+// ── Tarball helpers ──────────────────────────────────────────
+
+/** Build tar --exclude args from exclusion/include pattern lists */
+function buildTarArgs(exclusions: string[], includePatterns: string[]): string[] {
+  const args: string[] = [];
+  for (const pattern of exclusions) {
+    if (!includePatterns.includes(pattern)) {
+      args.push("--exclude", pattern);
+    }
+  }
+  return args;
+}
+
+/** Compute checksum, size, and file count for a tarball */
+async function getBundleStats(tarballPath: string): Promise<{ sha256: string; sizeBytes: number; fileCount: number }> {
+  const sha256 = await computeChecksum(tarballPath);
+  const sizeBytes = Bun.file(tarballPath).size;
+  const listResult = Bun.spawnSync(["tar", "tzf", tarballPath], { stdout: "pipe", stderr: "pipe" });
+  const fileCount = listResult.stdout.toString().trim().split("\n").filter(Boolean).length;
+  return { sha256, sizeBytes, fileCount };
+}
+
 // ── Tarball creation ─────────────────────────────────────────
 
 /** Create a .tar.gz bundle from a package directory */
@@ -119,120 +143,46 @@ export async function createBundle(
 ): Promise<BundleResult> {
   const warnings: string[] = [];
 
-  // Read manifest
   const manifest = await readManifest(packageDir);
   if (!manifest) {
-    return {
-      success: false,
-      tarballPath: "",
-      sha256: "",
-      sizeBytes: 0,
-      fileCount: 0,
-      manifest: {} as ArcManifest,
-      warnings: [],
-      error: "No arc-manifest.yaml found in package directory",
-    };
+    return { success: false, tarballPath: "", sha256: "", sizeBytes: 0, fileCount: 0, manifest: {} as ArcManifest, warnings: [], error: "No arc-manifest.yaml found in package directory" };
   }
 
-  // Validate for publish
   const validation = validateForPublish(manifest);
   if (!validation.valid) {
-    return {
-      success: false,
-      tarballPath: "",
-      sha256: "",
-      sizeBytes: 0,
-      fileCount: 0,
-      manifest,
-      warnings: validation.warnings,
-      error: `Manifest validation failed: ${validation.errors.join(", ")}`,
-    };
+    return { success: false, tarballPath: "", sha256: "", sizeBytes: 0, fileCount: 0, manifest, warnings: validation.warnings, error: `Manifest validation failed: ${validation.errors.join(", ")}` };
   }
   warnings.push(...validation.warnings);
 
-  // Check for README
-  const hasReadme = existsSync(join(packageDir, "README.md")) ||
-    existsSync(join(packageDir, "readme.md")) ||
-    existsSync(join(packageDir, "Readme.md"));
+  const hasReadme = README_VARIANTS.some((v) => existsSync(join(packageDir, v)));
   if (!hasReadme) {
     warnings.push("No README.md found (recommended for registry listing)");
   }
 
-  // Build tar args
   const tarballName = outputPath ?? join(packageDir, `${manifest.name}-${manifest.version}.tar.gz`);
   const exclusions = getExclusionPatterns(manifest);
-  // Handle bundle.include by removing those patterns from exclusions
-  // (include overrides exclude — force specific paths into the tarball)
   const includePatterns = manifest.bundle?.include ?? [];
+  const excludeArgs = buildTarArgs(exclusions, includePatterns);
 
-  const finalExcludeArgs: string[] = [];
-  for (const pattern of exclusions) {
-    const isOverridden = includePatterns.some((inc) => inc === pattern);
-    if (!isOverridden) {
-      finalExcludeArgs.push("--exclude", pattern);
-    }
-  }
-
-  // Create tarball
   const result = Bun.spawnSync(
-    ["tar", "czf", tarballName, ...finalExcludeArgs, "."],
+    ["tar", "czf", tarballName, ...excludeArgs, "."],
     { cwd: packageDir, stdout: "pipe", stderr: "pipe" },
   );
 
   if (result.exitCode !== 0) {
-    return {
-      success: false,
-      tarballPath: tarballName,
-      sha256: "",
-      sizeBytes: 0,
-      fileCount: 0,
-      manifest,
-      warnings,
-      error: `tar failed: ${result.stderr.toString().trim()}`,
-    };
+    return { success: false, tarballPath: tarballName, sha256: "", sizeBytes: 0, fileCount: 0, manifest, warnings, error: `tar failed: ${result.stderr.toString().trim()}` };
   }
 
-  // Compute checksum
-  const sha256 = await computeChecksum(tarballName);
+  const { sha256, sizeBytes, fileCount } = await getBundleStats(tarballName);
 
-  // Get size
-  const file = Bun.file(tarballName);
-  const sizeBytes = file.size;
-
-  // Get file count
-  const listResult = Bun.spawnSync(
-    ["tar", "tzf", tarballName],
-    { stdout: "pipe", stderr: "pipe" },
-  );
-  const fileCount = listResult.stdout.toString().trim().split("\n").filter(Boolean).length;
-
-  // Size checks
   if (sizeBytes > MAX_PACKAGE_SIZE) {
-    // Clean up the tarball
     await rm(tarballName).catch(() => {});
-    return {
-      success: false,
-      tarballPath: tarballName,
-      sha256,
-      sizeBytes,
-      fileCount,
-      manifest,
-      warnings,
-      error: `Package tarball exceeds 50MB limit (${(sizeBytes / 1024 / 1024).toFixed(1)}MB)`,
-    };
+    return { success: false, tarballPath: tarballName, sha256, sizeBytes, fileCount, manifest, warnings, error: `Package tarball exceeds 50MB limit (${(sizeBytes / 1024 / 1024).toFixed(1)}MB)` };
   }
 
   if (sizeBytes > WARN_PACKAGE_SIZE) {
     warnings.push(`Tarball is ${(sizeBytes / 1024 / 1024).toFixed(1)}MB (consider reducing size)`);
   }
 
-  return {
-    success: true,
-    tarballPath: tarballName,
-    sha256,
-    sizeBytes,
-    fileCount,
-    manifest,
-    warnings,
-  };
+  return { success: true, tarballPath: tarballName, sha256, sizeBytes, fileCount, manifest, warnings };
 }

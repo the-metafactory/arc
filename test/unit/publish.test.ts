@@ -9,17 +9,21 @@ import {
   ensurePackageExists,
   registerVersion,
 } from "../../src/lib/publish.js";
+import { mockFetch } from "../helpers/mock-fetch.js";
 import type { ArcManifest, RegistrySource } from "../../src/types.js";
 
 // ── Helper ───────────────────────────────────────────────────
 
 let testDir: string;
+let savedFetch: typeof fetch;
 
 beforeEach(async () => {
   testDir = await mkdtemp(join(tmpdir(), "arc-publish-test-"));
+  savedFetch = globalThis.fetch;
 });
 
 afterEach(async () => {
+  globalThis.fetch = savedFetch;
   await rm(testDir, { recursive: true, force: true });
 });
 
@@ -43,20 +47,6 @@ function makeManifest(overrides?: Partial<ArcManifest>): ArcManifest {
     ...overrides,
   } as ArcManifest;
 }
-
-function mockFetch(fn: (...args: any[]) => Promise<Response>): void {
-  (globalThis as any).fetch = fn;
-}
-
-let savedFetch: typeof fetch;
-
-beforeEach(() => {
-  savedFetch = globalThis.fetch;
-});
-
-afterEach(() => {
-  globalThis.fetch = savedFetch;
-});
 
 // ── extractReadme ────────────────────────────────────────────
 

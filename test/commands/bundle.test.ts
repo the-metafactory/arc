@@ -1,10 +1,9 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtemp, rm, writeFile, mkdir } from "fs/promises";
+import { mkdtemp, rm, mkdir } from "fs/promises";
 import { join } from "path";
 import { tmpdir } from "os";
 import { existsSync } from "fs";
-import YAML from "yaml";
-import { createTestEnv, type TestEnv } from "../helpers/test-env.js";
+import { createTestEnv, createPackageDir, type TestEnv } from "../helpers/test-env.js";
 import { bundle, formatBundle } from "../../src/commands/bundle.js";
 
 let env: TestEnv;
@@ -20,25 +19,9 @@ afterEach(async () => {
   await rm(testDir, { recursive: true, force: true });
 });
 
-async function createPackage(
-  dir: string,
-  manifest: Record<string, any>,
-  opts?: { withReadme?: boolean },
-): Promise<string> {
-  const pkgDir = join(dir, "pkg");
-  await mkdir(pkgDir, { recursive: true });
-  await writeFile(join(pkgDir, "arc-manifest.yaml"), YAML.stringify(manifest));
-  await mkdir(join(pkgDir, "skill"), { recursive: true });
-  await writeFile(join(pkgDir, "skill/SKILL.md"), "# Test\n\nSkill content.\n");
-  if (opts?.withReadme !== false) {
-    await writeFile(join(pkgDir, "README.md"), "# Test Package\n");
-  }
-  return pkgDir;
-}
-
 describe("arc bundle command", () => {
   test("bundles a valid package", async () => {
-    const pkgDir = await createPackage(testDir, {
+    const pkgDir = await createPackageDir(testDir, {
       name: "my-skill",
       version: "1.0.0",
       type: "skill",
@@ -61,7 +44,7 @@ describe("arc bundle command", () => {
   });
 
   test("custom output path", async () => {
-    const pkgDir = await createPackage(testDir, {
+    const pkgDir = await createPackageDir(testDir, {
       name: "my-skill",
       version: "1.0.0",
       type: "skill",
@@ -89,7 +72,7 @@ describe("arc bundle command", () => {
   });
 
   test("fails with invalid manifest", async () => {
-    const pkgDir = await createPackage(testDir, {
+    const pkgDir = await createPackageDir(testDir, {
       name: "My Bad Name!",
       version: "not-semver",
       type: "skill",

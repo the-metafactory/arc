@@ -479,7 +479,6 @@ export interface PublishValidation {
   valid: boolean;
   errors: string[];
   warnings: string[];
-  scope?: string;
   name: string;
   version: string;
 }
