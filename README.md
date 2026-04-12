@@ -3,9 +3,9 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.2.0-blue" alt="Version: 0.2.0" />
+  <img src="https://img.shields.io/badge/version-0.14.0-blue" alt="Version: 0.14.0" />
   <img src="https://img.shields.io/badge/status-beta-yellow" alt="Status: Beta" />
-  <img src="https://img.shields.io/badge/tests-180%20passing-brightgreen" alt="Tests: 180 passing" />
+  <img src="https://img.shields.io/badge/tests-457%20passing-brightgreen" alt="Tests: 457 passing" />
   <img src="https://img.shields.io/badge/runtime-Bun-f472b6" alt="Runtime: Bun" />
   <img src="https://img.shields.io/badge/license-MIT-green" alt="License: MIT" />
   <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey" alt="Platform: macOS | Linux" />
@@ -31,14 +31,17 @@ arc audit                     # See your total attack surface
 
 ### What It Installs
 
-arc handles all four artifact types:
+arc handles multiple artifact types:
 
 | Type | Installed To | What It Is |
 |------|-------------|------------|
 | **Skill** | `~/.claude/skills/{name}/` | Directory with SKILL.md + workflows |
 | **Tool** | `~/.claude/bin/{name}` + PATH shim | CLI command you can run directly |
-| **Agent** | `~/.claude/agents/{name}.md` | Persona file — auto-discovered as `subagent_type` |
+| **Agent** | `~/.claude/agents/{name}.md` | Persona file -- auto-discovered as `subagent_type` |
 | **Prompt** | `~/.claude/commands/{name}.md` | Slash command template |
+| **Library** | `~/.config/metafactory/pkg/repos/` | Multi-artifact repo containing skills, tools, etc. |
+| **Action** | `~/.config/metafactory/actions/{name}/` | Pulse action (action.json + action.ts) |
+| **Rules** | `~/.claude/skills/{name}/` | Configurable rules templates (e.g. CLAUDE.md generators) |
 
 ---
 
@@ -127,6 +130,26 @@ arc init my-prompt --type prompt
 ```
 
 Each scaffold includes `arc-manifest.yaml`, `package.json`, `README.md`, `.gitignore`, and type-specific files (SKILL.md + workflows, agent persona, prompt template, or tool entry point).
+
+### Bundle and Publish
+
+```bash
+arc bundle [path]             # Create a .tar.gz from a package directory
+arc bundle --output out.tar.gz  # Custom output path
+arc publish [path]            # Bundle, upload, and register on metafactory
+arc publish --dry-run         # Validate without uploading
+arc publish --tarball f.tar.gz  # Publish from existing tarball
+arc publish --scope <ns>      # Override publish namespace
+arc publish --source <name>   # Target specific metafactory source
+```
+
+### Authentication
+
+```bash
+arc login                     # Authenticate with metafactory (device code flow)
+arc login --source <name>     # Authenticate with a specific source
+arc logout                    # Remove authentication token
+```
 
 ---
 
@@ -298,7 +321,7 @@ capabilities:
 ## Running Tests
 
 ```bash
-bun test                    # All 180 tests
+bun test                    # All 457 tests
 bun test:unit               # Unit tests only
 bun test:commands           # Command tests
 bun test:e2e                # End-to-end lifecycle tests
@@ -337,14 +360,102 @@ Registry entries include a `version` field to advertise the latest available ver
 
 ## Publishing
 
-To add your package to a community registry, see the publishing guide.
+arc supports publishing packages to the metafactory registry. This is the counterpart to `arc install @scope/name` -- you bundle your package locally and publish it to the registry where others can install it.
 
-**Requirements:**
-- Public GitHub repo with `arc-manifest.yaml`
-- All capabilities honestly declared
-- License file (MIT, Apache-2.0, BSD-2-Clause, BSD-3-Clause)
-- Git tag + GitHub Release matching the manifest version
-- Open a PR adding your entry to the registry's `REGISTRY.yaml`
+### Quick Publish
+
+```bash
+# 1. Authenticate (one-time)
+arc login
+
+# 2. Set your namespace in arc-manifest.yaml
+#    namespace: my-namespace
+
+# 3. Publish
+arc publish
+```
+
+### How Publishing Works
+
+```
+arc publish
+  1. Read arc-manifest.yaml
+  2. Validate: name, version (semver), type, capabilities
+  3. Create .tar.gz (excludes .git, node_modules, .env, test/, etc.)
+  4. Upload tarball to R2 storage (content-addressed by SHA-256)
+  5. Verify SHA-256: client hash must match server hash
+  6. Auto-create package entry on first publish
+  7. Register version (immutable -- cannot overwrite)
+```
+
+### Scope Resolution
+
+The publish namespace is resolved in priority order:
+
+1. `--scope` flag: `arc publish --scope my-namespace`
+2. `namespace` field in `arc-manifest.yaml`
+3. Account default from `/auth/me` API
+
+### Bundle Exclusions
+
+By default, these patterns are excluded from the tarball:
+
+`.git`, `node_modules`, `.env`, `.env.*`, `*.db`, `*.sqlite`, `.DS_Store`, `Thumbs.db`, `.specify`, `test`, `tests`, `dist`, `*.log`, `.wrangler`, `.claude`
+
+Override in `arc-manifest.yaml`:
+
+```yaml
+bundle:
+  exclude:
+    - "*.tmp"
+    - "coverage"
+  include:
+    - "test"           # Override default exclusion
+```
+
+### Dry Run
+
+Preview what would be published without uploading:
+
+```bash
+arc publish --dry-run
+# [DRY RUN] Would publish @my-namespace/my-skill v1.0.0
+#   SHA-256:  abc123...
+#   Source:   metafactory
+```
+
+### Pre-built Tarballs
+
+Skip the bundle step and publish an existing tarball:
+
+```bash
+arc bundle --output my-skill-1.0.0.tar.gz
+# ... inspect tarball contents ...
+arc publish --tarball my-skill-1.0.0.tar.gz
+```
+
+### Size Limits
+
+- Tarballs exceeding **50MB** are rejected before upload
+- Tarballs exceeding **10MB** produce a warning
+
+### Version Immutability
+
+Published versions cannot be overwritten. To publish changes, bump the version in `arc-manifest.yaml` first:
+
+```bash
+# After editing arc-manifest.yaml to version: 1.1.0
+arc publish
+```
+
+Re-running `arc publish` with the same version returns a clear error: *"Version 1.0.0 already exists. Published versions are immutable."*
+
+### Requirements
+
+- Authenticated with `arc login`
+- Valid `arc-manifest.yaml` with `name` (lowercase alphanumeric), `version` (semver), and `type`
+- A `README.md` is recommended but not required
+- All capabilities must be honestly declared
 
 ---
 
