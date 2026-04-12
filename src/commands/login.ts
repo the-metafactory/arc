@@ -45,10 +45,11 @@ export async function login(opts: LoginOptions): Promise<LoginResult> {
   }
 
   // Display code and open browser
-  console.log(`\nVisit: ${deviceCode.verification_uri}`);
+  const verifyUrl = `${deviceCode.verification_uri}?code=${encodeURIComponent(deviceCode.user_code)}`;
+  console.log(`\nVisit: ${verifyUrl}`);
   console.log(`Enter code: ${deviceCode.user_code}\n`);
 
-  if (!openBrowser(deviceCode.verification_uri)) {
+  if (!openBrowser(verifyUrl)) {
     console.log("(Could not open browser automatically. Open the URL above manually.)");
   }
 
