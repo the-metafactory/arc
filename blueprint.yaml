@@ -99,10 +99,10 @@ features:
 
   - id: A-401
     name: metafactory registry source
-    status: planned
+    status: done
     iteration: 4
     depends: [A-200, meta-factory:F2-200]
-    description: "Official metafactory registry as a first-class source in arc"
+    description: "Official metafactory registry as a first-class source in arc — F-1 through F-5 merged (v0.13.0)"
 
   - id: A-402
     name: Version pinning
@@ -147,6 +147,14 @@ features:
     depends: [A-102]
     description: "type: action for pulse actions — install to ~/.config/metafactory/actions/, list/remove support"
 
+  # Publishing
+  - id: A-408
+    name: Bundle and publish (Phase 1 bootstrap)
+    status: in-progress
+    iteration: 5
+    depends: [A-404, meta-factory:F2-200]
+    description: "arc bundle + arc publish — create tarballs, upload to R2, register versions via bootstrap API. Phase 1 of DD-97 convergence."
+
   # Remote info & inspection
   - id: A-500
     name: Remote package info
@@ -154,3 +162,25 @@ features:
     iteration: 6
     depends: [A-200, A-404]
     description: "arc info <name> for uninstalled packages — resolve from registry, clone to cache, show manifest, capabilities, and library artifacts list"
+
+  # Supply chain security (Iteration 6, L5)
+  - id: A-501
+    name: cosign binary bundling
+    status: planned
+    iteration: 6
+    depends: []
+    description: "Download cosign binaries (darwin-arm64, darwin-amd64, linux-amd64) in build script and embed in arc tarball — no external dependency (OQ-12 resolved: bundle strategy)"
+
+  - id: A-502
+    name: cosign wrapper (internal/cosign.ts)
+    status: planned
+    iteration: 6
+    depends: [A-501]
+    description: "Thin wrapper that locates the bundled cosign binary for the current platform and shells out to it — used by arc install for signature verification"
+
+  - id: A-503
+    name: arc install cosign verification
+    status: planned
+    iteration: 6
+    depends: [A-502, meta-factory:F5-500]
+    description: "arc install fetches Sigstore bundle alongside artifact, calls cosign verify-blob --bundle --offline — blocks install on verification failure (DD-11, F-505)"
