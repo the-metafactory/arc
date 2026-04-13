@@ -150,7 +150,7 @@ features:
   # Publishing
   - id: A-408
     name: Bundle and publish (Phase 1 bootstrap)
-    status: in-progress
+    status: done
     iteration: 5
     depends: [A-404, meta-factory:F2-200]
     description: "arc bundle + arc publish — create tarballs, upload to R2, register versions via bootstrap API. Phase 1 of DD-97 convergence."
