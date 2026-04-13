@@ -42,7 +42,7 @@ export async function info(
   const pkgRef = parsePackageRef(name);
 
   const libRef = pkgRef ? null : parseLibraryRef(name);
-  const lookupName = libRef?.artifactName ? libRef.libraryName : (pkgRef ? pkgRef.name : name);
+  const lookupName = libRef?.artifactName ? libRef.libraryName : name;
   const artifactFilter = libRef?.artifactName;
 
   // 1. Try installed packages (skip for scoped refs — they go to API)

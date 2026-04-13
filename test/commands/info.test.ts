@@ -364,10 +364,14 @@ describe("info — metafactory API packages (@scope/name)", () => {
     if (savedFetch) globalThis.fetch = savedFetch;
   });
 
+  const capturedUrls: string[] = [];
+
   function mockApiDetail(detail: Record<string, unknown>) {
     savedFetch = globalThis.fetch;
+    capturedUrls.length = 0;
     (globalThis as any).fetch = async (input: any) => {
       const url = typeof input === "string" ? input : input.url;
+      capturedUrls.push(url);
       if (url.includes("/api/v1/packages/")) {
         return new Response(JSON.stringify(detail), { status: 200 });
       }
@@ -421,6 +425,9 @@ describe("info — metafactory API packages (@scope/name)", () => {
     expect(result.remote).toBeDefined();
     expect(result.remote!.sourceName).toBe("mf-test");
     expect(result.skill).toBeNull();
+
+    // Verify API was called with correct scope and name in URL
+    expect(capturedUrls.some((u) => u.includes("/%40jcfischer/demo-skill"))).toBe(true);
   });
 
   test("returns error when @scope/name not found in any API source", async () => {
@@ -542,5 +549,42 @@ describe("info — metafactory API packages (@scope/name)", () => {
     expect(json.versions).toEqual(["1.0.0", "0.9.0"]);
     expect(json.publisher).toBeDefined();
     expect(json.publisher.tier).toBe("steward");
+  });
+
+  test("JSON output includes sponsor when present", async () => {
+    env = await createTestEnv();
+
+    await writeFile(env.paths.sourcesPath, YAML.stringify({
+      sources: [{
+        name: "mf-test",
+        url: "https://api.example.com",
+        tier: "community",
+        enabled: true,
+        type: "metafactory",
+        token: "test-token",
+      }],
+    }));
+
+    mockApiDetail({
+      namespace: "jcfischer",
+      name: "sponsored-skill",
+      display_name: null,
+      description: "A sponsored skill",
+      type: "skill",
+      license: "MIT",
+      latest_version: "1.0.0",
+      versions: ["1.0.0"],
+      publisher: { display_name: "JCF", tier: "identified", mfa_enabled: false, github_username: "jcfischer" },
+      sponsor: { display_name: "metafactory", tier: "steward", github_username: "mellanon" },
+      created_at: 1700000000,
+      updated_at: 1700000000,
+    });
+
+    const result = await info(env.db, "@jcfischer/sponsored-skill", env.paths);
+    const json = JSON.parse(formatInfoJson(result));
+
+    expect(json.sponsor).toBeDefined();
+    expect(json.sponsor.display_name).toBe("metafactory");
+    expect(json.sponsor.tier).toBe("steward");
   });
 });
