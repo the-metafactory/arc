@@ -356,3 +356,235 @@ describe("formatInfoJson", () => {
     expect(json.error).toBe("not found");
   });
 });
+
+describe("info — metafactory API packages (@scope/name)", () => {
+  let savedFetch: typeof globalThis.fetch;
+
+  afterEach(() => {
+    if (savedFetch) globalThis.fetch = savedFetch;
+  });
+
+  const capturedUrls: string[] = [];
+
+  function mockApiDetail(detail: Record<string, unknown>) {
+    savedFetch = globalThis.fetch;
+    capturedUrls.length = 0;
+    (globalThis as any).fetch = async (input: any) => {
+      const url = typeof input === "string" ? input : input.url;
+      capturedUrls.push(url);
+      if (url.includes("/api/v1/packages/")) {
+        return new Response(JSON.stringify(detail), { status: 200 });
+      }
+      return new Response("Not found", { status: 404 });
+    };
+  }
+
+  test("resolves info for @scope/name from metafactory API", async () => {
+    env = await createTestEnv();
+
+    // Configure a metafactory source
+    await writeFile(env.paths.sourcesPath, YAML.stringify({
+      sources: [{
+        name: "mf-test",
+        url: "https://api.example.com",
+        tier: "community",
+        enabled: true,
+        type: "metafactory",
+        token: "test-token",
+      }],
+    }));
+
+    mockApiDetail({
+      namespace: "jcfischer",
+      name: "demo-skill",
+      display_name: "Demo Skill",
+      description: "A demo skill for testing",
+      type: "skill",
+      license: "MIT",
+      latest_version: "0.1.0",
+      versions: ["0.1.0"],
+      publisher: {
+        display_name: "Jens-Christian Fischer",
+        tier: "steward",
+        mfa_enabled: true,
+        github_username: "jcfischer",
+      },
+      sponsor: null,
+      created_at: 1700000000,
+      updated_at: 1700000000,
+    });
+
+    const result = await info(env.db, "@jcfischer/demo-skill", env.paths);
+
+    expect(result.error).toBeUndefined();
+    expect(result.manifest).not.toBeNull();
+    expect(result.manifest!.name).toBe("demo-skill");
+    expect(result.manifest!.version).toBe("0.1.0");
+    expect(result.manifest!.type).toBe("skill");
+    expect(result.manifest!.description).toBe("A demo skill for testing");
+    expect(result.remote).toBeDefined();
+    expect(result.remote!.sourceName).toBe("mf-test");
+    expect(result.skill).toBeNull();
+
+    // Verify API was called with correct scope and name in URL
+    expect(capturedUrls.some((u) => u.includes("/%40jcfischer/demo-skill"))).toBe(true);
+  });
+
+  test("returns error when @scope/name not found in any API source", async () => {
+    env = await createTestEnv();
+
+    await writeFile(env.paths.sourcesPath, YAML.stringify({
+      sources: [{
+        name: "mf-test",
+        url: "https://api.example.com",
+        tier: "community",
+        enabled: true,
+        type: "metafactory",
+        token: "test-token",
+      }],
+    }));
+
+    savedFetch = globalThis.fetch;
+    (globalThis as any).fetch = async () => new Response('{"error":"Not found"}', { status: 404 });
+
+    const result = await info(env.db, "@jcfischer/nonexistent", env.paths);
+
+    expect(result.error).toContain("not found");
+  });
+
+  test("shows publisher info in formatted output", async () => {
+    const result = formatInfo({
+      skill: null,
+      manifest: {
+        name: "demo-skill",
+        version: "0.1.0",
+        type: "skill",
+        description: "A demo skill",
+        author: { name: "Jens-Christian Fischer", github: "jcfischer" },
+      } as any,
+      releaseNotes: null,
+      remote: {
+        sourceName: "metafactory",
+        sourceTier: "community",
+        repoUrl: "@jcfischer/demo-skill",
+      },
+    });
+
+    expect(result).toContain("demo-skill");
+    expect(result).toContain("v0.1.0");
+    expect(result).toContain("Jens-Christian Fischer");
+    expect(result).toContain("arc install");
+  });
+
+  test("formats @scope/name in install hint for API packages", async () => {
+    env = await createTestEnv();
+
+    await writeFile(env.paths.sourcesPath, YAML.stringify({
+      sources: [{
+        name: "mf-test",
+        url: "https://api.example.com",
+        tier: "community",
+        enabled: true,
+        type: "metafactory",
+        token: "test-token",
+      }],
+    }));
+
+    mockApiDetail({
+      namespace: "jcfischer",
+      name: "demo-skill",
+      display_name: null,
+      description: "A demo",
+      type: "skill",
+      license: "MIT",
+      latest_version: "1.0.0",
+      versions: ["1.0.0"],
+      publisher: { display_name: "JCF", tier: "identified", mfa_enabled: false, github_username: "jcfischer" },
+      sponsor: null,
+      created_at: 1700000000,
+      updated_at: 1700000000,
+    });
+
+    const result = await info(env.db, "@jcfischer/demo-skill", env.paths);
+    const formatted = formatInfo(result);
+
+    expect(formatted).toContain("arc install @jcfischer/demo-skill");
+  });
+
+  test("JSON output includes API metadata", async () => {
+    env = await createTestEnv();
+
+    await writeFile(env.paths.sourcesPath, YAML.stringify({
+      sources: [{
+        name: "mf-test",
+        url: "https://api.example.com",
+        tier: "community",
+        enabled: true,
+        type: "metafactory",
+        token: "test-token",
+      }],
+    }));
+
+    mockApiDetail({
+      namespace: "jcfischer",
+      name: "demo-skill",
+      display_name: "Demo",
+      description: "A demo",
+      type: "skill",
+      license: "MIT",
+      latest_version: "1.0.0",
+      versions: ["1.0.0", "0.9.0"],
+      publisher: { display_name: "JCF", tier: "steward", mfa_enabled: true, github_username: "jcfischer" },
+      sponsor: null,
+      created_at: 1700000000,
+      updated_at: 1700000000,
+    });
+
+    const result = await info(env.db, "@jcfischer/demo-skill", env.paths);
+    const json = JSON.parse(formatInfoJson(result));
+
+    expect(json.installed).toBe(false);
+    expect(json.name).toBe("demo-skill");
+    expect(json.source).toBe("mf-test");
+    expect(json.versions).toEqual(["1.0.0", "0.9.0"]);
+    expect(json.publisher).toBeDefined();
+    expect(json.publisher.tier).toBe("steward");
+  });
+
+  test("JSON output includes sponsor when present", async () => {
+    env = await createTestEnv();
+
+    await writeFile(env.paths.sourcesPath, YAML.stringify({
+      sources: [{
+        name: "mf-test",
+        url: "https://api.example.com",
+        tier: "community",
+        enabled: true,
+        type: "metafactory",
+        token: "test-token",
+      }],
+    }));
+
+    mockApiDetail({
+      namespace: "jcfischer",
+      name: "sponsored-skill",
+      display_name: null,
+      description: "A sponsored skill",
+      type: "skill",
+      license: "MIT",
+      latest_version: "1.0.0",
+      versions: ["1.0.0"],
+      publisher: { display_name: "JCF", tier: "identified", mfa_enabled: false, github_username: "jcfischer" },
+      sponsor: { display_name: "metafactory", tier: "steward", github_username: "mellanon" },
+      created_at: 1700000000,
+      updated_at: 1700000000,
+    });
+
+    const result = await info(env.db, "@jcfischer/sponsored-skill", env.paths);
+    const json = JSON.parse(formatInfoJson(result));
+
+    expect(json.sponsor).toBeDefined();
+    expect(json.sponsor.display_name).toBe("metafactory");
+    expect(json.sponsor.tier).toBe("steward");
+  });
+});
