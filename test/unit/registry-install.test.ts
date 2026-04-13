@@ -486,6 +486,10 @@ describe("adversarial: download path error handling", () => {
       expect(result.success).toBe(false);
       // No tempPath should be returned on failure
       expect(result.tempPath).toBeUndefined();
+      // Also verify no arc-download-* files leaked to disk
+      const { readdirSync } = await import("fs");
+      const leaked = readdirSync(env.paths.reposDir).filter((f: string) => f.startsWith("arc-download-"));
+      expect(leaked).toHaveLength(0);
     } finally {
       globalThis.fetch = originalFetch;
     }
