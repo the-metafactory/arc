@@ -106,7 +106,7 @@ describe("fetchRemoteRegistry", () => {
 
   test("emits warning to stderr on HTTP error", async () => {
     const originalFetch = globalThis.fetch;
-    globalThis.fetch = (async () => new Response("Not Found", { status: 404, statusText: "Not Found" })) as typeof fetch;
+    globalThis.fetch = (async () => new Response("Not Found", { status: 404, statusText: "Not Found" })) as unknown as typeof fetch;
     (globalThis.fetch as any).preconnect = () => {};
 
     const stderrChunks: string[] = [];
@@ -134,7 +134,7 @@ describe("fetchRemoteRegistry", () => {
 
   test("emits warning with auth hint on 401", async () => {
     const originalFetch = globalThis.fetch;
-    globalThis.fetch = (async () => new Response("Unauthorized", { status: 401, statusText: "Unauthorized" })) as typeof fetch;
+    globalThis.fetch = (async () => new Response("Unauthorized", { status: 401, statusText: "Unauthorized" })) as unknown as typeof fetch;
     (globalThis.fetch as any).preconnect = () => {};
 
     const stderrChunks: string[] = [];
@@ -178,7 +178,7 @@ describe("fetchRemoteRegistry", () => {
 
     // Force refresh with network error
     const originalFetch = globalThis.fetch;
-    globalThis.fetch = (async () => { throw new Error("ECONNREFUSED"); }) as typeof fetch;
+    globalThis.fetch = (async () => { throw new Error("ECONNREFUSED"); }) as unknown as typeof fetch;
     (globalThis.fetch as any).preconnect = () => {};
 
     const stderrChunks: string[] = [];

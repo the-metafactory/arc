@@ -674,8 +674,12 @@ async function promptHookConsent(
 
 /**
  * Read a single line from stdin.
+ * Returns empty string immediately if stdin is not a TTY (defense in depth).
  */
 function readLine(): Promise<string> {
+  if (!process.stdin.isTTY) {
+    return Promise.resolve("");
+  }
   return new Promise((resolve) => {
     const stdin = process.stdin;
     stdin.setEncoding("utf-8");

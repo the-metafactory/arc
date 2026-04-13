@@ -87,6 +87,13 @@ program
   .option("-y, --yes", "Skip confirmation prompt")
   .option("--pin <version>", "Pin to a specific version (git tag)")
   .action(async (nameOrUrl: string, opts: { yes?: boolean; pin?: string }) => {
+    // Non-TTY guard: fail loud rather than silently half-installing
+    if (!opts.yes && !process.stdin.isTTY) {
+      console.error("Error: arc install requires an interactive terminal for capability confirmation.");
+      console.error("Pass --yes (-y) to approve non-interactively.");
+      process.exit(1);
+    }
+
     const paths = createPaths();
     await ensureDirectories(paths);
     const db = openDatabase(paths.dbPath);
