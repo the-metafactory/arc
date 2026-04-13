@@ -3,7 +3,7 @@
 import { Command } from "commander";
 import { createPaths, ensureDirectories } from "./lib/paths.js";
 import { openDatabase } from "./lib/db.js";
-import { install, parseNameVersion } from "./commands/install.js";
+import { install } from "./commands/install.js";
 import { list, formatList, formatListJson } from "./commands/list.js";
 import { info, formatInfo, formatInfoJson } from "./commands/info.js";
 import { audit, formatAudit } from "./commands/audit.js";
@@ -85,8 +85,7 @@ program
   .command("install <name-or-url>")
   .description("Install a skill from git URL, or by name from the registry")
   .option("-y, --yes", "Skip confirmation prompt")
-  .option("--version <version>", "Pin to a specific version (git tag)")
-  .action(async (nameOrUrl: string, opts: { yes?: boolean; version?: string }) => {
+  .action(async (nameOrUrl: string, opts: { yes?: boolean }) => {
     const paths = createPaths();
     await ensureDirectories(paths);
     const db = openDatabase(paths.dbPath);
@@ -102,18 +101,10 @@ program
 
     let libraryName: string | undefined;
     let artifactName: string | undefined;
-    let pinnedVersion: string | undefined = opts.version;
     let lookupName = nameOrUrl;
 
     if (!isUrl && !pkgRef) {
-      // Check for version suffix: MySkill@1.2.0
-      const nameVer = parseNameVersion(nameOrUrl);
-      if (nameVer) {
-        pinnedVersion ??= nameVer.version;
-        lookupName = nameVer.name;
-      }
-
-      const libRef = parseLibraryRef(lookupName);
+      const libRef = parseLibraryRef(nameOrUrl);
       if (libRef?.artifactName) {
         libraryName = libRef.libraryName;
         artifactName = libRef.artifactName;
@@ -182,7 +173,7 @@ program
       }
     } else if (isUrl) {
       // Direct git install
-      const result = await install({ paths, db, repoUrl: nameOrUrl, yes: opts.yes, artifactName, pinnedVersion: opts.version });
+      const result = await install({ paths, db, repoUrl: nameOrUrl, yes: opts.yes, artifactName });
       if (result.success) {
         if (result.artifacts?.length) {
           console.log(`\n✅ Installed ${result.artifacts.filter(a => a.success).length} artifact(s) from ${result.name}`);
@@ -203,8 +194,7 @@ program
         process.exit(1);
       }
 
-      const versionLabel = pinnedVersion ? ` (pinned: v${pinnedVersion})` : "";
-      console.log(`Found ${lookupName} [${found.artifactType}] in ${found.sourceName} [${found.sourceTier}]${versionLabel}`);
+      console.log(`Found ${lookupName} [${found.artifactType}] in ${found.sourceName} [${found.sourceTier}]`);
 
       // Install directly from the source URL
       const result = await install({
@@ -216,7 +206,6 @@ program
         sourceTier: found.sourceTier,
         artifactName,
         libraryName,
-        pinnedVersion,
       });
       if (result.success) {
         if (result.artifacts?.length) {
