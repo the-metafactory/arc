@@ -106,7 +106,7 @@ features:
 
   - id: A-402
     name: Version pinning
-    status: planned
+    status: done
     iteration: 4
     depends: [A-300]
     description: "arc install MySkill@1.2.0 — pin to specific version during install"
