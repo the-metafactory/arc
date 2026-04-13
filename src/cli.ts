@@ -139,9 +139,9 @@ program
 
       console.log(`Found ${formatPackageRef(pkgRef)} v${resolved.version} in ${resolved.source.name} [${resolved.source.tier}]`);
 
-      // Download
+      // Download (anonymous — no auth required per DD-80)
       console.log(`Downloading...`);
-      const download = await downloadPackage(resolved.downloadUrl, paths.reposDir, resolved.source.token);
+      const download = await downloadPackage(resolved.downloadUrl, paths.reposDir);
       if (!download.success || !download.tempPath) {
         console.error(`${download.error}`);
         process.exit(1);
@@ -697,7 +697,7 @@ source
 
 program
   .command("login")
-  .description("Authenticate with metafactory registry")
+  .description("Authenticate with metafactory registry (required for publishing only)")
   .option("-s, --source <name>", "Target source name (default: first metafactory source)")
   .option("-f, --force", "Re-authenticate even if already logged in")
   .action(async (opts: { source?: string; force?: boolean }) => {
@@ -716,7 +716,7 @@ program
 
 program
   .command("logout")
-  .description("Remove authentication from metafactory source")
+  .description("Remove authentication from metafactory source (only affects publishing)")
   .option("-s, --source <name>", "Target source name (default: first metafactory source)")
   .action(async (opts: { source?: string }) => {
     const paths = createPaths();

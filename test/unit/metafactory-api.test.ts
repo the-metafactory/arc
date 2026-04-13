@@ -134,7 +134,7 @@ describe("fetchMetafactoryRegistry", () => {
     }
   });
 
-  test("sends Authorization header when token present", async () => {
+  test("does not send Authorization header even when token configured (anonymous per DD-80)", async () => {
     const originalFetch = globalThis.fetch;
     let capturedHeaders: Headers | undefined;
     globalThis.fetch = mockFetch(async (_input: any, init?: any) => {
@@ -144,22 +144,6 @@ describe("fetchMetafactoryRegistry", () => {
 
     try {
       await fetchMetafactoryRegistry(metafactorySource("my-secret-token"), env.paths.cachePath, true);
-      expect(capturedHeaders?.get("Authorization")).toBe("Bearer my-secret-token");
-    } finally {
-      globalThis.fetch = originalFetch;
-    }
-  });
-
-  test("does not send Authorization when no token", async () => {
-    const originalFetch = globalThis.fetch;
-    let capturedHeaders: Headers | undefined;
-    globalThis.fetch = mockFetch(async (_input: any, init?: any) => {
-      capturedHeaders = new Headers(init?.headers);
-      return mockFetchResponse([]);
-    });
-
-    try {
-      await fetchMetafactoryRegistry(metafactorySource(), env.paths.cachePath, true);
       expect(capturedHeaders?.get("Authorization")).toBeNull();
     } finally {
       globalThis.fetch = originalFetch;

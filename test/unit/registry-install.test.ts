@@ -246,6 +246,42 @@ describe("resolveFromRegistry", () => {
     }
   });
 
+  test("does not send Authorization headers (anonymous per DD-80)", async () => {
+    const originalFetch = globalThis.fetch;
+    const capturedAuths: (string | null)[] = [];
+    globalThis.fetch = mockFetch(async (input: any, init?: any) => {
+      const url = typeof input === "string" ? input : input.url;
+      // Capture Authorization header from init (not from a reconstructed Request)
+      const headers = new Headers(init?.headers);
+      capturedAuths.push(headers.get("Authorization"));
+      if (url.includes("/versions")) {
+        return new Response(JSON.stringify({
+          versions: [{ version: "1.0.0", sha256: "abc" }],
+        }), { status: 200 });
+      }
+      return new Response(JSON.stringify({
+        namespace: "@test", name: "pkg",
+        display_name: null, description: "", type: "skill", license: "MIT",
+        latest_version: "1.0.0", versions: ["1.0.0"],
+        publisher: { display_name: "T", tier: "official", mfa_enabled: true, github_username: null },
+        sponsor: null, created_at: 0, updated_at: 0,
+      }), { status: 200 });
+    });
+
+    try {
+      await resolveFromRegistry(
+        { scope: "test", name: "pkg" },
+        [metafactorySource("should-not-be-sent")],
+      );
+      // No request should include an Authorization header
+      for (const auth of capturedAuths) {
+        expect(auth).toBeNull();
+      }
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test("returns null when package not found", async () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = mockFetch(async () => new Response("Not found", { status: 404 }));
@@ -281,17 +317,18 @@ describe("downloadPackage", () => {
     }
   });
 
-  test("sends Bearer token when provided", async () => {
+  test("does not send Authorization header (anonymous download)", async () => {
     const originalFetch = globalThis.fetch;
-    let capturedAuth: string | undefined;
+    let capturedAuth: string | null = null;
     globalThis.fetch = mockFetch(async (_input: any, init?: any) => {
-      capturedAuth = new Headers(init?.headers).get("Authorization") ?? undefined;
+      const headers = new Headers(init?.headers);
+      capturedAuth = headers.get("Authorization");
       return new Response(new ArrayBuffer(10), { status: 200 });
     });
 
     try {
-      await downloadPackage("https://example.com/pkg.tar.gz", env.paths.reposDir, "my-token");
-      expect(capturedAuth).toBe("Bearer my-token");
+      await downloadPackage("https://example.com/pkg.tar.gz", env.paths.reposDir);
+      expect(capturedAuth).toBeNull();
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -304,7 +341,7 @@ describe("downloadPackage", () => {
     try {
       const result = await downloadPackage("https://example.com/pkg.tar.gz", env.paths.reposDir);
       expect(result.success).toBe(false);
-      expect(result.error).toContain("arc login");
+      expect(result.error).toContain("Access denied");
     } finally {
       globalThis.fetch = originalFetch;
     }
