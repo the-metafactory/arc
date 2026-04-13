@@ -181,12 +181,12 @@ export function formatSelfUpdate(result: SelfUpdateResult): string {
   }
 
   if (result.oldVersion !== result.newVersion) {
-    return `arc updated: v${result.oldVersion} → v${result.newVersion}`;
+    return `arc updated: v${result.oldVersion} → v${result.newVersion} (${result.commitsPulled} commit${result.commitsPulled === 1 ? "" : "s"})`;
   }
 
   if (result.commitsPulled > 0) {
-    return `arc updated (v${result.newVersion}, pulled ${result.commitsPulled} new commit${result.commitsPulled === 1 ? "" : "s"}).`;
+    return `arc updated: pulled ${result.commitsPulled} new commit${result.commitsPulled === 1 ? "" : "s"} (version unchanged at v${result.newVersion})`;
   }
 
-  return `arc is already up to date (v${result.newVersion}).`;
+  return `arc already up to date at v${result.newVersion} — no new commits on remote.`;
 }
