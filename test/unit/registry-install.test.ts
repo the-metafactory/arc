@@ -378,3 +378,148 @@ describe("downloadPackage", () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// Adversarial regression tests (DD-79)
+// ---------------------------------------------------------------------------
+
+describe("adversarial: SHA-256 tamper detection", () => {
+  test("rejects install when registry returns tampered hash", async () => {
+    // Scenario: registry is compromised and returns a different SHA-256
+    // than what the artifact actually contains. arc must reject because
+    // it recomputes the hash from the downloaded bytes independently.
+    const realContent = "legitimate package content";
+    const filePath = join(env.paths.reposDir, "tampered-hash.tar.gz");
+    await writeFile(filePath, realContent);
+
+    // Registry claims a hash that doesn't match the actual file
+    const tamperedHash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+    const result = await verifyChecksum(filePath, tamperedHash);
+    expect(result.valid).toBe(false);
+    expect(result.expected).toBe(tamperedHash);
+    expect(result.actual).not.toBe(tamperedHash);
+  });
+
+  test("rejects when artifact is replaced with different content but same size", async () => {
+    // Scenario: attacker replaces artifact with malicious payload of the
+    // same byte length. SHA-256 must catch this.
+    const originalContent = "AAAA"; // 4 bytes
+    const maliciousContent = "BBBB"; // 4 bytes — same length
+
+    // Compute hash of original
+    const hasher = new Bun.CryptoHasher("sha256");
+    hasher.update(originalContent);
+    const originalHash = hasher.digest("hex");
+
+    // Write the malicious content but verify against original hash
+    const filePath = join(env.paths.reposDir, "swapped-same-size.bin");
+    await writeFile(filePath, maliciousContent);
+
+    const result = await verifyChecksum(filePath, originalHash);
+    expect(result.valid).toBe(false);
+    expect(result.actual).not.toBe(originalHash);
+  });
+
+  test("rejects truncated artifact", async () => {
+    // Scenario: artifact is truncated mid-transfer. The partial file has
+    // a different SHA-256 than the complete artifact.
+    const fullContent = "full package content with many bytes of data";
+    const truncatedContent = "full pack"; // cut mid-stream
+
+    // Hash of the full content is what the registry advertises
+    const hasher = new Bun.CryptoHasher("sha256");
+    hasher.update(fullContent);
+    const fullHash = hasher.digest("hex");
+
+    // Write truncated version and verify against full hash
+    const filePath = join(env.paths.reposDir, "truncated.tar.gz");
+    await writeFile(filePath, truncatedContent);
+
+    const result = await verifyChecksum(filePath, fullHash);
+    expect(result.valid).toBe(false);
+    expect(result.actual).not.toBe(fullHash);
+  });
+
+  test("rejects artifact with appended bytes", async () => {
+    // Scenario: attacker appends malicious payload to a valid artifact
+    const originalContent = "valid package";
+    const tamperedContent = "valid package\x00MALICIOUS_PAYLOAD";
+
+    const hasher = new Bun.CryptoHasher("sha256");
+    hasher.update(originalContent);
+    const originalHash = hasher.digest("hex");
+
+    const filePath = join(env.paths.reposDir, "appended.tar.gz");
+    await writeFile(filePath, tamperedContent);
+
+    const result = await verifyChecksum(filePath, originalHash);
+    expect(result.valid).toBe(false);
+  });
+});
+
+describe("adversarial: download path error handling", () => {
+  test("download returns error on server 500 after retries", async () => {
+    const originalFetch = globalThis.fetch;
+    let attempts = 0;
+    globalThis.fetch = mockFetch(async () => {
+      attempts++;
+      return new Response("Internal Server Error", { status: 500 });
+    });
+
+    try {
+      const result = await downloadPackage("https://example.com/pkg.tar.gz", env.paths.reposDir);
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("500");
+      expect(attempts).toBe(2); // original + 1 retry
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("download does not write partial file on failure", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mockFetch(async () => new Response("Forbidden", { status: 403 }));
+
+    try {
+      const result = await downloadPackage("https://example.com/pkg.tar.gz", env.paths.reposDir);
+      expect(result.success).toBe(false);
+      // No tempPath should be returned on failure
+      expect(result.tempPath).toBeUndefined();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+describe("adversarial: extract path integrity", () => {
+  test("extraction cleans up on invalid tarball — no partial files left", async () => {
+    const badTarball = join(env.paths.reposDir, "adversarial-bad.tar.gz");
+    await writeFile(badTarball, "this is not a valid tarball at all");
+
+    const extractDir = "adversarial-test-pkg";
+    const result = await extractPackage(badTarball, env.paths.reposDir, extractDir);
+
+    expect(result.success).toBe(false);
+    // The target directory should be cleaned up after failed extraction
+    const { existsSync } = await import("fs");
+    expect(existsSync(join(env.paths.reposDir, extractDir))).toBe(false);
+  });
+
+  test("extraction rejects archive without manifest", async () => {
+    // Create a valid tarball but without arc-manifest.yaml
+    const tarDir = join(env.paths.reposDir, "no-manifest-src");
+    const { mkdir: mkdirFs } = await import("fs/promises");
+    await mkdirFs(tarDir, { recursive: true });
+    await writeFile(join(tarDir, "README.md"), "# No manifest here");
+
+    const tarball = join(env.paths.reposDir, "no-manifest.tar.gz");
+    Bun.spawnSync(["tar", "czf", tarball, "-C", env.paths.reposDir, "no-manifest-src"], {
+      stdout: "pipe", stderr: "pipe",
+    });
+
+    const result = await extractPackage(tarball, env.paths.reposDir, "no-manifest-pkg");
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("arc-manifest.yaml");
+  });
+});
