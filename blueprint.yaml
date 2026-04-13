@@ -158,7 +158,7 @@ features:
   # Remote info & inspection
   - id: A-500
     name: Remote package info
-    status: planned
+    status: done
     iteration: 6
     depends: [A-200, A-404]
     description: "arc info <name> for uninstalled packages — resolve from registry, clone to cache, show manifest, capabilities, and library artifacts list"

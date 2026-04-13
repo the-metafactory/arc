@@ -6,9 +6,11 @@ import { readManifest, readLibraryArtifacts, assessRisk, formatCapabilities } fr
 import { findGitRoot } from "../lib/paths.js";
 import { extractRepoName } from "../lib/repo-name.js";
 import { parseLibraryRef } from "../lib/artifact-installer.js";
-import { loadSources } from "../lib/sources.js";
+import { loadSources, getSourceType } from "../lib/sources.js";
 import { findInAllSources } from "../lib/remote-registry.js";
-import type { InstalledSkill, ArcManifest, PaiPaths } from "../types.js";
+import { parsePackageRef } from "../lib/registry-install.js";
+import { fetchMetafactoryPackageDetail } from "../lib/metafactory-api.js";
+import type { InstalledSkill, ArcManifest, PaiPaths, MetafactoryPackageDetail } from "../types.js";
 
 export interface InfoResult {
   skill: InstalledSkill | null;
@@ -22,6 +24,8 @@ export interface InfoResult {
     sourceTier: string;
     repoUrl: string;
   };
+  /** For metafactory API packages: full API detail */
+  apiDetail?: MetafactoryPackageDetail;
   error?: string;
 }
 
@@ -34,17 +38,27 @@ export async function info(
   name: string,
   paths?: PaiPaths
 ): Promise<InfoResult> {
-  const libRef = parseLibraryRef(name);
-  const lookupName = libRef?.artifactName ? libRef.libraryName : name;
+  // Check if input is a scoped package ref (@scope/name)
+  const pkgRef = parsePackageRef(name);
+
+  const libRef = pkgRef ? null : parseLibraryRef(name);
+  const lookupName = libRef?.artifactName ? libRef.libraryName : (pkgRef ? pkgRef.name : name);
   const artifactFilter = libRef?.artifactName;
 
-  // 1. Try installed packages
-  const installed = await resolveInstalled(db, lookupName, artifactFilter);
-  if (installed) return installed;
+  // 1. Try installed packages (skip for scoped refs — they go to API)
+  if (!pkgRef) {
+    const installed = await resolveInstalled(db, lookupName, artifactFilter);
+    if (installed) return installed;
+  }
 
   // 2. Not installed — try registry
   if (!paths) {
     return errorResult(`'${name}' is not installed`);
+  }
+
+  // 3. Scoped ref → try metafactory API sources first
+  if (pkgRef) {
+    return resolveMetafactoryInfo(pkgRef.scope, pkgRef.name, paths);
   }
 
   return resolveRemote(name, lookupName, artifactFilter, paths);
@@ -168,6 +182,67 @@ async function resolveRemoteLibraryArtifact(
     return errorResult(`Artifact '${artifactName}' not found in library '${libraryName}'. Available: ${available}`);
   }
   return { skill: null, manifest: match.manifest, releaseNotes: null, remote };
+}
+
+/**
+ * Resolve info for a scoped package (@scope/name) via metafactory API sources.
+ */
+async function resolveMetafactoryInfo(
+  scope: string,
+  name: string,
+  paths: PaiPaths,
+): Promise<InfoResult> {
+  const sources = await loadSources(paths.sourcesPath);
+  const mfSources = sources.sources.filter((s) => s.enabled && getSourceType(s) === "metafactory");
+
+  for (const source of mfSources) {
+    const detail = await fetchMetafactoryPackageDetail(source, `@${scope}`, name);
+    if (!detail) continue;
+
+    // Build a synthetic manifest from API data
+    const manifest: ArcManifest = {
+      name: detail.name,
+      version: detail.latest_version ?? "0.0.0",
+      type: (detail.type as ArcManifest["type"]) ?? "skill",
+      description: detail.description ?? undefined,
+      license: detail.license,
+      author: detail.publisher.github_username
+        ? { name: detail.publisher.display_name ?? scope, github: detail.publisher.github_username }
+        : { name: detail.publisher.display_name ?? scope, github: scope },
+    };
+
+    return {
+      skill: null,
+      manifest,
+      releaseNotes: null,
+      remote: {
+        sourceName: source.name,
+        sourceTier: source.tier,
+        repoUrl: `@${scope}/${name}`,
+      },
+      apiDetail: detail,
+    };
+  }
+
+  // No metafactory source found it — try git-based sources as fallback
+  const found = await findInAllSources(sources, name, paths.cachePath);
+  if (found) {
+    const cacheCloneDir = join(paths.cachePath, "info", extractRepoName(found.entry.source));
+    const cloneError = cloneToCache(found.entry.source, cacheCloneDir);
+    if (!cloneError) {
+      const manifest = await readManifest(cacheCloneDir);
+      if (manifest) {
+        return {
+          skill: null,
+          manifest,
+          releaseNotes: null,
+          remote: { sourceName: found.sourceName, sourceTier: found.sourceTier, repoUrl: found.entry.source },
+        };
+      }
+    }
+  }
+
+  return errorResult(`'@${scope}/${name}' not found in any configured source`);
 }
 
 /**
@@ -317,8 +392,10 @@ function formatRemoteInfo(result: InfoResult): string {
 
   appendReleaseNotes(lines, result.releaseNotes);
 
+  // Use @scope/name for API packages, plain name for git-based
+  const installRef = remote.repoUrl.startsWith("@") ? remote.repoUrl : manifest.name;
   lines.push("");
-  lines.push(`  Install: arc install ${manifest.name}`);
+  lines.push(`  Install: arc install ${installRef}`);
 
   return lines.join("\n");
 }
@@ -403,6 +480,20 @@ export function formatInfoJson(result: InfoResult): string {
     json.source = result.remote.sourceName;
     json.source_tier = result.remote.sourceTier;
     json.repo_url = result.remote.repoUrl;
+  }
+
+  if (result.apiDetail) {
+    json.versions = result.apiDetail.versions;
+    json.publisher = {
+      name: result.apiDetail.publisher.display_name,
+      tier: result.apiDetail.publisher.tier,
+      mfa_enabled: result.apiDetail.publisher.mfa_enabled,
+      github: result.apiDetail.publisher.github_username,
+    };
+    if (result.apiDetail.sponsor) {
+      json.sponsor = result.apiDetail.sponsor;
+    }
+    json.license = result.apiDetail.license;
   }
 
   if (result.libraryArtifacts?.length) {
