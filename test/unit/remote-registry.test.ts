@@ -70,8 +70,38 @@ describe("fetchRemoteRegistry", () => {
       enabled: true,
     };
 
-    const result = await fetchRemoteRegistry(source, env.paths.cachePath);
-    expect(result).toBeNull();
+    // Capture stderr to keep test output clean
+    const originalWrite = process.stderr.write;
+    process.stderr.write = (() => true) as any;
+    try {
+      const result = await fetchRemoteRegistry(source, env.paths.cachePath);
+      expect(result).toBeNull();
+    } finally {
+      process.stderr.write = originalWrite;
+    }
+  });
+
+  test("emits warning on local file read error", async () => {
+    const source: RegistrySource = {
+      name: "missing-local",
+      url: "file:///nonexistent/registry.yaml",
+      tier: "community",
+      enabled: true,
+    };
+
+    const stderrChunks: string[] = [];
+    const originalWrite = process.stderr.write;
+    process.stderr.write = ((chunk: any) => { stderrChunks.push(String(chunk)); return true; }) as any;
+
+    try {
+      const result = await fetchRemoteRegistry(source, env.paths.cachePath);
+      expect(result).toBeNull();
+      const output = stderrChunks.join("");
+      expect(output).toContain("missing-local");
+      expect(output).toContain("/nonexistent/registry.yaml");
+    } finally {
+      process.stderr.write = originalWrite;
+    }
   });
 
   test("emits warning to stderr on HTTP error", async () => {
@@ -184,13 +214,19 @@ describe("searchAllSources", () => {
       ],
     };
 
-    const results = await searchAllSources(
-      sources,
-      "anything",
-      env.paths.cachePath
-    );
-
-    expect(results).toHaveLength(0);
+    // Suppress stderr warnings from failed fetches
+    const originalWrite = process.stderr.write;
+    process.stderr.write = (() => true) as any;
+    try {
+      const results = await searchAllSources(
+        sources,
+        "anything",
+        env.paths.cachePath
+      );
+      expect(results).toHaveLength(0);
+    } finally {
+      process.stderr.write = originalWrite;
+    }
   });
 
   test("aggregates from cached sources", async () => {
