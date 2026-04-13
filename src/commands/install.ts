@@ -623,7 +623,7 @@ function checkoutVersionTag(
 
   // List available tags for a helpful error
   const tagList = Bun.spawnSync(
-    ["git", "tag", "--list", "v*", "--sort=-v:refname"],
+    ["git", "tag", "--list", "--sort=-v:refname"],
     { cwd: repoPath, stdout: "pipe", stderr: "pipe" },
   );
   const tags = tagList.stdout.toString().trim().split("\n").filter(Boolean).slice(0, 5);
