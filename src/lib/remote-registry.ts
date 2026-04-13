@@ -64,7 +64,8 @@ export async function fetchRemoteRegistry(
       parsed.registry.components ??= [];
       parsed.registry.rules ??= [];
       return parsed;
-    } catch {
+    } catch (err: any) {
+      process.stderr.write(`Warning: failed to read local source "${source.name}": ${filePath}: ${err.message ?? err}\n`);
       return null;
     }
   }
@@ -112,7 +113,18 @@ export async function fetchRemoteRegistry(
       headers,
     });
 
-    if (!response.ok) return null;
+    if (!response.ok) {
+      const body = await response.text().catch(() => "");
+      const hint = (response.status === 401 || response.status === 404)
+        ? `\n   hint: check that GITHUB_TOKEN has 'Contents: Read' on the source repo`
+        : "";
+      process.stderr.write(
+        `Warning: failed to fetch source "${source.name}" (${response.status} ${response.statusText}): ${fetchUrl}` +
+        (body ? `\n   ${body.slice(0, 200)}` : "") +
+        hint + "\n",
+      );
+      return null;
+    }
 
     const text = await response.text();
     const parsed = YAML.parse(text) as RegistryConfig;
@@ -132,15 +144,21 @@ export async function fetchRemoteRegistry(
     await writeFile(cached, text, "utf-8");
 
     return parsed;
-  } catch {
-    // Network failure — try stale cache
+  } catch (err: any) {
+    // Network failure — warn and try stale cache
+    process.stderr.write(
+      `Warning: network error fetching source "${source.name}": ${err.message ?? err}\n`,
+    );
     if (existsSync(cached)) {
       try {
         const content = await readFile(cached, "utf-8");
         const parsed = YAML.parse(content) as RegistryConfig;
-        if (parsed?.registry) return parsed;
+        if (parsed?.registry) {
+          process.stderr.write(`   Using stale cache for "${source.name}"\n`);
+          return parsed;
+        }
       } catch {
-        // Nothing we can do
+        // Stale cache also corrupt — fall through to null
       }
     }
     return null;

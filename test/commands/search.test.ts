@@ -199,11 +199,18 @@ describe("searchAcrossSources", () => {
         { name: "missing", url: "file:///nonexistent/path.yaml", tier: "community", enabled: true },
       ],
     };
-    const result = await searchAcrossSources(config, env.paths.cachePath);
-    expect(result.warnings.length).toBe(1);
-    expect(result.warnings[0].sourceName).toBe("missing");
-    expect(result.warnings[0].reason).toBe("unreachable");
-    expect(result.successfulSources).toBe(0);
+    // Suppress stderr from fetchRemoteRegistry warnings
+    const originalWrite = process.stderr.write;
+    process.stderr.write = (() => true) as any;
+    try {
+      const result = await searchAcrossSources(config, env.paths.cachePath);
+      expect(result.warnings.length).toBe(1);
+      expect(result.warnings[0].sourceName).toBe("missing");
+      expect(result.warnings[0].reason).toBe("unreachable");
+      expect(result.successfulSources).toBe(0);
+    } finally {
+      process.stderr.write = originalWrite;
+    }
   });
 
   test("healthy sources work when another fails", async () => {
@@ -220,10 +227,17 @@ describe("searchAcrossSources", () => {
       ],
     };
 
-    const result = await searchAcrossSources(config, env.paths.cachePath);
-    expect(result.results.length).toBe(1);
-    expect(result.successfulSources).toBe(1);
-    expect(result.warnings.length).toBe(1);
+    // Suppress stderr from fetchRemoteRegistry warnings
+    const originalWrite = process.stderr.write;
+    process.stderr.write = (() => true) as any;
+    try {
+      const result = await searchAcrossSources(config, env.paths.cachePath);
+      expect(result.results.length).toBe(1);
+      expect(result.successfulSources).toBe(1);
+      expect(result.warnings.length).toBe(1);
+    } finally {
+      process.stderr.write = originalWrite;
+    }
   });
 
   test("disabled sources are ignored", async () => {
