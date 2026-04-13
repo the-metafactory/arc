@@ -32,10 +32,7 @@ describe("findCosignBinary", () => {
 });
 
 describe("verifySigstoreBundle", () => {
-  test("returns error when cosign binary not found", () => {
-    // Use a non-existent artifact — the point is to test the missing-binary path
-    // This test works regardless of whether cosign is bundled, because even if
-    // the binary exists, the artifact paths don't exist so it would fail differently
+  test("returns invalid for nonexistent artifact and bundle", () => {
     const result = verifySigstoreBundle(
       "/nonexistent/artifact.tar.gz",
       "/nonexistent/bundle.sigstore.json",
@@ -44,5 +41,19 @@ describe("verifySigstoreBundle", () => {
     );
     expect(result.valid).toBe(false);
     expect(result.error).toBeDefined();
+    // Either "binary not found" (no cosign) or cosign error (binary present, bad args)
+    expect(typeof result.error).toBe("string");
+  });
+});
+
+describe("detectPlatform - unsupported", () => {
+  test("throws on unsupported platform", () => {
+    const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    try {
+      expect(() => detectPlatform()).toThrow("Unsupported platform: win32");
+    } finally {
+      if (originalPlatform) Object.defineProperty(process, "platform", originalPlatform);
+    }
   });
 });

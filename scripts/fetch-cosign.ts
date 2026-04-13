@@ -3,6 +3,11 @@
  * Download cosign binaries for all supported platforms.
  * Verifies each binary's SHA-256 against the published checksums file.
  *
+ * Trust model: checksums are fetched from the same GitHub release as the
+ * binaries. This protects against CDN/transit tampering but not a compromised
+ * release. Since cosign releases are themselves Sigstore-signed, a future
+ * hardening step could verify the release signature (bootstrap verification).
+ *
  * Usage: bun scripts/fetch-cosign.ts [--version v3.0.6]
  */
 
@@ -55,7 +60,13 @@ function computeSha256(buffer: ArrayBuffer): string {
 
 async function main() {
   const versionArg = process.argv.find((a) => a.startsWith("--version"));
-  const version = versionArg ? process.argv[process.argv.indexOf(versionArg) + 1] : DEFAULT_VERSION;
+  let version = DEFAULT_VERSION;
+  if (versionArg) {
+    // Support both --version v3.0.6 and --version=v3.0.6
+    version = versionArg.includes("=")
+      ? versionArg.split("=")[1]
+      : process.argv[process.argv.indexOf(versionArg) + 1];
+  }
 
   if (!version.startsWith("v")) {
     console.error("Version must start with 'v' (e.g., v3.0.6)");

@@ -16,8 +16,17 @@ interface PlatformInfo {
   binaryName: string;
 }
 
+const SUPPORTED_PLATFORMS = new Set(["darwin", "linux"]);
+const SUPPORTED_ARCHES = new Set(["arm64", "x64"]);
+
 export function detectPlatform(): PlatformInfo {
-  const os = process.platform === "darwin" ? "darwin" : "linux";
+  if (!SUPPORTED_PLATFORMS.has(process.platform)) {
+    throw new Error(`Unsupported platform: ${process.platform}. cosign binaries are available for: ${[...SUPPORTED_PLATFORMS].join(", ")}`);
+  }
+  if (!SUPPORTED_ARCHES.has(process.arch)) {
+    throw new Error(`Unsupported architecture: ${process.arch}. cosign binaries are available for: arm64, x64 (amd64)`);
+  }
+  const os = process.platform as string;
   const arch = process.arch === "arm64" ? "arm64" : "amd64";
   return { os, arch, binaryName: `cosign-${os}-${arch}` };
 }
