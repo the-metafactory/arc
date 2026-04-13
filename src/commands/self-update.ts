@@ -10,6 +10,7 @@ export interface SelfUpdateResult {
 
 /**
  * Update arc itself by pulling latest from git and reinstalling deps.
+ * Refuses to update if running from a dev checkout (dirty tree or non-main branch).
  */
 export async function selfUpdate(): Promise<SelfUpdateResult> {
   // This file is at src/commands/self-update.ts — root is two levels up
@@ -23,6 +24,12 @@ export async function selfUpdate(): Promise<SelfUpdateResult> {
     oldVersion = pkg.version;
   } catch {
     return { success: false, oldVersion: "unknown", newVersion: "unknown", commitsPulled: 0, error: "Could not read package.json" };
+  }
+
+  // Dev checkout guard: refuse if dirty tree or non-main branch
+  const devGuard = checkDevCheckout(pkgRoot);
+  if (devGuard) {
+    return { success: false, oldVersion, newVersion: oldVersion, commitsPulled: 0, error: devGuard };
   }
 
   // Capture HEAD before pull
@@ -189,4 +196,45 @@ export function formatSelfUpdate(result: SelfUpdateResult): string {
   }
 
   return `arc already up to date at v${result.newVersion} — no new commits on remote.`;
+}
+
+// ---------------------------------------------------------------------------
+// Dev checkout detection
+// ---------------------------------------------------------------------------
+
+/**
+ * Check if the arc repo looks like a dev checkout rather than a managed install.
+ * Returns an error message if self-update should be refused, or null if safe.
+ */
+function checkDevCheckout(pkgRoot: string): string | null {
+  // Check current branch
+  const branchResult = Bun.spawnSync(
+    ["git", "branch", "--show-current"],
+    { cwd: pkgRoot, stdout: "pipe", stderr: "pipe" },
+  );
+  const branch = branchResult.exitCode === 0
+    ? branchResult.stdout.toString().trim()
+    : null;
+
+  if (!branch) {
+    return `Refusing self-update: arc repo is in detached HEAD state. This may indicate a tag-based checkout or interrupted rebase — update manually with git.`;
+  }
+
+  if (branch !== "main" && branch !== "master") {
+    return `Refusing self-update: arc repo is on branch "${branch}" (expected main). This looks like a dev checkout — update manually with git.`;
+  }
+
+  // Check for uncommitted changes
+  const statusResult = Bun.spawnSync(
+    ["git", "status", "--porcelain"],
+    { cwd: pkgRoot, stdout: "pipe", stderr: "pipe" },
+  );
+  if (statusResult.exitCode === 0) {
+    const status = statusResult.stdout.toString().trim();
+    if (status.length > 0) {
+      return `Refusing self-update: arc repo has uncommitted changes. This looks like a dev checkout — commit or stash your changes first, or update manually with git.`;
+    }
+  }
+
+  return null;
 }
