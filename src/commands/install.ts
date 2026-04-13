@@ -90,7 +90,10 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
       };
     }
 
-    if (existsSync(installPath)) {
+    // Skip stale-clone cleanup for registry installs (preExtractedPath) —
+    // the directory was just extracted and its name (scope__name) won't match
+    // the repo_url format (@scope/name@version).
+    if (existsSync(installPath) && !opts.preExtractedPath) {
       // Only clean up stale clone if no library artifacts are installed from it
       const existingByPath = allSkills.find((s) =>
         s.repo_url.endsWith(repoName)
@@ -124,7 +127,16 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
   }
 
   // 2. Read manifest
-  const manifest = await readManifest(installPath);
+  let manifest: ArcManifest | null = null;
+  try {
+    manifest = await readManifest(installPath);
+  } catch (err: any) {
+    Bun.spawnSync(["rm", "-rf", installPath]);
+    return {
+      success: false,
+      error: `Failed to read manifest in ${repoUrl}: ${err.message}`,
+    };
+  }
   if (!manifest) {
     // Cleanup cloned repo
     Bun.spawnSync(["rm", "-rf", installPath]);
