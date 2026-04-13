@@ -1,5 +1,10 @@
 import { describe, test, expect } from "bun:test";
-import { detectPlatform, findCosignBinary, verifySigstoreBundle } from "../../src/lib/cosign.js";
+import {
+  detectPlatform,
+  findCosignBinary,
+  ensureCosignBinary,
+  verifySigstoreBundle,
+} from "../../src/lib/cosign.js";
 
 describe("detectPlatform", () => {
   test("returns valid platform info", () => {
@@ -13,12 +18,17 @@ describe("detectPlatform", () => {
     const platform = detectPlatform();
     expect(platform.binaryName).toBe(`cosign-${platform.os}-${platform.arch}`);
   });
+
+  test("includes download URL", () => {
+    const platform = detectPlatform();
+    expect(platform.downloadUrl).toContain(platform.binaryName);
+    expect(platform.downloadUrl).toContain("github.com/sigstore/cosign");
+  });
 });
 
 describe("findCosignBinary", () => {
   test("returns string or null", () => {
     const result = findCosignBinary();
-    // Binary may or may not be present depending on whether fetch-cosign has run
     expect(result === null || typeof result === "string").toBe(true);
   });
 
@@ -31,18 +41,38 @@ describe("findCosignBinary", () => {
   });
 });
 
+describe("ensureCosignBinary", () => {
+  test("returns path or error", async () => {
+    // Suppress stderr from potential download messages
+    const originalWrite = process.stderr.write;
+    process.stderr.write = (() => true) as any;
+    try {
+      const result = await ensureCosignBinary();
+      expect(result.path !== undefined || result.error !== undefined).toBe(true);
+    } finally {
+      process.stderr.write = originalWrite;
+    }
+  });
+});
+
 describe("verifySigstoreBundle", () => {
-  test("returns invalid for nonexistent artifact and bundle", () => {
-    const result = verifySigstoreBundle(
-      "/nonexistent/artifact.tar.gz",
-      "/nonexistent/bundle.sigstore.json",
-      "https://github.com/the-metafactory/meta-factory/.github/workflows/sign.yml@refs/heads/main",
-      "https://token.actions.githubusercontent.com",
-    );
-    expect(result.valid).toBe(false);
-    expect(result.error).toBeDefined();
-    // Either "binary not found" (no cosign) or cosign error (binary present, bad args)
-    expect(typeof result.error).toBe("string");
+  test("returns invalid for nonexistent artifact and bundle", async () => {
+    // Suppress stderr from potential download messages
+    const originalWrite = process.stderr.write;
+    process.stderr.write = (() => true) as any;
+    try {
+      const result = await verifySigstoreBundle(
+        "/nonexistent/artifact.tar.gz",
+        "/nonexistent/bundle.sigstore.json",
+        "https://github.com/the-metafactory/meta-factory/.github/workflows/sign.yml@refs/heads/main",
+        "https://token.actions.githubusercontent.com",
+      );
+      expect(result.valid).toBe(false);
+      expect(result.error).toBeDefined();
+      expect(typeof result.error).toBe("string");
+    } finally {
+      process.stderr.write = originalWrite;
+    }
   });
 });
 
