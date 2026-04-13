@@ -73,6 +73,102 @@ describe("fetchRemoteRegistry", () => {
     const result = await fetchRemoteRegistry(source, env.paths.cachePath);
     expect(result).toBeNull();
   });
+
+  test("emits warning to stderr on HTTP error", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => new Response("Not Found", { status: 404, statusText: "Not Found" })) as typeof fetch;
+    (globalThis.fetch as any).preconnect = () => {};
+
+    const stderrChunks: string[] = [];
+    const originalWrite = process.stderr.write;
+    process.stderr.write = ((chunk: any) => { stderrChunks.push(String(chunk)); return true; }) as any;
+
+    const source: RegistrySource = {
+      name: "broken-hub",
+      url: "https://example.com/missing.yaml",
+      tier: "community",
+      enabled: true,
+    };
+
+    try {
+      const result = await fetchRemoteRegistry(source, env.paths.cachePath, true);
+      expect(result).toBeNull();
+      const output = stderrChunks.join("");
+      expect(output).toContain("broken-hub");
+      expect(output).toContain("404");
+    } finally {
+      globalThis.fetch = originalFetch;
+      process.stderr.write = originalWrite;
+    }
+  });
+
+  test("emits warning with auth hint on 401", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => new Response("Unauthorized", { status: 401, statusText: "Unauthorized" })) as typeof fetch;
+    (globalThis.fetch as any).preconnect = () => {};
+
+    const stderrChunks: string[] = [];
+    const originalWrite = process.stderr.write;
+    process.stderr.write = ((chunk: any) => { stderrChunks.push(String(chunk)); return true; }) as any;
+
+    const source: RegistrySource = {
+      name: "private-hub",
+      url: "https://example.com/private.yaml",
+      tier: "community",
+      enabled: true,
+    };
+
+    try {
+      const result = await fetchRemoteRegistry(source, env.paths.cachePath, true);
+      expect(result).toBeNull();
+      const output = stderrChunks.join("");
+      expect(output).toContain("private-hub");
+      expect(output).toContain("401");
+      expect(output).toContain("GITHUB_TOKEN");
+    } finally {
+      globalThis.fetch = originalFetch;
+      process.stderr.write = originalWrite;
+    }
+  });
+
+  test("emits warning on network error and falls back to stale cache", async () => {
+    const source: RegistrySource = {
+      name: "flaky-hub",
+      url: "https://example.com/flaky.yaml",
+      tier: "community",
+      enabled: true,
+    };
+
+    // Pre-populate stale cache
+    await mkdir(env.paths.cachePath, { recursive: true });
+    await writeFile(
+      join(env.paths.cachePath, "flaky-hub.yaml"),
+      YAML.stringify(sampleRemoteRegistry()),
+    );
+
+    // Force refresh with network error
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => { throw new Error("ECONNREFUSED"); }) as typeof fetch;
+    (globalThis.fetch as any).preconnect = () => {};
+
+    const stderrChunks: string[] = [];
+    const originalWrite = process.stderr.write;
+    process.stderr.write = ((chunk: any) => { stderrChunks.push(String(chunk)); return true; }) as any;
+
+    try {
+      const result = await fetchRemoteRegistry(source, env.paths.cachePath, true);
+      // Should fall back to stale cache
+      expect(result).not.toBeNull();
+      expect(result!.registry.skills[0].name).toBe("RemoteSkill");
+      const output = stderrChunks.join("");
+      expect(output).toContain("flaky-hub");
+      expect(output).toContain("ECONNREFUSED");
+      expect(output).toContain("stale cache");
+    } finally {
+      globalThis.fetch = originalFetch;
+      process.stderr.write = originalWrite;
+    }
+  });
 });
 
 describe("searchAllSources", () => {
