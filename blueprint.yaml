@@ -166,14 +166,14 @@ features:
   # Supply chain security (Iteration 6, L5)
   - id: A-501
     name: cosign binary bundling
-    status: planned
+    status: done
     iteration: 6
     depends: []
     description: "Download cosign binaries (darwin-arm64, darwin-amd64, linux-amd64) in build script and embed in arc tarball — no external dependency (OQ-12 resolved: bundle strategy)"
 
   - id: A-502
     name: cosign wrapper (internal/cosign.ts)
-    status: planned
+    status: done
     iteration: 6
     depends: [A-501]
     description: "Thin wrapper that locates the bundled cosign binary for the current platform and shells out to it — used by arc install for signature verification"

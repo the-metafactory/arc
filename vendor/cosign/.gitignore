@@ -1,0 +1,3 @@
+# cosign binaries are fetched on demand via scripts/fetch-cosign.ts
+# Only the .gitignore and VERSION are tracked
+cosign-*
