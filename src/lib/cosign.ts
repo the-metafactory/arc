@@ -97,6 +97,11 @@ export async function fetchCosignBinary(): Promise<{ path?: string; error?: stri
       }
     }
 
+    // Fail before downloading if no checksum available
+    if (!expectedHash) {
+      return { error: `No checksum found for ${platform.binaryName} in cosign checksums — refusing to install unverified binary` };
+    }
+
     // Download binary
     const response = await fetch(platform.downloadUrl, {
       signal: AbortSignal.timeout(120_000),
@@ -107,11 +112,6 @@ export async function fetchCosignBinary(): Promise<{ path?: string; error?: stri
     }
 
     const buffer = await response.arrayBuffer();
-
-    // Verify checksum — hard fail if no checksum found
-    if (!expectedHash) {
-      return { error: `No checksum found for ${platform.binaryName} in cosign checksums — refusing to install unverified binary` };
-    }
     const hasher = new Bun.CryptoHasher("sha256");
     hasher.update(buffer);
     const actualHash = hasher.digest("hex");
