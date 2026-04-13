@@ -216,7 +216,11 @@ function checkDevCheckout(pkgRoot: string): string | null {
     ? branchResult.stdout.toString().trim()
     : null;
 
-  if (branch && branch !== "main" && branch !== "master") {
+  if (!branch) {
+    return `Refusing self-update: arc repo is in detached HEAD state. This may indicate a tag-based checkout or interrupted rebase — update manually with git.`;
+  }
+
+  if (branch !== "main" && branch !== "master") {
     return `Refusing self-update: arc repo is on branch "${branch}" (expected main). This looks like a dev checkout — update manually with git.`;
   }
 
