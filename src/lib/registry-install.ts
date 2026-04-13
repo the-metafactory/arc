@@ -66,13 +66,11 @@ export async function resolveFromRegistry(
     const targetVersion = ref.version ?? detail.latest_version;
     if (!targetVersion) continue;
 
-    // Fetch version detail to get SHA-256 (anonymous — no bearer token)
+    // Fetch version detail to get SHA-256 (anonymous — no bearer token per DD-80)
     const versionDetailUrl = `${source.url}/api/v1/packages/${encodeURIComponent(`@${ref.scope}`)}/${encodeURIComponent(ref.name)}/versions`;
     try {
-      const headers: Record<string, string> = { Accept: "application/json" };
-
       const resp = await fetch(versionDetailUrl, {
-        headers,
+        headers: { Accept: "application/json" },
         signal: AbortSignal.timeout(10_000),
       });
 

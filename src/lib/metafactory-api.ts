@@ -255,7 +255,7 @@ export async function fetchMetafactoryPackageDetail(
     });
 
     if (response.status === 401 || response.status === 403) {
-      debugLog(`Access denied fetching package detail from ${source.name}`);
+      process.stderr.write(`Access denied fetching package detail from ${source.name}. The package may require authentication.\n`);
       return null;
     }
 

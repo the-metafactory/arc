@@ -249,11 +249,11 @@ describe("resolveFromRegistry", () => {
   test("does not send Authorization headers (anonymous per DD-80)", async () => {
     const originalFetch = globalThis.fetch;
     const capturedAuths: (string | null)[] = [];
-    globalThis.fetch = mockFetch(async (input: any) => {
+    globalThis.fetch = mockFetch(async (input: any, init?: any) => {
       const url = typeof input === "string" ? input : input.url;
-      // Capture Authorization header from the request
-      const req = new Request(url);
-      capturedAuths.push(req.headers.get("Authorization"));
+      // Capture Authorization header from init (not from a reconstructed Request)
+      const headers = new Headers(init?.headers);
+      capturedAuths.push(headers.get("Authorization"));
       if (url.includes("/versions")) {
         return new Response(JSON.stringify({
           versions: [{ version: "1.0.0", sha256: "abc" }],
@@ -320,9 +320,9 @@ describe("downloadPackage", () => {
   test("does not send Authorization header (anonymous download)", async () => {
     const originalFetch = globalThis.fetch;
     let capturedAuth: string | null = null;
-    globalThis.fetch = mockFetch(async (input: any) => {
-      const req = new Request(input);
-      capturedAuth = req.headers.get("Authorization");
+    globalThis.fetch = mockFetch(async (_input: any, init?: any) => {
+      const headers = new Headers(init?.headers);
+      capturedAuth = headers.get("Authorization");
       return new Response(new ArrayBuffer(10), { status: 200 });
     });
 
