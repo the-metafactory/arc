@@ -50,7 +50,7 @@ export interface ResolvedRegistryPackage {
   source: RegistrySource;
 }
 
-/** Resolve a package from metafactory registry sources */
+/** Resolve a package from metafactory registry sources (anonymous — no auth required per DD-80) */
 export async function resolveFromRegistry(
   ref: PackageRef,
   sources: RegistrySource[],
@@ -66,11 +66,10 @@ export async function resolveFromRegistry(
     const targetVersion = ref.version ?? detail.latest_version;
     if (!targetVersion) continue;
 
-    // Fetch version detail to get SHA-256
+    // Fetch version detail to get SHA-256 (anonymous — no bearer token)
     const versionDetailUrl = `${source.url}/api/v1/packages/${encodeURIComponent(`@${ref.scope}`)}/${encodeURIComponent(ref.name)}/versions`;
     try {
       const headers: Record<string, string> = { Accept: "application/json" };
-      if (source.token) headers.Authorization = `Bearer ${source.token}`;
 
       const resp = await fetch(versionDetailUrl, {
         headers,
@@ -116,27 +115,22 @@ export interface DownloadResult {
   error?: string;
 }
 
-/** Download a package tarball from the storage endpoint */
+/** Download a package tarball from the storage endpoint (anonymous) */
 export async function downloadPackage(
   url: string,
   tempDir: string,
-  token?: string,
 ): Promise<DownloadResult> {
   const tempPath = join(tempDir, `arc-download-${Date.now()}.tar.gz`);
-
-  const headers: Record<string, string> = {};
-  if (token) headers.Authorization = `Bearer ${token}`;
 
   let lastError: string | undefined;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       const response = await fetch(url, {
-        headers,
         signal: AbortSignal.timeout(60_000),
       });
 
       if (response.status === 401 || response.status === 403) {
-        return { success: false, error: "Access denied. Run \"arc login\" to authenticate." };
+        return { success: false, error: "Access denied by storage endpoint." };
       }
       if (response.status === 404) {
         return { success: false, error: "Package artifact not found at storage endpoint." };

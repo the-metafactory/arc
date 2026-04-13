@@ -103,15 +103,14 @@ function debugLog(msg: string): void {
 // HTTP helpers
 // ---------------------------------------------------------------------------
 
-function buildHeaders(source: RegistrySource): Record<string, string> {
-  const headers: Record<string, string> = {
-    Accept: "application/json",
-  };
-  if (source.token) {
-    headers.Authorization = `Bearer ${source.token}`;
-  }
-  return headers;
+/** Build headers for read-only API requests (anonymous — no auth token). */
+function buildReadHeaders(): Record<string, string> {
+  return { Accept: "application/json" };
 }
+
+// NOTE: Authenticated headers (Bearer token) are only used by publish.ts,
+// which manages its own auth header construction.
+// All read operations (list, detail, search) are anonymous per DD-80.
 
 // ---------------------------------------------------------------------------
 // Convert API response to RegistryConfig
@@ -174,15 +173,15 @@ export async function fetchMetafactoryRegistry(
   try {
     while (page <= MAX_PAGES) {
       const url = `${source.url}/api/v1/packages?per_page=100&page=${page}`;
-      debugLog(`Fetching ${url} (token: ${source.token ? "***" : "none"})`);
+      debugLog(`Fetching ${url} (anonymous)`);
 
       const response = await fetch(url, {
-        headers: buildHeaders(source),
+        headers: buildReadHeaders(),
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
 
-      if (response.status === 401) {
-        process.stderr.write(`Token expired for ${source.name}. Run arc login to re-authenticate.\n`);
+      if (response.status === 401 || response.status === 403) {
+        process.stderr.write(`Access denied by ${source.name}. The registry may require authentication for this endpoint.\n`);
         return readCachedRegistry(cachePath, source);
       }
 
@@ -251,12 +250,12 @@ export async function fetchMetafactoryPackageDetail(
 
   try {
     const response = await fetch(url, {
-      headers: buildHeaders(source),
+      headers: buildReadHeaders(),
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
 
-    if (response.status === 401) {
-      process.stderr.write(`Token expired for ${source.name}. Run arc login to re-authenticate.\n`);
+    if (response.status === 401 || response.status === 403) {
+      debugLog(`Access denied fetching package detail from ${source.name}`);
       return null;
     }
 
