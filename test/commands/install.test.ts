@@ -6,7 +6,7 @@ import {
   createMockSkillRepo,
   type TestEnv,
 } from "../helpers/test-env.js";
-import { install } from "../../src/commands/install.js";
+import { install, parseNameVersion } from "../../src/commands/install.js";
 import { remove } from "../../src/commands/remove.js";
 import { getSkill } from "../../src/lib/db.js";
 
@@ -259,5 +259,118 @@ describe("install command", () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toContain("already installed");
+  });
+
+  test("installs pinned version by checking out git tag", async () => {
+    const repo = await createMockSkillRepo(env.root, {
+      name: "VersionedSkill",
+      version: "1.0.0",
+    });
+
+    // Create v1.0.0 tag on the initial commit
+    Bun.spawnSync(
+      ["git", "tag", "v1.0.0"],
+      { cwd: repo.path, stdout: "pipe", stderr: "pipe" },
+    );
+
+    // Make a new commit with v2.0.0
+    const manifestPath = join(repo.path, "arc-manifest.yaml");
+    const content = await Bun.file(manifestPath).text();
+    await Bun.write(manifestPath, content.replace("1.0.0", "2.0.0"));
+    Bun.spawnSync(["git", "add", "."], { cwd: repo.path, stdout: "pipe", stderr: "pipe" });
+    Bun.spawnSync(
+      ["git", "-c", "user.name=Test", "-c", "user.email=test@test.com", "commit", "-m", "bump to 2.0.0"],
+      { cwd: repo.path, stdout: "pipe", stderr: "pipe" },
+    );
+    Bun.spawnSync(
+      ["git", "tag", "v2.0.0"],
+      { cwd: repo.path, stdout: "pipe", stderr: "pipe" },
+    );
+
+    // Install pinned to v1.0.0
+    const result = await install({
+      paths: env.paths,
+      db: env.db,
+      repoUrl: repo.url,
+      yes: true,
+      pinnedVersion: "1.0.0",
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.version).toBe("1.0.0");
+  });
+
+  test("fails when pinned version tag does not exist", async () => {
+    const repo = await createMockSkillRepo(env.root, {
+      name: "NoTagSkill",
+      version: "1.0.0",
+    });
+
+    const result = await install({
+      paths: env.paths,
+      db: env.db,
+      repoUrl: repo.url,
+      yes: true,
+      pinnedVersion: "9.9.9",
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("Version 9.9.9 not found");
+  });
+
+  test("accepts version tag without v prefix", async () => {
+    const repo = await createMockSkillRepo(env.root, {
+      name: "PlainTagSkill",
+      version: "1.0.0",
+    });
+
+    // Create tag without v prefix
+    Bun.spawnSync(
+      ["git", "tag", "1.0.0"],
+      { cwd: repo.path, stdout: "pipe", stderr: "pipe" },
+    );
+
+    const result = await install({
+      paths: env.paths,
+      db: env.db,
+      repoUrl: repo.url,
+      yes: true,
+      pinnedVersion: "1.0.0",
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.version).toBe("1.0.0");
+  });
+});
+
+describe("parseNameVersion", () => {
+  test("parses name@version", () => {
+    expect(parseNameVersion("MySkill@1.2.0")).toEqual({ name: "MySkill", version: "1.2.0" });
+  });
+
+  test("parses name@version with v prefix", () => {
+    expect(parseNameVersion("MySkill@v2.0.0")).toEqual({ name: "MySkill", version: "2.0.0" });
+  });
+
+  test("returns null for bare name", () => {
+    expect(parseNameVersion("MySkill")).toBeNull();
+  });
+
+  test("returns null for URLs", () => {
+    expect(parseNameVersion("https://github.com/foo/bar")).toBeNull();
+    expect(parseNameVersion("git@github.com:foo/bar.git")).toBeNull();
+  });
+
+  test("returns null for scoped refs", () => {
+    expect(parseNameVersion("@scope/name@1.0.0")).toBeNull();
+  });
+
+  test("returns null for non-semver suffix", () => {
+    expect(parseNameVersion("Skill@latest")).toBeNull();
+    expect(parseNameVersion("Skill@main")).toBeNull();
+  });
+
+  test("handles minor-only semver", () => {
+    expect(parseNameVersion("Skill@1.0")).toEqual({ name: "Skill", version: "1.0" });
   });
 });

@@ -31,6 +31,8 @@ export interface InstallOptions {
    * When provided, skips git clone and uses this directory as the source.
    */
   preExtractedPath?: string;
+  /** Pinned version — checkout this git tag after clone (e.g., "1.2.0" tries v1.2.0 then 1.2.0) */
+  pinnedVersion?: string;
 }
 
 export interface InstallResult {
@@ -123,6 +125,15 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
         success: false,
         error: `git clone failed: ${cloneResult.stderr.toString().trim()}`,
       };
+    }
+
+    // Checkout pinned version tag if specified
+    if (opts.pinnedVersion) {
+      const checkoutResult = checkoutVersionTag(installPath, opts.pinnedVersion);
+      if (!checkoutResult.success) {
+        Bun.spawnSync(["rm", "-rf", installPath], { stdout: "pipe", stderr: "pipe" });
+        return { success: false, error: checkoutResult.error! };
+      }
     }
   }
 
@@ -564,6 +575,63 @@ export async function installSingleArtifact(
     name: manifest.name,
     version: manifest.version,
     manifest,
+  };
+}
+
+/**
+ * Parse a version suffix from a name-based install input.
+ * e.g., "MySkill@1.2.0" → { name: "MySkill", version: "1.2.0" }
+ * Returns null if no @ version suffix is present.
+ */
+export function parseNameVersion(input: string): { name: string; version: string } | null {
+  // Don't parse URLs (contain ://) or scoped refs (@scope/name)
+  if (input.includes("://") || input.startsWith("@") || input.startsWith("git@")) return null;
+
+  const atIndex = input.lastIndexOf("@");
+  if (atIndex <= 0) return null;
+
+  const name = input.slice(0, atIndex);
+  const version = input.slice(atIndex + 1);
+
+  // Validate version looks like semver (digits and dots, with optional v prefix)
+  if (!/^v?\d+\.\d+/.test(version)) return null;
+
+  return { name, version: version.replace(/^v/, "") };
+}
+
+/**
+ * Checkout a version tag in a cloned git repo.
+ * Tries "v{version}" first, then "{version}" as a tag name.
+ */
+function checkoutVersionTag(
+  repoPath: string,
+  version: string,
+): { success: boolean; tag?: string; error?: string } {
+  // Try v-prefixed tag first (most common: v1.2.0)
+  const vTag = version.startsWith("v") ? version : `v${version}`;
+  const plainTag = version.startsWith("v") ? version.slice(1) : version;
+
+  for (const tag of [vTag, plainTag]) {
+    const result = Bun.spawnSync(
+      ["git", "checkout", tag],
+      { cwd: repoPath, stdout: "pipe", stderr: "pipe" },
+    );
+    if (result.exitCode === 0) {
+      return { success: true, tag };
+    }
+  }
+
+  // List available tags for a helpful error
+  const tagList = Bun.spawnSync(
+    ["git", "tag", "--list", "v*", "--sort=-v:refname"],
+    { cwd: repoPath, stdout: "pipe", stderr: "pipe" },
+  );
+  const tags = tagList.stdout.toString().trim().split("\n").filter(Boolean).slice(0, 5);
+  const available = tags.length ? ` Available: ${tags.join(", ")}` : "";
+
+  return {
+    success: false,
+    error: `Version ${version} not found (tried tags ${vTag}, ${plainTag}).${available}`,
   };
 }
 
