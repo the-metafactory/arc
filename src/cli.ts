@@ -85,8 +85,8 @@ program
   .command("install <name-or-url>")
   .description("Install a skill from git URL, or by name from the registry")
   .option("-y, --yes", "Skip confirmation prompt")
-  .option("--version <version>", "Pin to a specific version (git tag)")
-  .action(async (nameOrUrl: string, opts: { yes?: boolean; version?: string }) => {
+  .option("--pin <version>", "Pin to a specific version (git tag)")
+  .action(async (nameOrUrl: string, opts: { yes?: boolean; pin?: string }) => {
     const paths = createPaths();
     await ensureDirectories(paths);
     const db = openDatabase(paths.dbPath);
@@ -102,7 +102,12 @@ program
 
     let libraryName: string | undefined;
     let artifactName: string | undefined;
-    let pinnedVersion: string | undefined = opts.version;
+    // Validate --pin flag: must look like semver (same check as @version suffix)
+    if (opts.pin && !/^v?\d+\.\d+/.test(opts.pin)) {
+      console.error(`Invalid version "${opts.pin}". Expected semver (e.g., 1.2.0).`);
+      process.exit(1);
+    }
+    let pinnedVersion: string | undefined = opts.pin?.replace(/^v/, "");
     let lookupName = nameOrUrl;
 
     if (!isUrl && !pkgRef) {
@@ -182,7 +187,7 @@ program
       }
     } else if (isUrl) {
       // Direct git install
-      const result = await install({ paths, db, repoUrl: nameOrUrl, yes: opts.yes, artifactName, pinnedVersion: opts.version });
+      const result = await install({ paths, db, repoUrl: nameOrUrl, yes: opts.yes, artifactName, pinnedVersion });
       if (result.success) {
         if (result.artifacts?.length) {
           console.log(`\n✅ Installed ${result.artifacts.filter(a => a.success).length} artifact(s) from ${result.name}`);
