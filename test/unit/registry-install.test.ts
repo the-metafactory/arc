@@ -179,9 +179,13 @@ describe("resolveFromRegistry", () => {
     globalThis.fetch = mockFetch(async (input: any) => {
       callCount++;
       const url = typeof input === "string" ? input : input.url;
-      if (url.includes("/versions")) {
+      // Per-version detail: /packages/@scope/name@version (F-501 + A-504 shape)
+      if (/\/packages\/[^/]+\/[^/]+@/.test(url)) {
         return new Response(JSON.stringify({
-          versions: [{ version: "1.2.0", sha256: "abc123" }, { version: "1.1.0", sha256: "def456" }],
+          version: "1.2.0",
+          sha256: "abc123",
+          manifest_canonical: '{"name":"@metafactory/grove","version":"1.2.0"}',
+          signing: { registry_signature: null, registry_key_id: null },
         }), { status: 200 });
       }
       // Package detail endpoint
@@ -220,9 +224,12 @@ describe("resolveFromRegistry", () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = mockFetch(async (input: any) => {
       const url = typeof input === "string" ? input : input.url;
-      if (url.includes("/versions")) {
+      if (/\/packages\/[^/]+\/[^/]+@/.test(url)) {
         return new Response(JSON.stringify({
-          versions: [{ version: "1.2.0", sha256: "abc" }, { version: "1.1.0", sha256: "def" }],
+          version: "1.1.0",
+          sha256: "def",
+          manifest_canonical: '{"name":"@metafactory/grove","version":"1.1.0"}',
+          signing: { registry_signature: null, registry_key_id: null },
         }), { status: 200 });
       }
       return new Response(JSON.stringify({
@@ -254,9 +261,12 @@ describe("resolveFromRegistry", () => {
       // Capture Authorization header from init (not from a reconstructed Request)
       const headers = new Headers(init?.headers);
       capturedAuths.push(headers.get("Authorization"));
-      if (url.includes("/versions")) {
+      if (/\/packages\/[^/]+\/[^/]+@/.test(url)) {
         return new Response(JSON.stringify({
-          versions: [{ version: "1.0.0", sha256: "abc" }],
+          version: "1.0.0",
+          sha256: "abc",
+          manifest_canonical: "{}",
+          signing: { registry_signature: null, registry_key_id: null },
         }), { status: 200 });
       }
       return new Response(JSON.stringify({
@@ -277,6 +287,43 @@ describe("resolveFromRegistry", () => {
       for (const auth of capturedAuths) {
         expect(auth).toBeNull();
       }
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("propagates F-501 signing fields from version detail response", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mockFetch(async (input: any) => {
+      const url = typeof input === "string" ? input : input.url;
+      if (/\/packages\/[^/]+\/[^/]+@/.test(url)) {
+        return new Response(JSON.stringify({
+          version: "1.0.0",
+          sha256: "deadbeef",
+          manifest_canonical: '{"name":"@a/b","version":"1.0.0"}',
+          signing: {
+            registry_signature: "S".repeat(88),
+            registry_key_id: "mf-reg-2026-04",
+          },
+        }), { status: 200 });
+      }
+      return new Response(JSON.stringify({
+        namespace: "@a", name: "b",
+        display_name: null, description: "", type: "skill", license: "MIT",
+        latest_version: "1.0.0", versions: ["1.0.0"],
+        publisher: { display_name: "T", tier: "official", mfa_enabled: true, github_username: null },
+        sponsor: null, created_at: 0, updated_at: 0,
+      }), { status: 200 });
+    });
+
+    try {
+      const result = await resolveFromRegistry(
+        { scope: "a", name: "b" },
+        [metafactorySource()],
+      );
+      expect(result!.registrySignature).toBe("S".repeat(88));
+      expect(result!.registryKeyId).toBe("mf-reg-2026-04");
+      expect(result!.manifestCanonical).toBe('{"name":"@a/b","version":"1.0.0"}');
     } finally {
       globalThis.fetch = originalFetch;
     }

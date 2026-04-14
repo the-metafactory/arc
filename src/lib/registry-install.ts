@@ -48,6 +48,12 @@ export interface ResolvedRegistryPackage {
   sha256: string;
   downloadUrl: string;
   source: RegistrySource;
+  /** F-501 registry signature — null for legacy/unsigned versions. */
+  registrySignature: string | null;
+  /** F-501 key identifier — null for legacy/unsigned versions. */
+  registryKeyId: string | null;
+  /** Exact manifest bytes as signed — required for A-504 verification. */
+  manifestCanonical: string | null;
 }
 
 /** Resolve a package from metafactory registry sources (anonymous — no auth required per DD-80) */
@@ -66,8 +72,9 @@ export async function resolveFromRegistry(
     const targetVersion = ref.version ?? detail.latest_version;
     if (!targetVersion) continue;
 
-    // Fetch version detail to get SHA-256 (anonymous — no bearer token per DD-80)
-    const versionDetailUrl = `${source.url}/api/v1/packages/${encodeURIComponent(`@${ref.scope}`)}/${encodeURIComponent(ref.name)}/versions`;
+    // Fetch per-version detail: returns sha256, signing (F-501), and
+    // manifest_canonical (exact bytes as signed, required for A-504).
+    const versionDetailUrl = `${source.url}/api/v1/packages/${encodeURIComponent(`@${ref.scope}`)}/${encodeURIComponent(ref.name)}@${encodeURIComponent(targetVersion)}`;
     try {
       const resp = await fetch(versionDetailUrl, {
         headers: { Accept: "application/json" },
@@ -77,21 +84,29 @@ export async function resolveFromRegistry(
       if (!resp.ok) continue;
 
       const body = (await resp.json()) as {
-        versions: Array<{ version: string; sha256: string }>;
+        version: string;
+        sha256: string;
+        manifest_canonical?: string;
+        signing?: {
+          registry_signature: string | null;
+          registry_key_id: string | null;
+        };
       };
 
-      const versionEntry = body.versions.find((v) => v.version === targetVersion);
-      if (!versionEntry) continue;
+      if (!body.sha256) continue;
 
-      const downloadUrl = `${source.url}/api/v1/storage/download/${versionEntry.sha256}`;
+      const downloadUrl = `${source.url}/api/v1/storage/download/${body.sha256}`;
 
       return {
         scope: ref.scope,
         name: ref.name,
         version: targetVersion,
-        sha256: versionEntry.sha256,
+        sha256: body.sha256,
         downloadUrl,
         source,
+        registrySignature: body.signing?.registry_signature ?? null,
+        registryKeyId: body.signing?.registry_key_id ?? null,
+        manifestCanonical: body.manifest_canonical ?? null,
       };
     } catch (_err) {
       // Network error, try next source
