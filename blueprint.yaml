@@ -180,7 +180,7 @@ features:
 
   - id: A-503
     name: arc install cosign verification
-    status: planned
+    status: done
     iteration: 6
     depends: [A-502, meta-factory:F5-500]
     description: "arc install fetches Sigstore bundle alongside artifact, calls cosign verify-blob --bundle --offline — blocks install on verification failure (DD-11, F-505)"
