@@ -10,7 +10,7 @@
  * for phase 1. Anonymous bundle fetch (DD-80): no Authorization header.
  */
 
-import { writeFile } from "fs/promises";
+import { writeFile, unlink } from "fs/promises";
 import { join } from "path";
 import type { RegistrySource } from "../types.js";
 import { verifySigstoreBundle, type VerifySigstoreResult } from "./cosign.js";
@@ -105,9 +105,13 @@ export async function verifyPackageSigstore(
     return { verified: false, reason: `bundle ${dl.error ?? "download failed"}` };
   }
 
-  const result = await verifier(artifactPath, dl.path, signing.signer_identity, TRUSTED_OIDC_ISSUER);
-  if (result.valid) {
-    return { verified: true, reason: `Sigstore bundle verified for ${signing.signer_identity}` };
+  try {
+    const result = await verifier(artifactPath, dl.path, signing.signer_identity, TRUSTED_OIDC_ISSUER);
+    if (result.valid) {
+      return { verified: true, reason: `Sigstore bundle verified for ${signing.signer_identity}` };
+    }
+    return { verified: false, reason: result.error ?? "cosign verification failed" };
+  } finally {
+    await unlink(dl.path).catch(() => {});
   }
-  return { verified: false, reason: result.error ?? "cosign verification failed" };
 }
