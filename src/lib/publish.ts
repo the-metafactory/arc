@@ -42,6 +42,17 @@ function buildPublishHeaders(source: RegistrySource): Record<string, string> {
   return { Authorization: `Bearer ${source.token}` };
 }
 
+/**
+ * Prefer the informative top-level `message` field over the generic `error`
+ * field. Falls back to `formatServerError` so nested/object `error` payloads
+ * from older servers still render readable messages instead of "[object Object]".
+ */
+export function combineError(body: { error?: unknown; message?: unknown } | null | undefined): string | undefined {
+  if (!body) return undefined;
+  if (typeof body.message === "string" && body.message.length > 0) return body.message;
+  return formatServerError(body.error);
+}
+
 // ── Manifest transformation ───────────────────────────────────
 
 /**
@@ -171,7 +182,7 @@ export async function uploadBundle(
       return { success: false, sha256: "", r2Key: "", sizeBytes: 0, error: "Package too large for server." };
     }
 
-    const body = (await resp.json()) as { sha256?: string; r2_key?: string; size_bytes?: number; error?: unknown };
+    const body = (await resp.json()) as { sha256?: string; r2_key?: string; size_bytes?: number; error?: unknown; message?: unknown };
 
     // 409 = content already exists — treat as success (idempotent)
     // Server may not return sha256/r2_key on 409, so fall back to client-known values.
@@ -185,7 +196,7 @@ export async function uploadBundle(
     }
 
     if (!resp.ok) {
-      return { success: false, sha256: "", r2Key: "", sizeBytes: 0, error: formatServerError(body.error) ?? `Upload failed: HTTP ${resp.status}` };
+      return { success: false, sha256: "", r2Key: "", sizeBytes: 0, error: combineError(body) ?? `Upload failed: HTTP ${resp.status}` };
     }
 
     if (!body.sha256 || !body.r2_key) {
@@ -228,11 +239,11 @@ export async function ensurePackageExists(
     }
 
     if (getResp.status !== 404) {
-      const body = await getResp.json().catch(() => ({})) as { error?: unknown };
+      const body = await getResp.json().catch(() => ({})) as { error?: unknown; message?: unknown };
       if (getResp.status === 403) {
         return { exists: false, created: false, error: `You do not own namespace @${scope}. Complete identity verification at meta-factory.ai.` };
       }
-      return { exists: false, created: false, error: formatServerError(body.error) ?? `Unexpected status: ${getResp.status}` };
+      return { exists: false, created: false, error: combineError(body) ?? `Unexpected status: ${getResp.status}` };
     }
 
     const createResp = await fetch(`${source.url}/api/v1/packages`, {
@@ -246,12 +257,12 @@ export async function ensurePackageExists(
       return { exists: true, created: true };
     }
 
-    const createBody = await createResp.json().catch(() => ({})) as { error?: unknown };
+    const createBody = await createResp.json().catch(() => ({})) as { error?: unknown; message?: unknown };
     if (createResp.status === 403) {
       return { exists: false, created: false, error: `You do not own namespace @${scope}. Complete identity verification at meta-factory.ai.` };
     }
 
-    return { exists: false, created: false, error: formatServerError(createBody.error) ?? `Failed to create package: HTTP ${createResp.status}` };
+    return { exists: false, created: false, error: combineError(createBody) ?? `Failed to create package: HTTP ${createResp.status}` };
   } catch (err) {
     return { exists: false, created: false, error: `Network error checking package existence: ${(err as Error).message}` };
   }
@@ -303,8 +314,8 @@ export async function registerVersion(
         return { success: true, versionId: body.version_id, statusCode: resp.status };
       }
 
-      const body = (await resp.json().catch(() => ({}))) as { error?: unknown };
-      const serverError = formatServerError(body.error);
+      const body = (await resp.json().catch(() => ({}))) as { error?: unknown; message?: unknown };
+      const serverError = combineError(body);
 
       if (resp.status === 409) {
         return { success: false, error: `Version ${payload.version} already exists. Published versions are immutable — bump the version in arc-manifest.yaml.`, statusCode: 409 };
