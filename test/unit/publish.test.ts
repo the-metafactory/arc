@@ -8,6 +8,7 @@ import {
   uploadBundle,
   ensurePackageExists,
   registerVersion,
+  combineError,
 } from "../../src/lib/publish.js";
 import { mockFetch } from "../helpers/mock-fetch.js";
 import type { ArcManifest, RegistrySource } from "../../src/types.js";
@@ -275,5 +276,30 @@ describe("registerVersion", () => {
     const result = await registerVersion(makeSource(), "ns", "pkg", payload);
     expect(result.success).toBe(true);
     expect(callCount).toBe(2);
+  });
+});
+
+// ── combineError helper ──────────────────────────────────────
+
+describe("combineError", () => {
+  test("prefers message over error", () => {
+    expect(combineError({ error: "E_X", message: "Detail explanation" })).toBe("Detail explanation");
+  });
+
+  test("falls back to error when message missing", () => {
+    expect(combineError({ error: "E_X" })).toBe("E_X");
+  });
+
+  test("falls back to error when message empty string", () => {
+    expect(combineError({ error: "E_X", message: "" })).toBe("E_X");
+  });
+
+  test("returns undefined for empty body", () => {
+    expect(combineError({})).toBeUndefined();
+  });
+
+  test("returns undefined for null/undefined", () => {
+    expect(combineError(null)).toBeUndefined();
+    expect(combineError(undefined)).toBeUndefined();
   });
 });
