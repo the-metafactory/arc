@@ -23,6 +23,19 @@ function debugLog(msg: string): void {
   }
 }
 
+/** Coerce a server error field (string | object | unknown) into a readable message. */
+function formatServerError(err: unknown): string | undefined {
+  if (err == null) return undefined;
+  if (typeof err === "string") return err;
+  if (typeof err === "object") {
+    const obj = err as { message?: unknown; error?: unknown };
+    if (typeof obj.message === "string") return obj.message;
+    if (typeof obj.error === "string") return obj.error;
+    try { return JSON.stringify(err); } catch { return String(err); }
+  }
+  return String(err);
+}
+
 // ── HTTP helpers ─────────────────────────────────────────────
 
 function buildPublishHeaders(source: RegistrySource): Record<string, string> {
@@ -158,7 +171,7 @@ export async function uploadBundle(
       return { success: false, sha256: "", r2Key: "", sizeBytes: 0, error: "Package too large for server." };
     }
 
-    const body = (await resp.json()) as { sha256?: string; r2_key?: string; size_bytes?: number; error?: string };
+    const body = (await resp.json()) as { sha256?: string; r2_key?: string; size_bytes?: number; error?: unknown };
 
     // 409 = content already exists — treat as success (idempotent)
     // Server may not return sha256/r2_key on 409, so fall back to client-known values.
@@ -172,7 +185,7 @@ export async function uploadBundle(
     }
 
     if (!resp.ok) {
-      return { success: false, sha256: "", r2Key: "", sizeBytes: 0, error: body.error ?? `Upload failed: HTTP ${resp.status}` };
+      return { success: false, sha256: "", r2Key: "", sizeBytes: 0, error: formatServerError(body.error) ?? `Upload failed: HTTP ${resp.status}` };
     }
 
     if (!body.sha256 || !body.r2_key) {
@@ -215,11 +228,11 @@ export async function ensurePackageExists(
     }
 
     if (getResp.status !== 404) {
-      const body = await getResp.json().catch(() => ({})) as { error?: string };
+      const body = await getResp.json().catch(() => ({})) as { error?: unknown };
       if (getResp.status === 403) {
         return { exists: false, created: false, error: `You do not own namespace @${scope}. Complete identity verification at meta-factory.ai.` };
       }
-      return { exists: false, created: false, error: body.error ?? `Unexpected status: ${getResp.status}` };
+      return { exists: false, created: false, error: formatServerError(body.error) ?? `Unexpected status: ${getResp.status}` };
     }
 
     const createResp = await fetch(`${source.url}/api/v1/packages`, {
@@ -233,12 +246,12 @@ export async function ensurePackageExists(
       return { exists: true, created: true };
     }
 
-    const createBody = await createResp.json().catch(() => ({})) as { error?: string };
+    const createBody = await createResp.json().catch(() => ({})) as { error?: unknown };
     if (createResp.status === 403) {
       return { exists: false, created: false, error: `You do not own namespace @${scope}. Complete identity verification at meta-factory.ai.` };
     }
 
-    return { exists: false, created: false, error: createBody.error ?? `Failed to create package: HTTP ${createResp.status}` };
+    return { exists: false, created: false, error: formatServerError(createBody.error) ?? `Failed to create package: HTTP ${createResp.status}` };
   } catch (err) {
     return { exists: false, created: false, error: `Network error checking package existence: ${(err as Error).message}` };
   }
@@ -290,14 +303,15 @@ export async function registerVersion(
         return { success: true, versionId: body.version_id, statusCode: resp.status };
       }
 
-      const body = (await resp.json().catch(() => ({}))) as { error?: string };
+      const body = (await resp.json().catch(() => ({}))) as { error?: unknown };
+      const serverError = formatServerError(body.error);
 
       if (resp.status === 409) {
         return { success: false, error: `Version ${payload.version} already exists. Published versions are immutable — bump the version in arc-manifest.yaml.`, statusCode: 409 };
       }
 
       if (resp.status === 400) {
-        return { success: false, error: body.error ?? "Manifest validation failed on server.", statusCode: 400 };
+        return { success: false, error: serverError ?? "Manifest validation failed on server.", statusCode: 400 };
       }
 
       if (resp.status === 403) {
@@ -310,7 +324,7 @@ export async function registerVersion(
 
       if (resp.status >= 500 && attempt === 0) continue;
 
-      return { success: false, error: body.error ?? `Registration failed: HTTP ${resp.status}`, statusCode: resp.status };
+      return { success: false, error: serverError ?? `Registration failed: HTTP ${resp.status}`, statusCode: resp.status };
     } catch (err) {
       if (attempt === 0) continue;
       return { success: false, error: `Network error during version registration: ${(err as Error).message}` };

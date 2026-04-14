@@ -1,0 +1,47 @@
+# arc-manifest.yaml — capability declaration
+schema: arc/v1
+name: arc
+version: 0.19.3
+type: tool
+tier: core
+description: Agentic component package manager — install, manage, and distribute AI agent skills
+
+author:
+  name: jcfischer
+  github: jcfischer
+
+provides:
+  cli:
+    - command: "bun src/cli.ts"
+      name: "arc"
+
+depends_on:
+  tools:
+    - name: bun
+      version: ">=1.0.0"
+
+bundle:
+  exclude:
+    - vendor
+    - MEMORY
+    - Plans
+    - design
+    - rawdata.json
+    - "*.md.bak"
+
+capabilities:
+  filesystem:
+    read:
+      - "~/.claude/**"
+      - "~/.config/arc/**"
+    write:
+      - "~/.claude/**"
+      - "~/.config/arc/**"
+  network:
+    - "https://github.com/**"
+    - "https://api.github.com/**"
+    - "https://registry.npmjs.org/**"
+  bash:
+    allowed: true
+  secrets:
+    - GITHUB_TOKEN
