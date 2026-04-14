@@ -55,6 +55,7 @@ import {
   verifyChecksum,
   extractPackage,
 } from "./lib/registry-install.js";
+import { verifyVersionSignature } from "./lib/registry-signing.js";
 import { loadCatalog, saveCatalog, findEntry } from "./lib/catalog.js";
 import {
   loadSources,
@@ -166,6 +167,41 @@ program
         process.exit(1);
       }
       console.log(`SHA-256 verified`);
+
+      // A-504: verify registry-level Ed25519 signature over manifest bytes.
+      // Blocks install on any verified=false. verified=null means the
+      // version is unsigned (legacy / registry in degraded mode at publish
+      // time) — arc proceeds with a warning, consistent with meta-factory's
+      // own graceful degradation.
+      const sigResult = await verifyVersionSignature(
+        resolved.source,
+        {
+          registry_signature: resolved.registrySignature,
+          registry_key_id: resolved.registryKeyId,
+        },
+        resolved.manifestCanonical,
+      );
+      if (sigResult.verified === false) {
+        // Distinguish infrastructure unavailability from a genuine
+        // signature mismatch. Both fail-closed, but the user-facing
+        // framing differs: "try again later" vs "investigate now".
+        const infraFailure = /public key unavailable|manifest_canonical missing/i.test(
+          sigResult.reason,
+        );
+        console.error(`Registry signature verification failed: ${sigResult.reason}`);
+        if (infraFailure) {
+          console.error(`The registry may be temporarily unreachable or misconfigured. Try again later.`);
+        } else {
+          console.error(`This could indicate a compromised registry or a tampered manifest.`);
+        }
+        await Bun.file(download.tempPath).exists() && Bun.spawnSync(["rm", "-f", download.tempPath]);
+        process.exit(1);
+      }
+      if (sigResult.verified === true) {
+        console.log(`Registry signature verified (${sigResult.reason})`);
+      } else {
+        console.warn(`Registry signature: ${sigResult.reason}`);
+      }
 
       // Extract
       const packageDir = `${resolved.scope}__${resolved.name}`;

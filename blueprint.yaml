@@ -135,10 +135,10 @@ features:
 
   - id: A-406
     name: SHA-256 registry verification
-    status: planned
+    status: done
     iteration: 5
     depends: [A-200]
-    description: "Verify sha256 field in REGISTRY.yaml entries against manifest content at install time"
+    description: "Verify sha256 field in registry version metadata against downloaded artifact at install time — implemented in src/lib/registry-install.ts verifyChecksum(), wired in src/cli.ts (non-bypassable)"
 
   - id: A-407
     name: Action artifact type
@@ -184,3 +184,10 @@ features:
     iteration: 6
     depends: [A-502, meta-factory:F5-500]
     description: "arc install fetches Sigstore bundle alongside artifact, calls cosign verify-blob --bundle --offline — blocks install on verification failure (DD-11, F-505)"
+
+  - id: A-504
+    name: arc install registry signature verification
+    status: done
+    iteration: 6
+    depends: [A-406, meta-factory:F-501]
+    description: "arc install fetches /.well-known/metafactory-signing-key from the registry and verifies the Ed25519 registry_signature bound to each version against manifest_canonical — blocks install on verification failure, no --force override. Unsigned/legacy versions emit a warning and proceed (matches meta-factory graceful degradation). Implemented in src/lib/registry-signing.ts + wired in src/cli.ts after SHA-256 check."
