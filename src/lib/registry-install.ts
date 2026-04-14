@@ -54,6 +54,12 @@ export interface ResolvedRegistryPackage {
   registryKeyId: string | null;
   /** Exact manifest bytes as signed — required for A-504 verification. */
   manifestCanonical: string | null;
+  /** F-009 Sigstore bundle R2 key — null if not sigstore-signed. */
+  signatureBundleKey: string | null;
+  /** F-008 expected signer identity (GitHub Actions workflow URI). */
+  signerIdentity: string | null;
+  /** Publish timestamp from the signing block (informational). */
+  signedAt: string | null;
 }
 
 /** Resolve a package from metafactory registry sources (anonymous — no auth required per DD-80) */
@@ -90,6 +96,9 @@ export async function resolveFromRegistry(
         signing?: {
           registry_signature: string | null;
           registry_key_id: string | null;
+          signature_bundle_key?: string | null;
+          signer_identity?: string | null;
+          signed_at?: string | null;
         };
       };
 
@@ -107,6 +116,9 @@ export async function resolveFromRegistry(
         registrySignature: body.signing?.registry_signature ?? null,
         registryKeyId: body.signing?.registry_key_id ?? null,
         manifestCanonical: body.manifest_canonical ?? null,
+        signatureBundleKey: body.signing?.signature_bundle_key ?? null,
+        signerIdentity: body.signing?.signer_identity ?? null,
+        signedAt: body.signing?.signed_at ?? null,
       };
     } catch (_err) {
       // Network error, try next source

@@ -56,6 +56,7 @@ import {
   extractPackage,
 } from "./lib/registry-install.js";
 import { verifyVersionSignature } from "./lib/registry-signing.js";
+import { verifyPackageSigstore } from "./lib/cosign-verify.js";
 import { loadCatalog, saveCatalog, findEntry } from "./lib/catalog.js";
 import {
   loadSources,
@@ -201,6 +202,31 @@ program
         console.log(`Registry signature verified (${sigResult.reason})`);
       } else {
         console.warn(`Registry signature: ${sigResult.reason}`);
+      }
+
+      // A-503: verify Sigstore bundle (cosign) when signature_bundle_key is
+      // present. Scope OQ-14: GitHub Actions OIDC only. verified=null means
+      // the version predates Sigstore signing — proceed with a warning.
+      const sigstoreResult = await verifyPackageSigstore({
+        source: resolved.source,
+        sha256: resolved.sha256,
+        signing: {
+          signature_bundle_key: resolved.signatureBundleKey,
+          signer_identity: resolved.signerIdentity,
+        },
+        artifactPath: download.tempPath,
+        tempDir: paths.reposDir,
+      });
+      if (sigstoreResult.verified === false) {
+        console.error(`Sigstore verification failed: ${sigstoreResult.reason}`);
+        console.error(`This could indicate a tampered artifact or an unexpected signer.`);
+        await Bun.file(download.tempPath).exists() && Bun.spawnSync(["rm", "-f", download.tempPath]);
+        process.exit(1);
+      }
+      if (sigstoreResult.verified === true) {
+        console.log(`Sigstore signature verified (${sigstoreResult.reason})`);
+      } else {
+        console.warn(`Sigstore signature: ${sigstoreResult.reason}`);
       }
 
       // Extract
