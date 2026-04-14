@@ -182,8 +182,18 @@ program
         resolved.manifestCanonical,
       );
       if (sigResult.verified === false) {
+        // Distinguish infrastructure unavailability from a genuine
+        // signature mismatch. Both fail-closed, but the user-facing
+        // framing differs: "try again later" vs "investigate now".
+        const infraFailure = /public key unavailable|manifest_canonical missing/i.test(
+          sigResult.reason,
+        );
         console.error(`Registry signature verification failed: ${sigResult.reason}`);
-        console.error(`This could indicate a compromised registry or a tampered manifest.`);
+        if (infraFailure) {
+          console.error(`The registry may be temporarily unreachable or misconfigured. Try again later.`);
+        } else {
+          console.error(`This could indicate a compromised registry or a tampered manifest.`);
+        }
         await Bun.file(download.tempPath).exists() && Bun.spawnSync(["rm", "-f", download.tempPath]);
         process.exit(1);
       }
