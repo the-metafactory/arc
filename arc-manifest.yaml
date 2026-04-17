@@ -54,11 +54,11 @@ capabilities:
       - "~/.claude/**"
       - "~/.config/arc/**"
   network:
-    - domain: "https://github.com/**"
+    - domain: "github.com"
       reason: "Clone package repos during install/upgrade"
-    - domain: "https://api.github.com/**"
+    - domain: "api.github.com"
       reason: "Fetch registry metadata and release info"
-    - domain: "https://registry.npmjs.org/**"
+    - domain: "registry.npmjs.org"
       reason: "Resolve npm-hosted dependencies"
   bash:
     allowed: true
