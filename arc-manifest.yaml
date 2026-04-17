@@ -1,7 +1,7 @@
 # arc-manifest.yaml — capability declaration
 schema: arc/v1
 name: arc
-version: 0.20.0
+version: 0.20.1
 type: tool
 tier: core
 description: Agentic component package manager — install, manage, and distribute AI agent skills
@@ -54,9 +54,12 @@ capabilities:
       - "~/.claude/**"
       - "~/.config/arc/**"
   network:
-    - "https://github.com/**"
-    - "https://api.github.com/**"
-    - "https://registry.npmjs.org/**"
+    - domain: "https://github.com/**"
+      reason: "Clone package repos during install/upgrade"
+    - domain: "https://api.github.com/**"
+      reason: "Fetch registry metadata and release info"
+    - domain: "https://registry.npmjs.org/**"
+      reason: "Resolve npm-hosted dependencies"
   bash:
     allowed: true
   secrets:
