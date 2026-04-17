@@ -1,7 +1,7 @@
 # arc-manifest.yaml — capability declaration
 schema: arc/v1
 name: arc
-version: 0.19.3
+version: 0.20.0
 type: tool
 tier: core
 description: Agentic component package manager — install, manage, and distribute AI agent skills
@@ -14,6 +14,22 @@ provides:
   cli:
     - command: "bun src/cli.ts"
       name: "arc"
+  skill:
+    - name: PackageBuilder
+      path: skill/
+      trigger: build package
+    - name: PackageBuilder
+      path: skill/
+      trigger: create package
+    - name: PackageBuilder
+      path: skill/
+      trigger: package skill
+    - name: PackageBuilder
+      path: skill/
+      trigger: metafactory package
+    - name: PackageBuilder
+      path: skill/
+      trigger: author-builder
 
 depends_on:
   tools:
