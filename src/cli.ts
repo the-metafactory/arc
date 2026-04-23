@@ -40,6 +40,16 @@ import { logout } from "./commands/logout.js";
 import { bundle, formatBundle } from "./commands/bundle.js";
 import { publish, formatPublish } from "./commands/publish.js";
 import {
+  reviewList,
+  reviewShow,
+  reviewApprove,
+  reviewReject,
+  reviewRequestChanges,
+  formatReviewList,
+  formatReviewShow,
+  formatReviewAction,
+} from "./commands/review.js";
+import {
   searchAcrossSources,
   formatSearch,
   formatSearchJson,
@@ -836,6 +846,89 @@ program
     });
 
     console.log(formatPublish(result));
+    if (!result.success) process.exit(1);
+  });
+
+// ── Review commands (sponsor/steward triage) ────────────────
+
+const review = program
+  .command("review")
+  .description("Review pending package submissions (sponsor/steward)");
+
+review
+  .command("list")
+  .description("List pending submissions assigned to you")
+  .option("-s, --source <name>", "Use a specific metafactory source")
+  .option("-p, --page <number>", "Page number", "1")
+  .option("--per-page <number>", "Items per page (max 100)", "20")
+  .option("--json", "Output raw JSON")
+  .action(async (opts: { source?: string; page: string; perPage: string; json?: boolean }) => {
+    const paths = createPaths();
+    const result = await reviewList({
+      paths,
+      sourceName: opts.source,
+      page: parseInt(opts.page, 10) || 1,
+      perPage: parseInt(opts.perPage, 10) || 20,
+      json: opts.json,
+    });
+    console.log(formatReviewList(result));
+    if (!result.success) process.exit(1);
+  });
+
+review
+  .command("show <id>")
+  .description("Show submission detail")
+  .option("-s, --source <name>", "Use a specific metafactory source")
+  .option("--json", "Output raw JSON")
+  .action(async (id: string, opts: { source?: string; json?: boolean }) => {
+    const paths = createPaths();
+    const result = await reviewShow({ paths, sourceName: opts.source, id, json: opts.json });
+    console.log(formatReviewShow(result));
+    if (!result.success) process.exit(1);
+  });
+
+review
+  .command("approve <id>")
+  .description("Approve a submission")
+  .option("-s, --source <name>", "Use a specific metafactory source")
+  .action(async (id: string, opts: { source?: string }) => {
+    const paths = createPaths();
+    const result = await reviewApprove({ paths, sourceName: opts.source, id });
+    console.log(formatReviewAction(result));
+    if (!result.success) process.exit(1);
+  });
+
+review
+  .command("reject <id>")
+  .description("Reject a submission (requires --reason)")
+  .requiredOption("-r, --reason <text>", "Rejection reason (shown to publisher)")
+  .option("-s, --source <name>", "Use a specific metafactory source")
+  .action(async (id: string, opts: { source?: string; reason: string }) => {
+    const paths = createPaths();
+    const result = await reviewReject({
+      paths,
+      sourceName: opts.source,
+      id,
+      reason: opts.reason,
+    });
+    console.log(formatReviewAction(result));
+    if (!result.success) process.exit(1);
+  });
+
+review
+  .command("request-changes <id>")
+  .description("Request changes from publisher (requires --message)")
+  .requiredOption("-m, --message <text>", "Change request comment (shown to publisher)")
+  .option("-s, --source <name>", "Use a specific metafactory source")
+  .action(async (id: string, opts: { source?: string; message: string }) => {
+    const paths = createPaths();
+    const result = await reviewRequestChanges({
+      paths,
+      sourceName: opts.source,
+      id,
+      comment: opts.message,
+    });
+    console.log(formatReviewAction(result));
     if (!result.success) process.exit(1);
   });
 
