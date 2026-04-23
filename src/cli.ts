@@ -891,9 +891,10 @@ review
   .command("approve <id>")
   .description("Approve a submission")
   .option("-s, --source <name>", "Use a specific metafactory source")
-  .action(async (id: string, opts: { source?: string }) => {
+  .option("--json", "Output raw JSON")
+  .action(async (id: string, opts: { source?: string; json?: boolean }) => {
     const paths = createPaths();
-    const result = await reviewApprove({ paths, sourceName: opts.source, id });
+    const result = await reviewApprove({ paths, sourceName: opts.source, id, json: opts.json });
     console.log(formatReviewAction(result));
     if (!result.success) process.exit(1);
   });
@@ -903,13 +904,15 @@ review
   .description("Reject a submission (requires --reason)")
   .requiredOption("-r, --reason <text>", "Rejection reason (shown to publisher)")
   .option("-s, --source <name>", "Use a specific metafactory source")
-  .action(async (id: string, opts: { source?: string; reason: string }) => {
+  .option("--json", "Output raw JSON")
+  .action(async (id: string, opts: { source?: string; reason: string; json?: boolean }) => {
     const paths = createPaths();
     const result = await reviewReject({
       paths,
       sourceName: opts.source,
       id,
       reason: opts.reason,
+      json: opts.json,
     });
     console.log(formatReviewAction(result));
     if (!result.success) process.exit(1);
@@ -920,13 +923,15 @@ review
   .description("Request changes from publisher (requires --message)")
   .requiredOption("-m, --message <text>", "Change request comment (shown to publisher)")
   .option("-s, --source <name>", "Use a specific metafactory source")
-  .action(async (id: string, opts: { source?: string; message: string }) => {
+  .option("--json", "Output raw JSON")
+  .action(async (id: string, opts: { source?: string; message: string; json?: boolean }) => {
     const paths = createPaths();
     const result = await reviewRequestChanges({
       paths,
       sourceName: opts.source,
       id,
       comment: opts.message,
+      json: opts.json,
     });
     console.log(formatReviewAction(result));
     if (!result.success) process.exit(1);
