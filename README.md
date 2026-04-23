@@ -151,6 +151,21 @@ arc login --source <name>     # Authenticate with a specific source
 arc logout                    # Remove authentication token
 ```
 
+### Review (sponsor/steward)
+
+Triage the submission queue for packages where you are the assigned sponsor — or, as a steward, any submission. Requires `trusted+` tier server-side. DD-9 blocks reviewing your own submissions.
+
+```bash
+arc review list                          # Pending submissions assigned to you
+arc review list --per-page 50 --json     # Scripting-friendly, capped at 100
+arc review show <id>                     # Full detail incl. validation_result
+arc review approve <id>                  # Approve and advance to 'approved'
+arc review reject <id> -r "reason"       # Reject (reason shown to publisher)
+arc review request-changes <id> -m "..." # Request changes (comment to publisher)
+```
+
+Every `review` subcommand accepts `-s, --source <name>` to pick a metafactory source and (on `list`, `show`, and all action commands) `--json` for machine output. The first approval on a package promotes it from `draft` → `active`, making it visible on browse and the package page.
+
 ---
 
 ## How It Works
@@ -456,6 +471,55 @@ Re-running `arc publish` with the same version returns a clear error: *"Version 
 - Valid `arc-manifest.yaml` with `name` (lowercase alphanumeric), `version` (semver), and `type`
 - A `README.md` is recommended but not required
 - All capabilities must be honestly declared
+
+---
+
+## Reviewing Submissions
+
+Every published version goes through human review before becoming visible (metafactory DD-6 — no automated approval at any tier). If you are listed as a package's sponsor, or you hold the `steward` tier, `arc review` lets you triage the queue from the terminal while the dedicated reviewer UI is still under construction.
+
+### Quick Review
+
+```bash
+arc review list                 # Submissions awaiting your action
+arc review show <submission-id> # Full detail (validation output, capability diff, reviewer comment)
+```
+
+### Actions
+
+```bash
+arc review approve <id>                   # Advance submission to 'approved'
+arc review reject <id> -r "reason"        # Reject; reason is shown to the publisher
+arc review request-changes <id> -m "..."  # Send the submission back with a comment
+```
+
+### How Reviewing Works
+
+1. Publisher runs `arc publish`, version lands in state `pending_review` with an assigned sponsor.
+2. Sponsor (or any steward) pulls the queue with `arc review list`, inspects with `arc review show`, and chooses one of the three actions.
+3. On `approve`, the package transitions from `draft` to `active` on its first approval, becoming visible on browse and its package page. Subsequent approvals just promote new versions.
+4. `reject` / `request-changes` store your text on the submission so the publisher sees why and what to change.
+
+### Server-Side Guarantees
+
+- `trusted+` tier required for every `review` subcommand (enforced server-side).
+- `list` only returns submissions where `sponsor_id = you` — you never see other sponsors' queues.
+- DD-9: you cannot approve, reject, or request changes on your own submissions. The server returns 403 with a clear message.
+- `reject` and `request-changes` require non-empty text; both the client (arc) and the server enforce this.
+
+### Scripting
+
+`arc review list`, `show`, and all action commands accept `--json` for machine output. Example:
+
+```bash
+arc review list --json | jq '.submissions[] | {id, status, submitted_by}'
+```
+
+### Requirements
+
+- Authenticated with `arc login`
+- Assigned as sponsor for the package, or tier `steward`
+- Tier `trusted` or higher (server enforces)
 
 ---
 
