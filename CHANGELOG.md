@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.21.0
+
+### Added
+- `arc review` command family for sponsor / steward submission triage while the metafactory reviewer UI ([the-metafactory/meta-factory#114](https://github.com/the-metafactory/meta-factory/issues/114)) is still spec-only:
+  - `arc review list` — pending submissions assigned to you (paginated, `--per-page` capped at 100 client-side, `--json` for scripting)
+  - `arc review show <id>` — full submission detail; pretty-prints nested `validation_result` JSON
+  - `arc review approve <id>` — advance submission to `approved` (first approval promotes package `draft` → `active`)
+  - `arc review reject <id> -r <reason>` — reject with reason shown to publisher
+  - `arc review request-changes <id> -m <message>` — request changes with comment to publisher
+- All action commands accept `--json` for machine output.
+- Reuses existing `arc login` bearer-token auth; `-s, --source <name>` selects a metafactory source. Server enforces tier-gating (`trusted+`), sponsor-only queue scoping, and DD-9 self-review prevention.
+
 ## 0.19.3
 
 ### Fixed
