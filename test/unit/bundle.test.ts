@@ -118,6 +118,33 @@ describe("getExclusionPatterns", () => {
   });
 });
 
+describe("DEFAULT_EXCLUSIONS", () => {
+  // Regression guard for https://github.com/the-metafactory/arc/issues/78 —
+  // these patterns are the common build/cache directories that caused 278MB
+  // bundles in monorepos. Each is confirmed to never belong in a published
+  // arc package.
+  const REQUIRED_PATTERNS = [
+    ".git", "node_modules", ".env", ".env.*",
+    "*.db", "*.sqlite", "*.log",
+    ".DS_Store", "Thumbs.db",
+    "dist", "build", "out",
+    "coverage", ".nyc_output",
+    ".next", ".turbo", ".parcel-cache", ".pnpm-store",
+    ".*.bun-build",
+    "target",
+    ".venv", "__pycache__", "*.pyc",
+    "*.tar.gz", "*.tgz",
+    ".specify", ".wrangler", ".claude",
+    "test", "tests",
+  ];
+
+  for (const pattern of REQUIRED_PATTERNS) {
+    test(`includes ${pattern}`, () => {
+      expect(DEFAULT_EXCLUSIONS).toContain(pattern);
+    });
+  }
+});
+
 // ── validateForPublish ───────────────────────────────────────
 
 describe("validateForPublish", () => {
@@ -245,6 +272,47 @@ describe("createBundle", () => {
     await rm(result.tarballPath).catch(() => {});
   });
 
+  test("excludes new build/cache defaults (bun, rust, python, frameworks)", async () => {
+    const pkgDir = await createMockPackage(testDir, {
+      name: "test-skill",
+      version: "1.0.0",
+      type: "skill",
+      description: "A test",
+    }, {
+      extraFiles: {
+        ".cli.bun-build": "binary blob",         // .*.bun-build
+        "target/release/app": "rust binary",     // target
+        ".venv/bin/python": "venv",              // .venv
+        "__pycache__/mod.cpython.pyc": "pyc",    // __pycache__
+        "build/index.js": "build output",        // build
+        "out/index.html": "out output",          // out
+        "coverage/lcov.info": "coverage",        // coverage
+        ".next/build-manifest.json": "{}",       // .next
+        ".turbo/cache.json": "{}",               // .turbo
+        "prev-bundle-1.0.0.tar.gz": "prior",     // *.tar.gz
+      },
+    });
+
+    const result = await createBundle(pkgDir);
+    expect(result.success).toBe(true);
+
+    const listResult = Bun.spawnSync(["tar", "tzf", result.tarballPath], { stdout: "pipe" });
+    const contents = listResult.stdout.toString();
+
+    expect(contents).not.toContain(".cli.bun-build");
+    expect(contents).not.toContain("target/");
+    expect(contents).not.toContain(".venv/");
+    expect(contents).not.toContain("__pycache__/");
+    expect(contents).not.toContain("build/");
+    expect(contents).not.toContain("out/");
+    expect(contents).not.toContain("coverage/");
+    expect(contents).not.toContain(".next/");
+    expect(contents).not.toContain(".turbo/");
+    expect(contents).not.toContain("prev-bundle-1.0.0.tar.gz");
+
+    await rm(result.tarballPath).catch(() => {});
+  });
+
   test("bundle.include overrides exclusions", async () => {
     const pkgDir = await createMockPackage(testDir, {
       name: "test-skill",
@@ -265,6 +333,65 @@ describe("createBundle", () => {
     const listResult = Bun.spawnSync(["tar", "tzf", result.tarballPath], { stdout: "pipe" });
     const contents = listResult.stdout.toString();
     expect(contents).toContain("test/");
+
+    // Matching include should NOT produce the orphan-include warning
+    expect(result.warnings.some((w) => w.includes("bundle.include has no effect"))).toBe(false);
+
+    await rm(result.tarballPath).catch(() => {});
+  });
+
+  test("warns when bundle.include entries match no default exclusion", async () => {
+    const pkgDir = await createMockPackage(testDir, {
+      name: "test-skill",
+      version: "1.0.0",
+      type: "skill",
+      description: "A test",
+      bundle: { include: ["packages/specflow/**", "src/only"] },
+    });
+
+    const result = await createBundle(pkgDir);
+    expect(result.success).toBe(true);
+
+    const warning = result.warnings.find((w) => w.includes("bundle.include has no effect"));
+    expect(warning).toBeDefined();
+    expect(warning).toContain("packages/specflow/**");
+    expect(warning).toContain("src/only");
+
+    await rm(result.tarballPath).catch(() => {});
+  });
+
+  test("no orphan-include warning when bundle.include is empty or absent", async () => {
+    const pkgDir = await createMockPackage(testDir, {
+      name: "test-skill",
+      version: "1.0.0",
+      type: "skill",
+      description: "A test",
+    });
+
+    const result = await createBundle(pkgDir);
+    expect(result.success).toBe(true);
+    expect(result.warnings.some((w) => w.includes("bundle.include has no effect"))).toBe(false);
+
+    await rm(result.tarballPath).catch(() => {});
+  });
+
+  test("warns with mix of matching and orphan includes", async () => {
+    const pkgDir = await createMockPackage(testDir, {
+      name: "test-skill",
+      version: "1.0.0",
+      type: "skill",
+      description: "A test",
+      bundle: { include: ["test", "packages/foo"] },
+    });
+
+    const result = await createBundle(pkgDir);
+    expect(result.success).toBe(true);
+
+    const warning = result.warnings.find((w) => w.includes("bundle.include has no effect"));
+    expect(warning).toBeDefined();
+    expect(warning).toContain("packages/foo");
+    expect(warning).not.toContain("[test,");
+    expect(warning).not.toContain("[test ");
 
     await rm(result.tarballPath).catch(() => {});
   });
