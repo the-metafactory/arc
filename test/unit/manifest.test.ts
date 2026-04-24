@@ -2,7 +2,15 @@ import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { mkdtemp, rm } from "fs/promises";
 import { join } from "path";
 import { tmpdir } from "os";
-import { readManifest, assessRisk, formatCapabilities, MANIFEST_FILENAME, LEGACY_MANIFEST_FILENAME } from "../../src/lib/manifest.js";
+import {
+  readManifest,
+  assessRisk,
+  formatCapabilities,
+  normalizeNetworkEntry,
+  normalizeCapabilities,
+  MANIFEST_FILENAME,
+  LEGACY_MANIFEST_FILENAME,
+} from "../../src/lib/manifest.js";
 import type { ArcManifest } from "../../src/types.js";
 
 let tempDir: string;
@@ -228,5 +236,185 @@ describe("formatCapabilities", () => {
     expect(lines.some((l) => l.includes("🔴") && l.includes("unrestricted"))).toBe(
       true
     );
+  });
+});
+
+// Regression tests for https://github.com/the-metafactory/arc/issues/79
+describe("normalizeNetworkEntry", () => {
+  test("string shorthand becomes object with empty reason", () => {
+    expect(normalizeNetworkEntry("github.com")).toEqual({
+      domain: "github.com",
+      reason: "",
+    });
+  });
+
+  test("object with domain + reason passes through", () => {
+    expect(normalizeNetworkEntry({ domain: "github.com", reason: "clone repos" })).toEqual({
+      domain: "github.com",
+      reason: "clone repos",
+    });
+  });
+
+  test("object missing reason gets empty reason", () => {
+    expect(normalizeNetworkEntry({ domain: "github.com" })).toEqual({
+      domain: "github.com",
+      reason: "",
+    });
+  });
+
+  test("object with non-string reason gets empty reason", () => {
+    expect(normalizeNetworkEntry({ domain: "github.com", reason: 42 })).toEqual({
+      domain: "github.com",
+      reason: "",
+    });
+  });
+
+  test("object missing domain rejected", () => {
+    expect(normalizeNetworkEntry({ reason: "no domain" })).toBeNull();
+  });
+
+  test("number rejected", () => {
+    expect(normalizeNetworkEntry(42)).toBeNull();
+  });
+
+  test("null rejected", () => {
+    expect(normalizeNetworkEntry(null)).toBeNull();
+  });
+});
+
+describe("normalizeCapabilities", () => {
+  test("mutates string shorthand into object form", () => {
+    const m: ArcManifest = {
+      name: "t",
+      version: "1.0.0",
+      type: "skill",
+      capabilities: { network: ["github.com", "agentskills.io"] as any },
+    };
+    normalizeCapabilities(m, "arc-manifest.yaml");
+    expect(m.capabilities!.network).toEqual([
+      { domain: "github.com", reason: "" },
+      { domain: "agentskills.io", reason: "" },
+    ]);
+  });
+
+  test("mixed string + object entries both land as objects", () => {
+    const m: ArcManifest = {
+      name: "t",
+      version: "1.0.0",
+      type: "skill",
+      capabilities: {
+        network: [
+          "github.com",
+          { domain: "api.example.com", reason: "telemetry" },
+        ] as any,
+      },
+    };
+    normalizeCapabilities(m, "arc-manifest.yaml");
+    expect(m.capabilities!.network).toEqual([
+      { domain: "github.com", reason: "" },
+      { domain: "api.example.com", reason: "telemetry" },
+    ]);
+  });
+
+  test("no-op when capabilities absent", () => {
+    const m: ArcManifest = { name: "t", version: "1.0.0", type: "skill" };
+    expect(() => normalizeCapabilities(m, "arc-manifest.yaml")).not.toThrow();
+  });
+
+  test("no-op when network absent or empty", () => {
+    const m: ArcManifest = {
+      name: "t",
+      version: "1.0.0",
+      type: "skill",
+      capabilities: { bash: { allowed: false } },
+    };
+    normalizeCapabilities(m, "arc-manifest.yaml");
+    expect(m.capabilities!.network).toBeUndefined();
+  });
+
+  test("throws on invalid entry type", () => {
+    const m: ArcManifest = {
+      name: "t",
+      version: "1.0.0",
+      type: "skill",
+      capabilities: { network: [42] as any },
+    };
+    expect(() => normalizeCapabilities(m, "arc-manifest.yaml")).toThrow(
+      /capabilities\.network entries must be/,
+    );
+  });
+
+  test("warns on stderr when string shorthand present", () => {
+    const captured: string[] = [];
+    const orig = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((chunk: any) => {
+      captured.push(String(chunk));
+      return true;
+    }) as any;
+    try {
+      const m: ArcManifest = {
+        name: "t",
+        version: "1.0.0",
+        type: "skill",
+        capabilities: { network: ["github.com"] as any },
+      };
+      normalizeCapabilities(m, "arc-manifest.yaml");
+    } finally {
+      process.stderr.write = orig;
+    }
+    expect(captured.join("")).toContain("string shorthand");
+    expect(captured.join("")).toContain("github.com");
+  });
+
+  test("no warning when all entries are object form", () => {
+    const captured: string[] = [];
+    const orig = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((chunk: any) => {
+      captured.push(String(chunk));
+      return true;
+    }) as any;
+    try {
+      const m: ArcManifest = {
+        name: "t",
+        version: "1.0.0",
+        type: "skill",
+        capabilities: {
+          network: [{ domain: "github.com", reason: "clone" }],
+        },
+      };
+      normalizeCapabilities(m, "arc-manifest.yaml");
+    } finally {
+      process.stderr.write = orig;
+    }
+    expect(captured.join("")).toBe("");
+  });
+});
+
+describe("readManifest — network shorthand (#79)", () => {
+  test("string-form network entries parse into object form", async () => {
+    const orig = process.stderr.write.bind(process.stderr);
+    process.stderr.write = (() => true) as any;
+    try {
+      await Bun.write(
+        join(tempDir, MANIFEST_FILENAME),
+        `schema: arc/v1
+name: shorthand-test
+version: 0.1.0
+type: skill
+capabilities:
+  network:
+    - github.com
+    - agentskills.io
+`,
+      );
+      const manifest = await readManifest(tempDir);
+      expect(manifest).not.toBeNull();
+      expect(manifest!.capabilities!.network).toEqual([
+        { domain: "github.com", reason: "" },
+        { domain: "agentskills.io", reason: "" },
+      ]);
+    } finally {
+      process.stderr.write = orig;
+    }
   });
 });

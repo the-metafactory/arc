@@ -71,8 +71,15 @@ export function toServerManifest(manifest: ArcManifest, scope: string): Record<s
     filesystem.push({ path: p, access: "write" });
   }
 
-  // Network: arc uses [{ domain, reason }], server uses [{ domain }]
-  const network = (caps.network ?? []).map((n) => ({ domain: n.domain }));
+  // Network: arc uses [{ domain, reason }] (string shorthand "example.com" is
+  // normalised at readManifest, but coerce defensively here in case a manifest
+  // was constructed in-memory without going through readManifest — issue #79).
+  // Server schema requires { domain }.
+  const network = (caps.network ?? []).flatMap((n): Array<{ domain: string }> => {
+    if (typeof n === "string") return [{ domain: n }];
+    if (n && typeof (n as any).domain === "string") return [{ domain: (n as any).domain }];
+    return [];
+  });
 
   // Bash → subprocess
   const subprocess: Array<{ command: string }> = [];

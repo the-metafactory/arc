@@ -9,6 +9,7 @@ import {
   ensurePackageExists,
   registerVersion,
   combineError,
+  toServerManifest,
 } from "../../src/lib/publish.js";
 import { mockFetch } from "../helpers/mock-fetch.js";
 import type { ArcManifest, RegistrySource } from "../../src/types.js";
@@ -301,5 +302,64 @@ describe("combineError", () => {
   test("returns undefined for null/undefined", () => {
     expect(combineError(null)).toBeUndefined();
     expect(combineError(undefined)).toBeUndefined();
+  });
+});
+
+// Regression tests for https://github.com/the-metafactory/arc/issues/79
+describe("toServerManifest — network capability coercion", () => {
+  test("object form produces {domain}", () => {
+    const m = makeManifest({
+      capabilities: {
+        network: [
+          { domain: "github.com", reason: "clone repos" },
+          { domain: "api.example.com", reason: "telemetry" },
+        ],
+      },
+    });
+    const server = toServerManifest(m, "test");
+    expect(server.capabilities).toEqual({
+      network: [{ domain: "github.com" }, { domain: "api.example.com" }],
+    });
+  });
+
+  test("string shorthand produces {domain} (defensive path)", () => {
+    // Simulates a manifest that bypassed readManifest normalisation.
+    const m = makeManifest({
+      capabilities: {
+        network: ["github.com", "agentskills.io"] as unknown as Array<{ domain: string; reason: string }>,
+      },
+    });
+    const server = toServerManifest(m, "test");
+    expect(server.capabilities).toEqual({
+      network: [{ domain: "github.com" }, { domain: "agentskills.io" }],
+    });
+  });
+
+  test("never produces {domain: undefined} under any input shape", () => {
+    const m = makeManifest({
+      capabilities: {
+        network: [
+          "github.com",
+          { domain: "good.com", reason: "ok" },
+          { reason: "no domain" },
+          null,
+          undefined,
+          42,
+        ] as unknown as Array<{ domain: string; reason: string }>,
+      },
+    });
+    const server = toServerManifest(m, "test");
+    const netCaps = (server.capabilities as any).network as Array<{ domain: unknown }>;
+    for (const entry of netCaps) {
+      expect(typeof entry.domain).toBe("string");
+      expect(entry.domain).not.toBe("");
+    }
+    expect(netCaps).toEqual([{ domain: "github.com" }, { domain: "good.com" }]);
+  });
+
+  test("empty network array produces no network entry in server caps", () => {
+    const m = makeManifest({ capabilities: { network: [] } });
+    const server = toServerManifest(m, "test");
+    expect((server.capabilities as any).network).toBeUndefined();
   });
 });
