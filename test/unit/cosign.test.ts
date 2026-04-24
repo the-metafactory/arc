@@ -42,6 +42,8 @@ describe("findCosignBinary", () => {
 });
 
 describe("ensureCosignBinary", () => {
+  // First-run may download the binary (~100MB) from GitHub Releases; allow up
+  // to 60s so the smoke test gate is not flaky on a fresh worktree / CI cache.
   test("returns path or error", async () => {
     // Suppress stderr from potential download messages
     const originalWrite = process.stderr.write;
@@ -52,10 +54,13 @@ describe("ensureCosignBinary", () => {
     } finally {
       process.stderr.write = originalWrite;
     }
-  });
+  }, 60_000);
 });
 
 describe("verifySigstoreBundle", () => {
+  // Cosign verify-blob attempts network lookups (Rekor, Fulcio) before
+  // reporting the missing blob, so the negative-path case can take >5s on a
+  // slow network. Extend the timeout so the smoke test gate is stable.
   test("returns invalid for nonexistent artifact and bundle", async () => {
     // Suppress stderr from potential download messages
     const originalWrite = process.stderr.write;
@@ -73,7 +78,7 @@ describe("verifySigstoreBundle", () => {
     } finally {
       process.stderr.write = originalWrite;
     }
-  });
+  }, 60_000);
 });
 
 describe("detectPlatform - unsupported", () => {
