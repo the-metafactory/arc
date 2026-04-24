@@ -10,21 +10,46 @@ export const README_VARIANTS = ["README.md", "readme.md", "Readme.md"];
 // ── Constants ────────────────────────────────────────────────
 
 export const DEFAULT_EXCLUSIONS = [
+  // VCS / editor / OS
   ".git",
-  "node_modules",
-  ".env",
-  ".env.*",
-  "*.db",
-  "*.sqlite",
   ".DS_Store",
   "Thumbs.db",
-  ".specify",
-  "test",
-  "tests",
-  "dist",
+  // Secrets
+  ".env",
+  ".env.*",
+  // Databases / logs
+  "*.db",
+  "*.sqlite",
   "*.log",
+  // Node / JS / TS build + caches
+  "node_modules",
+  "dist",
+  "build",
+  "out",
+  "coverage",
+  ".nyc_output",
+  ".next",
+  ".turbo",
+  ".parcel-cache",
+  ".pnpm-store",
+  // Bun compiled-binary cache
+  ".*.bun-build",
+  // Rust
+  "target",
+  // Python
+  ".venv",
+  "__pycache__",
+  "*.pyc",
+  // Prior bundle artefacts
+  "*.tar.gz",
+  "*.tgz",
+  // arc / Cloudflare / Claude local state
+  ".specify",
   ".wrangler",
   ".claude",
+  // Test directories (override via bundle.include if your package ships tests)
+  "test",
+  "tests",
 ];
 
 const MAX_PACKAGE_SIZE = 50 * 1024 * 1024; // 50MB
@@ -162,6 +187,18 @@ export async function createBundle(
   const tarballName = outputPath ?? join(packageDir, `${manifest.name}-${manifest.version}.tar.gz`);
   const exclusions = getExclusionPatterns(manifest);
   const includePatterns = manifest.bundle?.include ?? [];
+
+  // Warn when include entries don't cancel any exclusion (default OR user-defined).
+  // include only cancels matching exclusions — it is not a tar-level allowlist.
+  const orphanIncludes = includePatterns.filter((p) => !exclusions.includes(p));
+  if (orphanIncludes.length > 0) {
+    warnings.push(
+      `bundle.include has no effect for [${orphanIncludes.join(", ")}] — ` +
+      `bundle.include only cancels matching exclusions, it is not an allowlist. ` +
+      `To filter the bundle, use bundle.exclude or pass a package subdirectory (e.g. arc bundle packages/my-pkg).`,
+    );
+  }
+
   const excludeArgs = buildTarArgs(exclusions, includePatterns);
 
   const result = Bun.spawnSync(
@@ -177,7 +214,21 @@ export async function createBundle(
 
   if (sizeBytes > MAX_PACKAGE_SIZE) {
     await rm(tarballName).catch(() => {});
-    return { success: false, tarballPath: tarballName, sha256, sizeBytes, fileCount, manifest, warnings, error: `Package tarball exceeds 50MB limit (${(sizeBytes / 1024 / 1024).toFixed(1)}MB)` };
+    const sizeMb = (sizeBytes / 1024 / 1024).toFixed(1);
+    const hint =
+      "If this is a monorepo, pass a package subdirectory (e.g. `arc bundle packages/my-pkg`), " +
+      "or use the library pattern (type: library with artifacts: at the repo root). " +
+      "Also check for large caches that should be added to bundle.exclude (e.g. .*.bun-build, target, .venv).";
+    return {
+      success: false,
+      tarballPath: tarballName,
+      sha256,
+      sizeBytes,
+      fileCount,
+      manifest,
+      warnings,
+      error: `Package tarball exceeds 50MB limit (${sizeMb}MB). ${hint}`,
+    };
   }
 
   if (sizeBytes > WARN_PACKAGE_SIZE) {

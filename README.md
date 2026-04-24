@@ -415,18 +415,62 @@ The publish namespace is resolved in priority order:
 
 By default, these patterns are excluded from the tarball:
 
-`.git`, `node_modules`, `.env`, `.env.*`, `*.db`, `*.sqlite`, `.DS_Store`, `Thumbs.db`, `.specify`, `test`, `tests`, `dist`, `*.log`, `.wrangler`, `.claude`
+- **VCS / OS:** `.git`, `.DS_Store`, `Thumbs.db`
+- **Secrets:** `.env`, `.env.*`
+- **Databases / logs:** `*.db`, `*.sqlite`, `*.log`
+- **JS / TS build + cache:** `node_modules`, `dist`, `build`, `out`, `coverage`, `.nyc_output`, `.next`, `.turbo`, `.parcel-cache`, `.pnpm-store`
+- **Bun:** `.*.bun-build` (compiled-binary cache)
+- **Rust:** `target`
+- **Python:** `.venv`, `__pycache__`, `*.pyc`
+- **Prior bundle artefacts:** `*.tar.gz`, `*.tgz`
+- **arc / Cloudflare / Claude local state:** `.specify`, `.wrangler`, `.claude`
+- **Tests:** `test`, `tests` (override via `bundle.include` if your package ships tests)
 
-Override in `arc-manifest.yaml`:
+Extend or override in `arc-manifest.yaml`:
 
 ```yaml
 bundle:
   exclude:
     - "*.tmp"
-    - "coverage"
+    - "fixtures/large"
   include:
-    - "test"           # Override default exclusion
+    - "test"           # Cancels the default "test" exclusion
 ```
+
+#### `bundle.include` is not an allowlist
+
+`bundle.include` only **cancels** a matching default exclusion — an entry must appear verbatim in the default list above to have any effect. It does not filter the tarball down to a subset of files. Use `bundle.exclude` for that, or bundle a subdirectory directly (`arc bundle packages/my-pkg`). arc will warn when an `include` entry does not match any default.
+
+### Bundling a Monorepo
+
+If your repo is a monorepo with multiple publishable packages, there are two supported patterns:
+
+**1. Bundle one package at a time**
+
+Each package directory has its own `arc-manifest.yaml`. Run `arc bundle` against the subdirectory:
+
+```bash
+arc bundle packages/my-skill
+arc publish packages/my-skill
+```
+
+**2. Library root**
+
+Declare the repo root as a `library` with an `artifacts:` list. Each artifact is a subdirectory that contains its own `arc-manifest.yaml`.
+
+```yaml
+# /arc-manifest.yaml  (repo root)
+name: my-library
+version: 1.0.0
+type: library
+artifacts:
+  - path: packages/skill-a
+    description: Skill A
+  - path: packages/tool-b
+    description: Tool B
+```
+
+With the library pattern, `arc install` installs every artifact, and `arc bundle packages/skill-a` bundles only that subtree — ignoring the rest of the monorepo (including `node_modules`, build caches, sibling packages, etc.).
 
 ### Dry Run
 

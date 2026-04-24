@@ -813,7 +813,7 @@ program
 
 program
   .command("bundle [path]")
-  .description("Create a distributable tarball from a package directory")
+  .description("Create a distributable tarball from a package directory. For monorepos, pass a subdirectory (e.g. `arc bundle packages/my-pkg`) or use the library pattern at the repo root.")
   .option("-o, --output <path>", "Output path for the tarball")
   .action(async (path: string | undefined, opts: { output?: string }) => {
     const paths = createPaths();
