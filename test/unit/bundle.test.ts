@@ -396,6 +396,28 @@ describe("createBundle", () => {
     await rm(result.tarballPath).catch(() => {});
   });
 
+  test("include that cancels a user-defined bundle.exclude produces no warning", async () => {
+    // Regression test for PR #81 review nit — include can cancel any exclusion
+    // in the merged set, not only DEFAULT_EXCLUSIONS. A user-defined exclude
+    // cancelled by include is a legitimate pattern, not an orphan.
+    const pkgDir = await createMockPackage(testDir, {
+      name: "test-skill",
+      version: "1.0.0",
+      type: "skill",
+      description: "A test",
+      bundle: {
+        exclude: ["fixtures/large"],
+        include: ["fixtures/large"],
+      },
+    });
+
+    const result = await createBundle(pkgDir);
+    expect(result.success).toBe(true);
+    expect(result.warnings.some((w) => w.includes("bundle.include has no effect"))).toBe(false);
+
+    await rm(result.tarballPath).catch(() => {});
+  });
+
   test("warns when no README.md", async () => {
     const pkgDir = await createMockPackage(testDir, {
       name: "test-skill",

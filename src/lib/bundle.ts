@@ -188,11 +188,13 @@ export async function createBundle(
   const exclusions = getExclusionPatterns(manifest);
   const includePatterns = manifest.bundle?.include ?? [];
 
-  const orphanIncludes = includePatterns.filter((p) => !DEFAULT_EXCLUSIONS.includes(p));
+  // Warn when include entries don't cancel any exclusion (default OR user-defined).
+  // include only cancels matching exclusions — it is not a tar-level allowlist.
+  const orphanIncludes = includePatterns.filter((p) => !exclusions.includes(p));
   if (orphanIncludes.length > 0) {
     warnings.push(
       `bundle.include has no effect for [${orphanIncludes.join(", ")}] — ` +
-      `bundle.include only cancels matching default exclusions, it is not an allowlist. ` +
+      `bundle.include only cancels matching exclusions, it is not an allowlist. ` +
       `To filter the bundle, use bundle.exclude or pass a package subdirectory (e.g. arc bundle packages/my-pkg).`,
     );
   }
