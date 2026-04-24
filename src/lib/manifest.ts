@@ -46,6 +46,8 @@ export async function readManifest(
         );
       }
 
+      normalizeCapabilities(parsed, filename);
+
       return parsed;
     } catch (err: any) {
       if (err.code === "ENOENT") continue;
@@ -53,6 +55,65 @@ export async function readManifest(
     }
   }
   return null;
+}
+
+/**
+ * Normalize a single network-capability entry to object form.
+ * Accepts the legal `{domain, reason}` object shape and the string shorthand
+ * `"example.com"` (rewritten to `{domain: "example.com", reason: ""}`).
+ * Returns null for anything else so the caller can surface a clear error.
+ */
+export function normalizeNetworkEntry(
+  entry: unknown,
+): { domain: string; reason: string } | null {
+  if (typeof entry === "string") {
+    return { domain: entry, reason: "" };
+  }
+  if (entry && typeof entry === "object" && typeof (entry as any).domain === "string") {
+    const obj = entry as { domain: string; reason?: unknown };
+    return { domain: obj.domain, reason: typeof obj.reason === "string" ? obj.reason : "" };
+  }
+  return null;
+}
+
+/**
+ * Normalize `capabilities.network` in place. Rewrites string shorthand
+ * (`- example.com`) to `{domain, reason: ""}` and emits a one-shot stderr
+ * warning naming each shorthand entry so publishers can add a reason.
+ * No-op when capabilities or network are absent.
+ */
+export function normalizeCapabilities(manifest: ArcManifest, filename: string): void {
+  const caps = manifest.capabilities;
+  if (!caps || !Array.isArray(caps.network) || caps.network.length === 0) return;
+
+  const shorthand: string[] = [];
+  const invalid: unknown[] = [];
+  const normalized: Array<{ domain: string; reason: string }> = [];
+
+  for (const entry of caps.network as unknown[]) {
+    if (typeof entry === "string") shorthand.push(entry);
+    const result = normalizeNetworkEntry(entry);
+    if (result === null) {
+      invalid.push(entry);
+      continue;
+    }
+    normalized.push(result);
+  }
+
+  if (invalid.length > 0) {
+    throw new Error(
+      `Invalid ${filename}: capabilities.network entries must be a string domain or {domain, reason} object; got ${JSON.stringify(invalid)}`,
+    );
+  }
+
+  caps.network = normalized;
+
+  if (shorthand.length > 0) {
+    process.stderr.write(
+      `warning: ${filename} capabilities.network uses string shorthand for [${shorthand.join(", ")}] — ` +
+      `add a reason for each domain in the form {domain: "${shorthand[0]}", reason: "why you need this"}.\n`,
+    );
+  }
 }
 
 /**
