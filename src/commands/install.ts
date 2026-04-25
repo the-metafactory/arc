@@ -5,7 +5,7 @@ import type { Database } from "bun:sqlite";
 import { readManifest, readLibraryArtifacts, assessRisk, formatCapabilities } from "../lib/manifest.js";
 import { recordInstall, getSkill } from "../lib/db.js";
 import { runScript } from "../lib/scripts.js";
-import { registerHooks, resolveHooksFromManifest } from "../lib/hooks.js";
+import { registerHooks, resolveHooksFromManifest, findMissingHookFiles } from "../lib/hooks.js";
 import { createArtifactSymlinks, resolveArtifactSourceDir, installNodeDependencies } from "../lib/artifact-installer.js";
 import { wireExtensions } from "../lib/extensions.js";
 import { extractRepoName } from "../lib/repo-name.js";
@@ -250,7 +250,7 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
   }
 
   // 4. Create symlinks based on artifact type
-  await createArtifactSymlinks({
+  const symlinkResult = await createArtifactSymlinks({
     type: manifest.type,
     manifest,
     paths,
@@ -258,6 +258,16 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
     consumerDir: opts.consumerDir,
     quiet: opts.yes,
   });
+  if (symlinkResult.filesMissingSource.length) {
+    const detail = symlinkResult.filesMissingSource
+      .map((f) => `  - ${f.source} -> ${f.target}`)
+      .join("\n");
+    return {
+      success: false,
+      error:
+        `Manifest declares provides.files entries whose source does not exist in the package:\n${detail}`,
+    };
+  }
 
   // 5b. Register hooks (if declared, with consent gating)
   const resolvedHooks = resolveHooksFromManifest(
@@ -266,6 +276,21 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
     manifest.name,
   );
   if (resolvedHooks?.length) {
+    // Refuse to register hooks whose command points at a file that does not
+    // exist — silent registration of broken hooks was the original symptom of
+    // issue #84.
+    const missingHookFiles = findMissingHookFiles(resolvedHooks);
+    if (missingHookFiles.length) {
+      const detail = missingHookFiles
+        .map((m) => `  - ${m.event}: ${m.command}\n      missing: ${m.missingPath}`)
+        .join("\n");
+      return {
+        success: false,
+        error:
+          `Manifest declares hooks whose command references a file that was not installed:\n${detail}\n` +
+          `Add the file to provides.files (or fix the command path) and reinstall.`,
+      };
+    }
     const tier = opts.sourceTier ?? manifest.tier ?? "custom";
     const approved = await promptHookConsent(
       manifest.name,
@@ -491,7 +516,7 @@ export async function installSingleArtifact(
   // Create symlinks based on artifact type
   const artifactType = manifest.type as ArtifactType;
 
-  await createArtifactSymlinks({
+  const symlinkResult = await createArtifactSymlinks({
     type: artifactType,
     manifest,
     paths,
@@ -499,6 +524,16 @@ export async function installSingleArtifact(
     consumerDir: opts.consumerDir,
     quiet: opts.yes,
   });
+  if (symlinkResult.filesMissingSource.length) {
+    const detail = symlinkResult.filesMissingSource
+      .map((f) => `  - ${f.source} -> ${f.target}`)
+      .join("\n");
+    return {
+      success: false,
+      error:
+        `Manifest declares provides.files entries whose source does not exist in the package:\n${detail}`,
+    };
+  }
 
   // Register hooks (with consent gating — same as standalone install)
   const resolvedHooks = resolveHooksFromManifest(
@@ -507,6 +542,21 @@ export async function installSingleArtifact(
     manifest.name,
   );
   if (resolvedHooks?.length) {
+    // Refuse to register hooks whose command points at a file that does not
+    // exist — silent registration of broken hooks was the original symptom of
+    // issue #84.
+    const missingHookFiles = findMissingHookFiles(resolvedHooks);
+    if (missingHookFiles.length) {
+      const detail = missingHookFiles
+        .map((m) => `  - ${m.event}: ${m.command}\n      missing: ${m.missingPath}`)
+        .join("\n");
+      return {
+        success: false,
+        error:
+          `Manifest declares hooks whose command references a file that was not installed:\n${detail}\n` +
+          `Add the file to provides.files (or fix the command path) and reinstall.`,
+      };
+    }
     const tier = opts.sourceTier ?? manifest.tier ?? "custom";
     const approved = await promptHookConsent(
       manifest.name,
