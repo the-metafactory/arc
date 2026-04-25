@@ -224,11 +224,13 @@ export async function upgradePackage(
     });
   }
 
-  // Re-register hooks (remove old, add new) — no consent prompt on upgrade
+  // Re-register hooks (remove old, add new) — no consent prompt on upgrade.
+  // paths.claudeRoot is threaded as $PAI_DIR expansion target — see install.ts.
   const resolvedHooks = resolveHooksFromManifest(
     manifest.provides?.hooks,
     installPath,
     name,
+    paths.claudeRoot,
   );
   if (resolvedHooks?.length) {
     const settingsPath = paths.settingsPath;

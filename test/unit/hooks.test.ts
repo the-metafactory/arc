@@ -444,6 +444,36 @@ describe("hasHooks", () => {
   });
 });
 
+describe("resolveHooksFromManifest $PAI_DIR substitution", () => {
+  test("expands $PAI_DIR / ${PAI_DIR} to the provided paiDir", () => {
+    const hooks = [
+      { event: "Stop", command: "$PAI_DIR/hooks/Foo.ts" },
+      { event: "PostToolUse", command: "${PAI_DIR}/hooks/Bar.ts" },
+    ];
+    const resolved = resolveHooksFromManifest(hooks, "/repo", "MyPkg", "/Users/me/.claude");
+    expect(resolved).not.toBeNull();
+    expect(resolved![0].command).toBe("/Users/me/.claude/hooks/Foo.ts");
+    expect(resolved![1].command).toBe("/Users/me/.claude/hooks/Bar.ts");
+  });
+
+  test("leaves $PAI_DIR literal when paiDir is not provided (back-compat)", () => {
+    const hooks = [{ event: "Stop", command: "$PAI_DIR/hooks/Foo.ts" }];
+    const resolved = resolveHooksFromManifest(hooks, "/repo", "MyPkg");
+    expect(resolved).not.toBeNull();
+    expect(resolved![0].command).toBe("$PAI_DIR/hooks/Foo.ts");
+  });
+
+  test("substitution composes with $PKG_DIR and $<NAME>_DIR", () => {
+    const hooks = [
+      { event: "Stop", command: "${PAI_DIR}/runner.sh ${PKG_DIR}/handler.ts" },
+      { event: "Start", command: "${MYPKG_DIR}/init.sh ${PAI_DIR}/audit.log" },
+    ];
+    const resolved = resolveHooksFromManifest(hooks, "/repo/install", "mypkg", "/Users/me/.claude");
+    expect(resolved![0].command).toBe("/Users/me/.claude/runner.sh /repo/install/handler.ts");
+    expect(resolved![1].command).toBe("/repo/install/init.sh /Users/me/.claude/audit.log");
+  });
+});
+
 describe("findMissingHookFiles", () => {
   test("flags command whose absolute path does not exist", () => {
     const issues = findMissingHookFiles([

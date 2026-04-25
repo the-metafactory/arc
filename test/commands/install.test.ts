@@ -501,6 +501,60 @@ describe("install provides.files (issue #84)", () => {
     expect(ours.hooks[0].command).toContain("hooks/Stop.ts");
     expect(ours.hooks[0].command).not.toContain("${PKG_DIR}");
   });
+
+  // Issue #85 regression: caduceus shape — hook command uses ${PAI_DIR}/...
+  // pointing at a file that was never landed at the target. Without
+  // $PAI_DIR substitution upstream, the install gate would silently accept
+  // the broken hook.
+  test("fails install when ${PAI_DIR}-prefixed hook target was never landed", async () => {
+    const repoUrl = await buildRepoWithProvides({
+      name: "PaiDirGhostHook",
+      providesHooks: [
+        { event: "Stop", command: "${PAI_DIR}/hooks/handlers/SkillNudge.ts" },
+      ],
+    });
+
+    const result = await install({
+      paths: env.paths,
+      db: env.db,
+      repoUrl,
+      yes: true,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("hooks");
+    // Diagnostic should reference the resolved absolute path, not the literal ${PAI_DIR}.
+    expect(result.error).toContain(env.paths.claudeRoot);
+    expect(result.error).toContain("SkillNudge.ts");
+  });
+
+  test("install succeeds when ${PAI_DIR} hook target is landed via provides.files", async () => {
+    const targetPath = join(env.paths.claudeRoot, "hooks", "handlers", "Live.ts");
+    const repoUrl = await buildRepoWithProvides({
+      name: "PaiDirLiveHook",
+      extraFiles: { "hooks/handlers/Live.ts": "// live\n" },
+      providesFiles: [{ source: "hooks/handlers/Live.ts", target: targetPath }],
+      providesHooks: [
+        { event: "Stop", command: "${PAI_DIR}/hooks/handlers/Live.ts" },
+      ],
+    });
+
+    const result = await install({
+      paths: env.paths,
+      db: env.db,
+      repoUrl,
+      yes: true,
+    });
+
+    expect(result.success).toBe(true);
+    const settings = JSON.parse(await Bun.file(env.paths.settingsPath).text());
+    const stopHooks = settings.hooks?.Stop ?? [];
+    const ours = stopHooks.find((g: { _pai_pkg?: string }) => g._pai_pkg === "PaiDirLiveHook");
+    expect(ours).toBeDefined();
+    // Settings.json should contain the substituted absolute path, not the literal ${PAI_DIR}.
+    expect(ours.hooks[0].command).toBe(targetPath);
+    expect(ours.hooks[0].command).not.toContain("${PAI_DIR}");
+  });
 });
 
 describe("parseNameVersion", () => {

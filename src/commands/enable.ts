@@ -102,11 +102,13 @@ export async function enable(
     }
   }
 
-  // Re-register hooks when enabling (consent was given at install time)
+  // Re-register hooks when enabling (consent was given at install time).
+  // paths.claudeRoot is threaded as $PAI_DIR expansion target — see install.ts.
   const resolvedHooks = resolveHooksFromManifest(
     manifest?.provides?.hooks,
     skill.install_path,
     name,
+    paths.claudeRoot,
   );
   if (resolvedHooks?.length) {
     const settingsPath = paths.settingsPath;
