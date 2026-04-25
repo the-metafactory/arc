@@ -520,6 +520,77 @@ describe("downloadPackage", () => {
       globalThis.fetch = originalFetch;
     }
   });
+
+  // Defense-in-depth: if storage 302s to a presigned URL on a different
+  // origin (R2/S3/CDN), the bearer token must not reach the redirect target.
+  test("strips Authorization on cross-origin redirect", async () => {
+    const originalFetch = globalThis.fetch;
+    const requests: Array<{ url: string; auth: string | null }> = [];
+    globalThis.fetch = mockFetch(async (input: any, init?: any) => {
+      const url = typeof input === "string" ? input : input.url;
+      const headers = new Headers(init?.headers);
+      requests.push({ url, auth: headers.get("Authorization") });
+      if (url.startsWith("https://meta-factory.test/")) {
+        return new Response(null, {
+          status: 302,
+          headers: { Location: "https://r2.cloudflarestorage.com/bucket/pkg.tar.gz" },
+        });
+      }
+      return new Response(new ArrayBuffer(64), { status: 200 });
+    });
+
+    try {
+      const result = await downloadPackage(
+        "https://meta-factory.test/api/v1/storage/download/abc",
+        env.paths.reposDir,
+        metafactorySource("super-secret-token"),
+      );
+      expect(result.success).toBe(true);
+      expect(requests).toHaveLength(2);
+      // First hop (origin server) gets the bearer.
+      expect(requests[0].url).toContain("meta-factory.test");
+      expect(requests[0].auth).toBe("Bearer super-secret-token");
+      // Second hop (cross-origin storage) MUST NOT see the bearer.
+      expect(requests[1].url).toContain("r2.cloudflarestorage.com");
+      expect(requests[1].auth).toBeNull();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("preserves Authorization on same-origin redirect", async () => {
+    // Internal redirect (e.g. /v1/storage/download/abc → /v2/storage/download/abc
+    // on the same origin) is part of the auth surface; strip would break installs.
+    const originalFetch = globalThis.fetch;
+    const requests: Array<{ url: string; auth: string | null }> = [];
+    globalThis.fetch = mockFetch(async (input: any, init?: any) => {
+      const url = typeof input === "string" ? input : input.url;
+      const headers = new Headers(init?.headers);
+      requests.push({ url, auth: headers.get("Authorization") });
+      if (url.endsWith("/v1/storage/download/abc")) {
+        return new Response(null, {
+          status: 307,
+          headers: { Location: "/v2/storage/download/abc" },
+        });
+      }
+      return new Response(new ArrayBuffer(64), { status: 200 });
+    });
+
+    try {
+      const result = await downloadPackage(
+        "https://meta-factory.test/v1/storage/download/abc",
+        env.paths.reposDir,
+        metafactorySource("super-secret-token"),
+      );
+      expect(result.success).toBe(true);
+      expect(requests).toHaveLength(2);
+      expect(requests[0].auth).toBe("Bearer super-secret-token");
+      expect(requests[1].auth).toBe("Bearer super-secret-token");
+      expect(requests[1].url).toContain("/v2/storage/download/abc");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------
