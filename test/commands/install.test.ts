@@ -355,6 +355,7 @@ describe("install provides.files (issue #84)", () => {
     providesFiles?: Array<{ source: string; target: string }>;
     providesHooks?: Array<{ event: string; command: string }>;
     providesCli?: Array<{ command: string; name: string }>;
+    postinstall?: { path: string; content: string };
   }): Promise<string> {
     const repoDir = join(env.root, `mock-${opts.name}`);
     const { mkdir, writeFile } = await import("fs/promises");
@@ -400,6 +401,14 @@ describe("install provides.files (issue #84)", () => {
         lines.push(`    - command: ${JSON.stringify(c.command)}`);
         lines.push(`      name: ${c.name}`);
       }
+    }
+    if (opts.postinstall) {
+      const scriptAbs = join(repoDir, opts.postinstall.path);
+      await mkdir(join(scriptAbs, ".."), { recursive: true });
+      await writeFile(scriptAbs, opts.postinstall.content);
+      Bun.spawnSync(["chmod", "+x", scriptAbs], { stdout: "pipe", stderr: "pipe" });
+      lines.push(`scripts:`);
+      lines.push(`  postinstall: ${JSON.stringify(opts.postinstall.path)}`);
     }
     lines.push(`capabilities:`);
     lines.push(`  filesystem: { read: [], write: [] }`);
@@ -603,6 +612,59 @@ describe("install provides.files (issue #84)", () => {
     // bin symlink + PATH shim for the declared CLI
     expect(existsSync(join(env.paths.binDir, "rollbackgate"))).toBe(false);
     expect(existsSync(join(env.paths.shimDir, "rollbackgate"))).toBe(false);
+  });
+
+  // Issue #97: postinstall script failure leaves the same partial-state shape
+  // as the hook-validation gate (#89) PLUS hooks already registered in
+  // settings.json (registerHooks runs before postinstall). Install must tear
+  // down both before returning.
+  test("postinstall failure rolls back symlinks AND unregisters hooks", async () => {
+    const filesTarget = join(env.paths.claudeRoot, "handlers", "Live.ts");
+    const repoUrl = await buildRepoWithProvides({
+      name: "PostinstallRollback",
+      extraFiles: { "handlers/Live.ts": "// live\n" },
+      providesFiles: [{ source: "handlers/Live.ts", target: filesTarget }],
+      providesCli: [{ command: "bun src/cli.ts", name: "postrollback" }],
+      providesHooks: [
+        { event: "Stop", command: "${PAI_DIR}/handlers/Live.ts" },
+      ],
+      postinstall: {
+        path: "scripts/postinstall.sh",
+        content: "#!/bin/bash\nexit 1\n",
+      },
+    });
+
+    const result = await install({
+      paths: env.paths,
+      db: env.db,
+      repoUrl,
+      yes: true,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("Postinstall script failed");
+
+    // Symlink rollback assertions (same shape as #89 hook-gate test).
+    expect(existsSync(join(env.paths.skillsDir, "PostinstallRollback"))).toBe(false);
+    expect(existsSync(filesTarget)).toBe(false);
+    expect(existsSync(join(env.paths.binDir, "postrollback"))).toBe(false);
+    expect(existsSync(join(env.paths.shimDir, "postrollback"))).toBe(false);
+
+    // Hook unregistration assertion: settings.json must NOT have a Stop entry
+    // tagged with this package name. (The file may exist from earlier
+    // registration but our package's group must be gone.)
+    if (existsSync(env.paths.settingsPath)) {
+      const settings = JSON.parse(await Bun.file(env.paths.settingsPath).text());
+      const stopHooks = settings.hooks?.Stop ?? [];
+      const ours = stopHooks.find(
+        (g: { _pai_pkg?: string }) => g._pai_pkg === "PostinstallRollback",
+      );
+      expect(ours).toBeUndefined();
+    }
+
+    // No DB row — recordInstall happens after postinstall.
+    const fromDb = getSkill(env.db, "PostinstallRollback");
+    expect(fromDb).toBeNull();
   });
 
   test("install succeeds when ${PAI_DIR} hook target is landed via provides.files", async () => {

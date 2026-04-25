@@ -5,7 +5,12 @@ import type { Database } from "bun:sqlite";
 import { readManifest, readLibraryArtifacts, assessRisk, formatCapabilities } from "../lib/manifest.js";
 import { recordInstall, getSkill } from "../lib/db.js";
 import { runScript } from "../lib/scripts.js";
-import { registerHooks, resolveHooksFromManifest, findMissingHookFiles } from "../lib/hooks.js";
+import {
+  registerHooks,
+  removeHooks,
+  resolveHooksFromManifest,
+  findMissingHookFiles,
+} from "../lib/hooks.js";
 import {
   createArtifactSymlinks,
   resolveArtifactSourceDir,
@@ -346,6 +351,14 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
       quiet: opts.yes,
     });
     if (!postResult.success && !postResult.skipped) {
+      // #97: postinstall failure leaves the same partial-state shape as the
+      // hook-validation gate (#89) plus registered hooks pointing at a package
+      // the DB has no record of (recordInstall happens AFTER postinstall).
+      // Tear down hook registrations and symlinks before returning so the
+      // user gets a clean failure rather than orphans they have to clean up
+      // by hand.
+      await removeHooks(manifest.name, paths.settingsPath);
+      await rollbackArtifactSymlinks(symlinkResult.record);
       return {
         success: false,
         error: `Postinstall script failed (exit ${postResult.exitCode})`,
@@ -608,6 +621,14 @@ export async function installSingleArtifact(
       quiet: opts.yes,
     });
     if (!postResult.success && !postResult.skipped) {
+      // #97: postinstall failure leaves the same partial-state shape as the
+      // hook-validation gate (#89) plus registered hooks pointing at a package
+      // the DB has no record of (recordInstall happens AFTER postinstall).
+      // Tear down hook registrations and symlinks before returning so the
+      // user gets a clean failure rather than orphans they have to clean up
+      // by hand.
+      await removeHooks(manifest.name, paths.settingsPath);
+      await rollbackArtifactSymlinks(symlinkResult.record);
       return {
         success: false,
         error: `Postinstall script failed (exit ${postResult.exitCode})`,
