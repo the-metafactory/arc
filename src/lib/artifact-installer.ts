@@ -261,11 +261,13 @@ export async function createArtifactSymlinks(opts: {
 /**
  * Roll back every symlink and shim recorded by createArtifactSymlinks.
  *
- * Currently called by install when the hook-validation gate fails — see
- * issue #89. Postinstall-script failure also leaves partial state (symlinks
- * + registered hooks pointing at a package the DB has no record of) but is
- * a strictly larger fix because it also requires unregistering hooks from
- * settings.json; tracked separately.
+ * Called by install on:
+ *   - Hook-validation gate failure (issue #89): symlinks placed but hooks
+ *     not yet registered. Caller only needs this helper.
+ *   - Postinstall-script failure (issue #97): symlinks AND hooks both placed
+ *     before the script ran, so the caller pairs this with removeHooks
+ *     before returning. recordInstall hasn't happened yet at that point,
+ *     so no DB row to clean up.
  *
  * Best-effort across all entries: an ENOENT on one path doesn't abort
  * cleanup of the others. Non-ENOENT errors (e.g. permission denied) are
