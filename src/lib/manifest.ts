@@ -42,7 +42,25 @@ export async function readManifest(
       // capabilities optional for component and rules types, required for others
       if (!parsed.capabilities && parsed.type !== "component" && parsed.type !== "rules") {
         throw new Error(
-          `Invalid ${filename}: missing required field 'capabilities' (only optional for type: component)`
+          [
+            `Invalid ${filename}: missing required field 'capabilities'`,
+            `Required for type: skill, tool, agent, prompt, pipeline, action, system (optional only for: component, rules).`,
+            ``,
+            `Minimal example:`,
+            ``,
+            `capabilities:`,
+            `  filesystem:`,
+            `    read: []                  # paths the package reads from`,
+            `    write: []                 # paths the package writes to`,
+            `  network:`,
+            `    - domain: api.example.com`,
+            `      reason: <what calls this domain>`,
+            `  bash:`,
+            `    allowed: false            # set true if the package shells out`,
+            `  secrets: []                 # env vars or secret keys the package reads`,
+            ``,
+            `See: https://github.com/the-metafactory/arc/blob/main/README.md#capabilities`,
+          ].join("\n"),
         );
       }
 
