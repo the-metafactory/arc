@@ -44,7 +44,7 @@ export async function readManifest(
         throw new Error(
           [
             `Invalid ${filename}: missing required field 'capabilities'`,
-            `Required for type: skill, tool, agent, prompt, pipeline, action, system (optional only for: component, rules).`,
+            `Required for type: skill, tool, agent, prompt, pipeline, system (optional only for: component, rules).`,
             ``,
             `Minimal example:`,
             ``,
@@ -59,7 +59,7 @@ export async function readManifest(
             `    allowed: false            # set true if the package shells out`,
             `  secrets: []                 # env vars or secret keys the package reads`,
             ``,
-            `See: https://github.com/the-metafactory/arc/blob/main/README.md#capabilities`,
+            `See: https://github.com/the-metafactory/arc/blob/main/README.md#capability-declarations`,
           ].join("\n"),
         );
       }
