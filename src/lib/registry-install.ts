@@ -140,6 +140,7 @@ export interface DownloadResult {
   error?: string;
 }
 
+/** Maximum number of HTTP redirects to follow on a single download. */
 const MAX_REDIRECTS = 5;
 
 /**
@@ -151,6 +152,10 @@ const MAX_REDIRECTS = 5;
  * WHATWG `fetch` spec already mandates this, but pinning the contract
  * here protects against runtime changes and makes the intent observable
  * in tests. Same-origin redirects keep the header.
+ *
+ * After MAX_REDIRECTS hops without reaching a non-3xx response, throw —
+ * never fall back to default fetch redirect-following, which would void
+ * the no-leak contract this function exists to enforce.
  */
 async function fetchFollowingRedirects(
   url: string,
@@ -158,7 +163,7 @@ async function fetchFollowingRedirects(
 ): Promise<Response> {
   let currentUrl = url;
   let currentHeaders = { ...init.headers };
-  for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+  for (let hop = 0; hop < MAX_REDIRECTS; hop++) {
     const response = await fetch(currentUrl, {
       headers: currentHeaders,
       signal: init.signal,
@@ -180,10 +185,7 @@ async function fetchFollowingRedirects(
       currentHeaders = rest;
     }
   }
-  return fetch(currentUrl, {
-    headers: currentHeaders,
-    signal: init.signal,
-  });
+  throw new Error(`Too many redirects (>${MAX_REDIRECTS}) following ${url}`);
 }
 
 /**

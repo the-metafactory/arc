@@ -558,6 +558,40 @@ describe("downloadPackage", () => {
     }
   });
 
+  test("aborts after too many redirects rather than auto-following", async () => {
+    // If a server keeps issuing 3xx responses, we must NOT silently fall
+    // back to the runtime's default redirect-following — that would void
+    // the cross-origin auth-strip contract for any hop past the cap.
+    const originalFetch = globalThis.fetch;
+    let attempts = 0;
+    globalThis.fetch = mockFetch(async (_input: any) => {
+      attempts++;
+      // Bounce through a chain of cross-origin hosts forever.
+      const next = `https://hop-${attempts}.example.com/x`;
+      return new Response(null, {
+        status: 302,
+        headers: { Location: next },
+      });
+    });
+
+    try {
+      const result = await downloadPackage(
+        "https://meta-factory.test/api/v1/storage/download/abc",
+        env.paths.reposDir,
+        metafactorySource("super-secret-token"),
+      );
+      // downloadPackage's retry loop catches the thrown "too many redirects"
+      // as a generic network error after both attempts. The important part
+      // is that no auto-followed fetch ever happens beyond the cap.
+      expect(result.success).toBe(false);
+      // Two retries × MAX_REDIRECTS hops each = 10 attempts at most.
+      expect(attempts).toBeLessThanOrEqual(10);
+      expect(attempts).toBeGreaterThanOrEqual(5);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test("preserves Authorization on same-origin redirect", async () => {
     // Internal redirect (e.g. /v1/storage/download/abc → /v2/storage/download/abc
     // on the same origin) is part of the auth surface; strip would break installs.
