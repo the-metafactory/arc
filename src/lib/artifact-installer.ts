@@ -3,7 +3,13 @@ import { existsSync } from "fs";
 import { mkdir } from "fs/promises";
 import { homedir } from "os";
 import type { ArtifactType, ArcManifest, PaiPaths } from "../types.js";
-import { createSymlink, createCliShim, extractAllCliInfo } from "./symlinks.js";
+import {
+  createSymlink,
+  createCliShim,
+  extractAllCliInfo,
+  removeSymlink,
+  removeCliShim,
+} from "./symlinks.js";
 import { generateRules } from "./rules.js";
 
 /**
@@ -48,6 +54,18 @@ export function resolveArtifactSourceDir(type: ArtifactType | "rules" | "system"
  * tool, agent, prompt, and skill. Extracted from install() to allow reuse
  * across install, catalog use, and single-artifact install flows.
  */
+/**
+ * Aggregate of every filesystem artifact a single createArtifactSymlinks call
+ * created. Captured so a downstream failure (hook gate, post-install script,
+ * etc.) can roll back the partial state — see issue #89.
+ */
+export interface ArtifactSymlinkRecord {
+  /** Absolute paths of symlinks created (any directory). */
+  symlinks: string[];
+  /** CLI shim files created via createCliShim (need removeCliShim, not unlink). */
+  shims: { dir: string; names: string[] };
+}
+
 export async function createArtifactSymlinks(opts: {
   type: ArtifactType | "rules" | "system";
   manifest: ArcManifest;
@@ -58,14 +76,45 @@ export async function createArtifactSymlinks(opts: {
 }): Promise<{
   filesCreated: Array<{ source: string; target: string }>;
   filesMissingSource: Array<{ source: string; target: string }>;
+  record: ArtifactSymlinkRecord;
 }> {
   const { type, manifest, paths, installDir, quiet } = opts;
+  const record: ArtifactSymlinkRecord = { symlinks: [], shims: { dir: paths.shimDir, names: [] } };
+
+  // Helper that wraps createSymlink + tracks the target for rollback (#89).
+  const linkTracked = async (source: string, target: string) => {
+    await createSymlink(source, target);
+    record.symlinks.push(target);
+  };
+  const shimTracked = async () => {
+    const created = await createCliShim(paths.shimDir, paths.binDir, manifest);
+    record.shims.names.push(...created);
+  };
+
+  // Pre-validation pass (#89): assert every provides.files source exists in
+  // the package before we create ANY symlinks. The most common failure mode
+  // (manifest typo, repo drift) is now stopped with zero filesystem mutation,
+  // so install can return cleanly without producing orphan symlinks.
+  const declaredFiles = manifest.provides?.files ?? [];
+  const filesMissingSource: Array<{ source: string; target: string }> = [];
+  for (const file of declaredFiles) {
+    const sourcePath = join(installDir, file.source);
+    if (!existsSync(sourcePath)) {
+      filesMissingSource.push({
+        source: sourcePath,
+        target: file.target.replace(/^~/, homedir()),
+      });
+    }
+  }
+  if (filesMissingSource.length) {
+    return { filesCreated: [], filesMissingSource, record };
+  }
 
   switch (type) {
     case "action": {
       // Actions: symlink action directory into actionsDir
       const actionLinkPath = join(paths.actionsDir, manifest.name);
-      await createSymlink(installDir, actionLinkPath);
+      await linkTracked(installDir, actionLinkPath);
       break;
     }
 
@@ -93,16 +142,16 @@ export async function createArtifactSymlinks(opts: {
       const pipelineSourceDir = join(installDir, "pipeline");
       const sourceDir = existsSync(pipelineSourceDir) ? pipelineSourceDir : installDir;
       const pipelineLinkPath = join(paths.pipelinesDir, manifest.name);
-      await createSymlink(sourceDir, pipelineLinkPath);
+      await linkTracked(sourceDir, pipelineLinkPath);
 
       // If the manifest declares CLI entries, also create shims
       const cliEntries = extractAllCliInfo(manifest);
       for (const entry of cliEntries) {
         const binLinkPath = join(paths.binDir, entry.binName);
-        await createSymlink(installDir, binLinkPath);
+        await linkTracked(installDir, binLinkPath);
       }
       if (cliEntries.length) {
-        await createCliShim(paths.shimDir, paths.binDir, manifest);
+        await shimTracked();
       }
       break;
     }
@@ -118,15 +167,15 @@ export async function createArtifactSymlinks(opts: {
       const cliEntries = extractAllCliInfo(manifest);
       for (const entry of cliEntries) {
         const binLinkPath = join(paths.binDir, entry.binName);
-        await createSymlink(installDir, binLinkPath);
+        await linkTracked(installDir, binLinkPath);
       }
       if (!cliEntries.length) {
         // Fallback: symlink under manifest name if no CLI declared
-        await createSymlink(installDir, join(paths.binDir, manifest.name));
+        await linkTracked(installDir, join(paths.binDir, manifest.name));
       }
 
       // Create PATH-accessible shims for all CLI entries
-      await createCliShim(paths.shimDir, paths.binDir, manifest);
+      await shimTracked();
       break;
     }
 
@@ -139,10 +188,10 @@ export async function createArtifactSymlinks(opts: {
       const linkPath = join(paths.agentsDir, mdFile);
 
       if (existsSync(sourcePath)) {
-        await createSymlink(sourcePath, linkPath);
+        await linkTracked(sourcePath, linkPath);
       } else {
         // Fallback: symlink directory if .md file not found by convention name
-        await createSymlink(sourceDir, join(paths.agentsDir, manifest.name));
+        await linkTracked(sourceDir, join(paths.agentsDir, manifest.name));
       }
       break;
     }
@@ -156,10 +205,10 @@ export async function createArtifactSymlinks(opts: {
       const linkPath = join(paths.promptsDir, mdFile);
 
       if (existsSync(sourcePath)) {
-        await createSymlink(sourcePath, linkPath);
+        await linkTracked(sourcePath, linkPath);
       } else {
         // Fallback: symlink directory if .md file not found by convention name
-        await createSymlink(sourceDir, join(paths.promptsDir, manifest.name));
+        await linkTracked(sourceDir, join(paths.promptsDir, manifest.name));
       }
       break;
     }
@@ -172,19 +221,19 @@ export async function createArtifactSymlinks(opts: {
       const skillLinkPath = join(paths.skillsDir, manifest.name);
 
       if (existsSync(skillSourceDir)) {
-        await createSymlink(skillSourceDir, skillLinkPath);
+        await linkTracked(skillSourceDir, skillLinkPath);
       } else {
-        await createSymlink(installDir, skillLinkPath);
+        await linkTracked(installDir, skillLinkPath);
       }
 
       // Create bin symlinks and shims for all CLI entries (skills with CLI)
       const cliEntries = extractAllCliInfo(manifest);
       for (const entry of cliEntries) {
         const binLinkPath = join(paths.binDir, entry.binName);
-        await createSymlink(installDir, binLinkPath);
+        await linkTracked(installDir, binLinkPath);
       }
       if (cliEntries.length) {
-        await createCliShim(paths.shimDir, paths.binDir, manifest);
+        await shimTracked();
       }
       break;
     }
@@ -195,22 +244,33 @@ export async function createArtifactSymlinks(opts: {
   // files (hook handlers, helpers, shared libs) alongside the primary layout.
   // Previously only `component` honored this, which silently broke any
   // multi-artifact package using a different primary type. See issue #84.
-  const declaredFiles = manifest.provides?.files ?? [];
+  // The pre-validation pass above guarantees every source exists by the time
+  // we get here, so we can fearlessly create symlinks without partial-state risk.
   const filesCreated: Array<{ source: string; target: string }> = [];
-  const filesMissingSource: Array<{ source: string; target: string }> = [];
   for (const file of declaredFiles) {
     const sourcePath = join(installDir, file.source);
     const targetPath = file.target.replace(/^~/, homedir());
-    if (!existsSync(sourcePath)) {
-      filesMissingSource.push({ source: sourcePath, target: targetPath });
-      continue;
-    }
     await mkdir(dirname(targetPath), { recursive: true });
-    await createSymlink(sourcePath, targetPath);
+    await linkTracked(sourcePath, targetPath);
     filesCreated.push({ source: sourcePath, target: targetPath });
   }
 
-  return { filesCreated, filesMissingSource };
+  return { filesCreated, filesMissingSource: [], record };
+}
+
+/**
+ * Roll back every symlink and shim recorded by createArtifactSymlinks.
+ * Used by install when a downstream gate (hook validation, postinstall
+ * script) fails — see issue #89. Best-effort: individual unlink errors
+ * are swallowed so cleanup can proceed across all entries.
+ */
+export async function rollbackArtifactSymlinks(record: ArtifactSymlinkRecord): Promise<void> {
+  for (const link of record.symlinks) {
+    await removeSymlink(link).catch(() => {});
+  }
+  for (const name of record.shims.names) {
+    await removeCliShim(record.shims.dir, name).catch(() => {});
+  }
 }
 
 /**

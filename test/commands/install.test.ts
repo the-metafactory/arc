@@ -528,6 +528,68 @@ describe("install provides.files (issue #84)", () => {
     expect(result.error).toContain("SkillNudge.ts");
   });
 
+  // Issue #89: rollback partial state on install failure.
+  test("missing provides.files source: zero symlinks created (pre-validation)", async () => {
+    const presentTarget = join(env.root, "out", "present.ts");
+    const missingTarget = join(env.root, "out", "missing.ts");
+    const repoUrl = await buildRepoWithProvides({
+      name: "RollbackPreValidate",
+      extraFiles: { "src/present.ts": "// present\n" },
+      providesFiles: [
+        { source: "src/present.ts", target: presentTarget },
+        { source: "src/missing.ts", target: missingTarget },
+      ],
+    });
+
+    const result = await install({
+      paths: env.paths,
+      db: env.db,
+      repoUrl,
+      yes: true,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("provides.files");
+    // Pre-validation kicked in BEFORE per-type symlinks: nothing landed
+    // anywhere — neither the partial provides.files entry nor the skill dir.
+    expect(existsSync(presentTarget)).toBe(false);
+    expect(existsSync(missingTarget)).toBe(false);
+    expect(existsSync(join(env.paths.skillsDir, "RollbackPreValidate"))).toBe(false);
+  });
+
+  test("hook gate failure rolls back per-type symlinks + provides.files targets", async () => {
+    // Pre-validation passes (provides.files source exists), per-type primary
+    // symlinks get created, provides.files target gets created. Then the hook
+    // gate trips on a separate ${PAI_DIR}/missing.ts entry. Install must fail
+    // AND clean up the symlinks already placed.
+    const filesTarget = join(env.paths.claudeRoot, "handlers", "Live.ts");
+    const repoUrl = await buildRepoWithProvides({
+      name: "RollbackOnHookGate",
+      extraFiles: { "handlers/Live.ts": "// live\n" },
+      providesFiles: [{ source: "handlers/Live.ts", target: filesTarget }],
+      providesHooks: [
+        // Live.ts will be landed by provides.files — fine.
+        { event: "Stop", command: "${PAI_DIR}/handlers/Live.ts" },
+        // Ghost.ts is NOT landed by anything — hook gate must reject.
+        { event: "Stop", command: "${PAI_DIR}/handlers/Ghost.ts" },
+      ],
+    });
+
+    const result = await install({
+      paths: env.paths,
+      db: env.db,
+      repoUrl,
+      yes: true,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("hooks");
+    // Skill dir symlink, bin shim, and provides.files target must all be gone
+    // — install rolled them back when the hook gate tripped.
+    expect(existsSync(join(env.paths.skillsDir, "RollbackOnHookGate"))).toBe(false);
+    expect(existsSync(filesTarget)).toBe(false);
+  });
+
   test("install succeeds when ${PAI_DIR} hook target is landed via provides.files", async () => {
     const targetPath = join(env.paths.claudeRoot, "hooks", "handlers", "Live.ts");
     const repoUrl = await buildRepoWithProvides({
