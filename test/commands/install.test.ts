@@ -650,17 +650,18 @@ describe("install provides.files (issue #84)", () => {
     expect(existsSync(join(env.paths.binDir, "postrollback"))).toBe(false);
     expect(existsSync(join(env.paths.shimDir, "postrollback"))).toBe(false);
 
-    // Hook unregistration assertion: settings.json must NOT have a Stop entry
-    // tagged with this package name. (The file may exist from earlier
-    // registration but our package's group must be gone.)
-    if (existsSync(env.paths.settingsPath)) {
-      const settings = JSON.parse(await Bun.file(env.paths.settingsPath).text());
-      const stopHooks = settings.hooks?.Stop ?? [];
-      const ours = stopHooks.find(
-        (g: { _pai_pkg?: string }) => g._pai_pkg === "PostinstallRollback",
-      );
-      expect(ours).toBeUndefined();
-    }
+    // Hook unregistration assertion: settings.json was written by
+    // registerHooks earlier in the install flow, then the package's group
+    // was removed by removeHooks on postinstall failure. The file must
+    // exist (otherwise we'd be silently passing the assertion when
+    // registerHooks didn't run) AND not contain our group.
+    expect(existsSync(env.paths.settingsPath)).toBe(true);
+    const settings = JSON.parse(await Bun.file(env.paths.settingsPath).text());
+    const stopHooks = settings.hooks?.Stop ?? [];
+    const ours = stopHooks.find(
+      (g: { _pai_pkg?: string }) => g._pai_pkg === "PostinstallRollback",
+    );
+    expect(ours).toBeUndefined();
 
     // No DB row — recordInstall happens after postinstall.
     const fromDb = getSkill(env.db, "PostinstallRollback");
