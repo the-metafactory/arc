@@ -474,6 +474,87 @@ describe("resolveHooksFromManifest $PAI_DIR substitution", () => {
   });
 });
 
+describe("resolveHooksFromManifest $HOME / ~ substitution", () => {
+  test("expands $HOME and ${HOME} to process.env.HOME", () => {
+    const originalHome = process.env.HOME;
+    process.env.HOME = "/tmp/test-home";
+    try {
+      const hooks = [
+        { event: "Stop", command: "$HOME/scripts/cleanup.sh" },
+        { event: "Start", command: "${HOME}/init.sh" },
+      ];
+      const resolved = resolveHooksFromManifest(hooks, "/repo", "MyPkg");
+      expect(resolved).not.toBeNull();
+      expect(resolved![0].command).toBe("/tmp/test-home/scripts/cleanup.sh");
+      expect(resolved![1].command).toBe("/tmp/test-home/init.sh");
+    } finally {
+      if (originalHome === undefined) delete process.env.HOME;
+      else process.env.HOME = originalHome;
+    }
+  });
+
+  test("expands leading ~/ to home", () => {
+    const originalHome = process.env.HOME;
+    process.env.HOME = "/tmp/test-home";
+    try {
+      const hooks = [{ event: "Stop", command: "~/bin/cleanup.sh" }];
+      const resolved = resolveHooksFromManifest(hooks, "/repo", "MyPkg");
+      expect(resolved![0].command).toBe("/tmp/test-home/bin/cleanup.sh");
+    } finally {
+      if (originalHome === undefined) delete process.env.HOME;
+      else process.env.HOME = originalHome;
+    }
+  });
+
+  test("expands whitespace-preceded ~/ inside a multi-token command", () => {
+    const originalHome = process.env.HOME;
+    process.env.HOME = "/tmp/test-home";
+    try {
+      const hooks = [{ event: "Stop", command: "bun ~/bin/cleanup.sh --force" }];
+      const resolved = resolveHooksFromManifest(hooks, "/repo", "MyPkg");
+      expect(resolved![0].command).toBe("bun /tmp/test-home/bin/cleanup.sh --force");
+    } finally {
+      if (originalHome === undefined) delete process.env.HOME;
+      else process.env.HOME = originalHome;
+    }
+  });
+
+  test("does NOT mangle bare ~ characters that aren't a tilde-path", () => {
+    // Tokens like "rsync@host:~" use ~ literally. Only "~/" (tilde + slash)
+    // should be expanded.
+    const originalHome = process.env.HOME;
+    process.env.HOME = "/tmp/test-home";
+    try {
+      const hooks = [{ event: "Stop", command: "rsync host:~ /tmp" }];
+      const resolved = resolveHooksFromManifest(hooks, "/repo", "MyPkg");
+      expect(resolved![0].command).toBe("rsync host:~ /tmp");
+    } finally {
+      if (originalHome === undefined) delete process.env.HOME;
+      else process.env.HOME = originalHome;
+    }
+  });
+
+  test("$HOME / $PAI_DIR / $PKG_DIR all compose in one command", () => {
+    const originalHome = process.env.HOME;
+    process.env.HOME = "/tmp/test-home";
+    try {
+      const hooks = [
+        {
+          event: "Stop",
+          command: "${PKG_DIR}/run.sh ${PAI_DIR}/audit.log $HOME/.cache/x.json",
+        },
+      ];
+      const resolved = resolveHooksFromManifest(hooks, "/repo/install", "mypkg", "/Users/me/.claude");
+      expect(resolved![0].command).toBe(
+        "/repo/install/run.sh /Users/me/.claude/audit.log /tmp/test-home/.cache/x.json",
+      );
+    } finally {
+      if (originalHome === undefined) delete process.env.HOME;
+      else process.env.HOME = originalHome;
+    }
+  });
+});
+
 describe("findMissingHookFiles", () => {
   test("flags command whose absolute path does not exist", () => {
     const issues = findMissingHookFiles([

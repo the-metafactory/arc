@@ -8,6 +8,7 @@
 
 import { existsSync, readFileSync } from "fs";
 import { mkdir } from "fs/promises";
+import { homedir } from "os";
 import { dirname, join } from "path";
 import type { HooksDeclaration, InlineHook, HooksConfigRef } from "../types.js";
 
@@ -116,9 +117,15 @@ export function resolveHooksFromManifest(
 }
 
 /**
- * Replace $PKG_DIR / ${PKG_DIR}, $<NAME>_DIR / ${<NAME>_DIR}, and
- * (when provided) $PAI_DIR / ${PAI_DIR} in hook commands with the
- * corresponding absolute paths.
+ * Replace $PKG_DIR / ${PKG_DIR}, $<NAME>_DIR / ${<NAME>_DIR},
+ * (when provided) $PAI_DIR / ${PAI_DIR}, $HOME / ${HOME}, and a leading "~/"
+ * in hook commands with the corresponding absolute paths.
+ *
+ * $HOME and ~/ are substituted at install time so the missing-file gate
+ * (findMissingHookFiles) can stat the resolved absolute path, and so
+ * settings.json stores the same absolute path the runtime would resolve
+ * to — matching the existing $PKG_DIR / $PAI_DIR pattern. Without this,
+ * "$HOME/script.sh" was left literal and slipped past the gate (#90).
  */
 function resolveCommandPaths(
   hooks: InlineHook[],
@@ -128,6 +135,7 @@ function resolveCommandPaths(
 ): InlineHook[] {
   const nameUpper = packageName.toUpperCase().replace(/-/g, "_");
   const namePattern = new RegExp(`\\$\\{?${nameUpper}_DIR\\}?`, "g");
+  const home = process.env.HOME ?? homedir();
 
   return hooks.map((hook) => {
     let command = hook.command
@@ -136,6 +144,14 @@ function resolveCommandPaths(
     if (paiDir) {
       command = command.replace(/\$\{?PAI_DIR\}?/g, paiDir);
     }
+    // $HOME / ${HOME} → absolute home path
+    command = command.replace(/\$\{?HOME\}?/g, home);
+    // Leading "~/" or whitespace-preceded " ~/" → absolute home path. Bare "~"
+    // alone (without a trailing slash) is left as-is to avoid mangling tokens
+    // like "rsync@host:~" that legitimately use the literal character.
+    command = command
+      .replace(/^~\//, `${home}/`)
+      .replace(/(\s)~\//g, `$1${home}/`);
     return { ...hook, command };
   });
 }
@@ -146,14 +162,12 @@ function resolveCommandPaths(
  * file silently breaks every session (see issue #84), so install must refuse
  * to register such hooks.
  *
- * Heuristic: tokenize on whitespace, look at tokens starting with "/" or "~/".
- * Skip tokens that follow a shell redirect/pipe operator on the previous
- * token, since those are output sinks rather than required inputs.
- *
- * TODO: $HOME / ${HOME} (and other env-var references) are not substituted
- * upstream by resolveHooksFromManifest, so a hook using "$HOME/script.sh"
- * is left as the literal string and will not be inspected here. If/when the
- * resolver grows env-var substitution, drop the redundant ~/ branch below.
+ * Heuristic: tokenize on whitespace, look at tokens starting with "/" (any
+ * absolute path). $PKG_DIR / $<NAME>_DIR / $PAI_DIR / $HOME / leading "~/"
+ * are all substituted upstream by resolveCommandPaths, so by the time a
+ * hook command reaches this function the path-bearing tokens are already
+ * absolute. Skip tokens that follow a shell redirect/pipe operator on the
+ * previous token, since those are output sinks rather than required inputs.
  */
 export function findMissingHookFiles(
   hooks: InlineHook[],
@@ -170,16 +184,9 @@ export function findMissingHookFiles(
         continue;
       }
       const stripped = tokens[i].replace(/^['"]|['"]$/g, "");
-      if (!stripped) continue;
-      let path: string | null = null;
-      if (stripped.startsWith("/")) {
-        path = stripped;
-      } else if (stripped.startsWith("~/")) {
-        path = stripped.replace(/^~/, process.env.HOME ?? "");
-      }
-      if (!path) continue;
-      if (!existsSync(path)) {
-        issues.push({ event: hook.event, command: hook.command, missingPath: path });
+      if (!stripped || !stripped.startsWith("/")) continue;
+      if (!existsSync(stripped)) {
+        issues.push({ event: hook.event, command: hook.command, missingPath: stripped });
       }
     }
   }
