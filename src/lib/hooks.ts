@@ -60,7 +60,14 @@ async function writeSettings(
  * 1. Inline array: [{ event, command, matcher? }] — used directly
  * 2. Config-file ref: { claude_code: { config: "path/to/hooks.json" } } — loads
  *    the JSON file, flattens its { EventName: [{ command }] } structure, and
- *    resolves any $PKG_DIR or $<NAME>_DIR env vars to the actual install path.
+ *    resolves any $PKG_DIR / $<NAME>_DIR / $PAI_DIR env vars in commands.
+ *
+ * `paiDir` (when provided) is the absolute path expanded for `$PAI_DIR` /
+ * `${PAI_DIR}` references — typically `paths.claudeRoot` (`~/.claude`). The
+ * shape `${PAI_DIR}/hooks/handlers/Foo.ts` is the canonical way packages
+ * point at hook handlers in this ecosystem; substituting it at resolve time
+ * ensures install-time gating (#84) and `arc verify` hook-path validation
+ * (#85) both stat the same absolute path the runtime would.
  *
  * Returns null if hooks is undefined (no hooks declared).
  */
@@ -68,12 +75,13 @@ export function resolveHooksFromManifest(
   hooks: HooksDeclaration | undefined,
   installPath: string,
   packageName: string,
+  paiDir?: string,
 ): InlineHook[] | null {
   if (!hooks) return null;
 
   // Format 1: inline array — already in the right shape
   if (Array.isArray(hooks)) {
-    return resolveCommandPaths(hooks, installPath, packageName);
+    return resolveCommandPaths(hooks, installPath, packageName, paiDir);
   }
 
   // Format 2: config-file reference
@@ -104,27 +112,32 @@ export function resolveHooksFromManifest(
     }
   }
 
-  return resolveCommandPaths(flattened, installPath, packageName);
+  return resolveCommandPaths(flattened, installPath, packageName, paiDir);
 }
 
 /**
- * Replace $PKG_DIR / ${PKG_DIR} and $<NAME>_DIR / ${<NAME>_DIR}
- * in hook commands with the actual install path.
+ * Replace $PKG_DIR / ${PKG_DIR}, $<NAME>_DIR / ${<NAME>_DIR}, and
+ * (when provided) $PAI_DIR / ${PAI_DIR} in hook commands with the
+ * corresponding absolute paths.
  */
 function resolveCommandPaths(
   hooks: InlineHook[],
   installPath: string,
   packageName: string,
+  paiDir?: string,
 ): InlineHook[] {
   const nameUpper = packageName.toUpperCase().replace(/-/g, "_");
   const namePattern = new RegExp(`\\$\\{?${nameUpper}_DIR\\}?`, "g");
 
-  return hooks.map((hook) => ({
-    ...hook,
-    command: hook.command
+  return hooks.map((hook) => {
+    let command = hook.command
       .replace(/\$\{?PKG_DIR\}?/g, installPath)
-      .replace(namePattern, installPath),
-  }));
+      .replace(namePattern, installPath);
+    if (paiDir) {
+      command = command.replace(/\$\{?PAI_DIR\}?/g, paiDir);
+    }
+    return { ...hook, command };
+  });
 }
 
 /**

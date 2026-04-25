@@ -269,11 +269,15 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
     };
   }
 
-  // 5b. Register hooks (if declared, with consent gating)
+  // 5b. Register hooks (if declared, with consent gating).
+  // paths.claudeRoot is passed as the $PAI_DIR expansion target so a hook
+  // command like ${PAI_DIR}/hooks/handlers/Foo.ts gets stat'd against the
+  // absolute path the runtime would resolve to (issue #85).
   const resolvedHooks = resolveHooksFromManifest(
     manifest.provides?.hooks,
     installPath,
     manifest.name,
+    paths.claudeRoot,
   );
   if (resolvedHooks?.length) {
     // Refuse to register hooks whose command points at a file that does not
@@ -535,11 +539,13 @@ export async function installSingleArtifact(
     };
   }
 
-  // Register hooks (with consent gating — same as standalone install)
+  // Register hooks (with consent gating — same as standalone install).
+  // See note above on paths.claudeRoot threading $PAI_DIR substitution.
   const resolvedHooks = resolveHooksFromManifest(
     manifest.provides?.hooks,
     artifactDir,
     manifest.name,
+    paths.claudeRoot,
   );
   if (resolvedHooks?.length) {
     // Refuse to register hooks whose command points at a file that does not

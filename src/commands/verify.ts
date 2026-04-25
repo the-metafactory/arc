@@ -1,5 +1,5 @@
 import { join, relative } from "path";
-import { existsSync } from "fs";
+import { existsSync, readdirSync, statSync } from "fs";
 import type { Database } from "bun:sqlite";
 import type { PaiPaths } from "../types.js";
 import { getSkill } from "../lib/db.js";
@@ -152,33 +152,32 @@ function hintFromRepo(repoDir: string, missingPath: string): string {
 function findFileInRepo(repoDir: string, basename: string, maxDepth: number): string[] {
   const matches: string[] = [];
   const skip = new Set(["node_modules", ".git"]);
-  function walk(dir: string, depth: number) {
-    if (depth > maxDepth) return;
+  function walk(dir: string, depth: number): boolean {
+    if (depth > maxDepth) return false;
     let entries: string[];
     try {
-      // Lazy-require to keep this helper colocated with verify; readdirSync
-      // is fine here because verify is a one-shot CLI command.
-      const { readdirSync, statSync } = require("fs");
       entries = readdirSync(dir);
-      for (const entry of entries) {
-        if (entry.startsWith(".") || skip.has(entry)) continue;
-        const full = join(dir, entry);
-        let stat;
-        try {
-          stat = statSync(full);
-        } catch {
-          continue;
-        }
-        if (stat.isDirectory()) {
-          walk(full, depth + 1);
-        } else if (entry === basename) {
-          matches.push(full);
-          return;
-        }
-      }
     } catch {
-      return;
+      return false;
     }
+    for (const entry of entries) {
+      if (entry.startsWith(".") || skip.has(entry)) continue;
+      const full = join(dir, entry);
+      let stat;
+      try {
+        stat = statSync(full);
+      } catch {
+        continue;
+      }
+      if (stat.isDirectory()) {
+        // Short-circuit: once any subtree finds a match, stop walking siblings.
+        if (walk(full, depth + 1)) return true;
+      } else if (entry === basename) {
+        matches.push(full);
+        return true;
+      }
+    }
+    return false;
   }
   walk(repoDir, 0);
   return matches;
