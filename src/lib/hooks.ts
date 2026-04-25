@@ -133,17 +133,30 @@ function resolveCommandPaths(
  * file silently breaks every session (see issue #84), so install must refuse
  * to register such hooks.
  *
- * Heuristic: split each command on whitespace, look at tokens starting with
- * "/" (absolute paths) or "~" (home-relative). Tokens may be quoted; strip
- * outer single/double quotes before checking. Non-path tokens are ignored.
+ * Heuristic: tokenize on whitespace, look at tokens starting with "/" or "~/".
+ * Skip tokens that follow a shell redirect/pipe operator on the previous
+ * token, since those are output sinks rather than required inputs.
+ *
+ * TODO: $HOME / ${HOME} (and other env-var references) are not substituted
+ * upstream by resolveHooksFromManifest, so a hook using "$HOME/script.sh"
+ * is left as the literal string and will not be inspected here. If/when the
+ * resolver grows env-var substitution, drop the redundant ~/ branch below.
  */
 export function findMissingHookFiles(
   hooks: InlineHook[],
 ): Array<{ event: string; command: string; missingPath: string }> {
   const issues: Array<{ event: string; command: string; missingPath: string }> = [];
+  // Tokens that direct shell I/O — the next path-like token is an output
+  // destination, not a required file. ">>" / "<<" are caught by .startsWith.
+  const REDIRECT_OPS = new Set([">", ">>", "<", "<<", "|", "&>", "2>", "2>>", "1>"]);
   for (const hook of hooks) {
-    for (const token of hook.command.split(/\s+/)) {
-      const stripped = token.replace(/^['"]|['"]$/g, "");
+    const tokens = hook.command.split(/\s+/);
+    for (let i = 0; i < tokens.length; i++) {
+      const prev = i > 0 ? tokens[i - 1] : "";
+      if (REDIRECT_OPS.has(prev) || prev.startsWith(">") || prev.startsWith("2>")) {
+        continue;
+      }
+      const stripped = tokens[i].replace(/^['"]|['"]$/g, "");
       if (!stripped) continue;
       let path: string | null = null;
       if (stripped.startsWith("/")) {

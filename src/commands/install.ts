@@ -277,7 +277,7 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
   );
   if (resolvedHooks?.length) {
     // Refuse to register hooks whose command points at a file that does not
-    // exist \u2014 silent registration of broken hooks was the original symptom of
+    // exist — silent registration of broken hooks was the original symptom of
     // issue #84.
     const missingHookFiles = findMissingHookFiles(resolvedHooks);
     if (missingHookFiles.length) {
@@ -543,7 +543,7 @@ export async function installSingleArtifact(
   );
   if (resolvedHooks?.length) {
     // Refuse to register hooks whose command points at a file that does not
-    // exist \u2014 silent registration of broken hooks was the original symptom of
+    // exist — silent registration of broken hooks was the original symptom of
     // issue #84.
     const missingHookFiles = findMissingHookFiles(resolvedHooks);
     if (missingHookFiles.length) {

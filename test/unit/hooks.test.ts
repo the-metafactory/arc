@@ -2,12 +2,14 @@ import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { mkdtemp, rm } from "fs/promises";
 import { join } from "path";
 import { tmpdir } from "os";
+import { writeFile } from "fs/promises";
 import {
   registerHooks,
   removeHooks,
   listPackageHooks,
   resolveHooksFromManifest,
   hasHooks,
+  findMissingHookFiles,
 } from "../../src/lib/hooks.js";
 
 let tmpDir: string;
@@ -439,5 +441,55 @@ describe("hasHooks", () => {
 
   test("returns false for empty config-file reference", () => {
     expect(hasHooks({ claude_code: { config: "" } } as any)).toBe(false);
+  });
+});
+
+describe("findMissingHookFiles", () => {
+  test("flags command whose absolute path does not exist", () => {
+    const issues = findMissingHookFiles([
+      { event: "Stop", command: "/nonexistent/path/to/handler.ts" },
+    ]);
+    expect(issues).toHaveLength(1);
+    expect(issues[0].event).toBe("Stop");
+    expect(issues[0].missingPath).toBe("/nonexistent/path/to/handler.ts");
+  });
+
+  test("returns empty when command path exists", async () => {
+    const path = join(tmpDir, "handler.ts");
+    await writeFile(path, "// ok\n");
+    const issues = findMissingHookFiles([
+      { event: "Stop", command: path },
+    ]);
+    expect(issues).toHaveLength(0);
+  });
+
+  test("ignores non-path tokens like flags and bare commands", () => {
+    const issues = findMissingHookFiles([
+      { event: "Stop", command: "echo done" },
+      { event: "Stop", command: "bun run --silent" },
+    ]);
+    expect(issues).toHaveLength(0);
+  });
+
+  test("does not false-positive on shell redirect targets", async () => {
+    // The redirect target /tmp/output.log may or may not exist; either way it
+    // is an output sink, not a required input file. Validation must skip it.
+    const handler = join(tmpDir, "ok.ts");
+    await writeFile(handler, "// ok\n");
+    const missingSink = "/tmp/arc-test-redirect-" + Date.now() + ".log";
+    const issues = findMissingHookFiles([
+      { event: "Stop", command: `${handler} > ${missingSink}` },
+      { event: "Stop", command: `${handler} 2> ${missingSink}` },
+      { event: "Stop", command: `${handler} >> ${missingSink}` },
+    ]);
+    expect(issues).toHaveLength(0);
+  });
+
+  test("strips surrounding quotes before resolving", () => {
+    const issues = findMissingHookFiles([
+      { event: "Stop", command: `'/nonexistent/quoted.ts'` },
+      { event: "Stop", command: `"/nonexistent/dquoted.ts"` },
+    ]);
+    expect(issues).toHaveLength(2);
   });
 });
