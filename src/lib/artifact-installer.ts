@@ -55,7 +55,10 @@ export async function createArtifactSymlinks(opts: {
   installDir: string;
   consumerDir?: string;
   quiet?: boolean;
-}): Promise<void> {
+}): Promise<{
+  filesCreated: Array<{ source: string; target: string }>;
+  filesMissingSource: Array<{ source: string; target: string }>;
+}> {
   const { type, manifest, paths, installDir, quiet } = opts;
 
   switch (type) {
@@ -105,14 +108,8 @@ export async function createArtifactSymlinks(opts: {
     }
 
     case "component": {
-      // Components: symlink each provides.files entry from repo source to expanded target
-      const files = manifest.provides?.files ?? [];
-      for (const file of files) {
-        const sourcePath = join(installDir, file.source);
-        const targetPath = file.target.replace(/^~/, homedir());
-        await mkdir(dirname(targetPath), { recursive: true });
-        await createSymlink(sourcePath, targetPath);
-      }
+      // Components have no per-type primary layout — provides.files is honored
+      // by the type-agnostic pass below.
       break;
     }
 
@@ -192,6 +189,28 @@ export async function createArtifactSymlinks(opts: {
       break;
     }
   }
+
+  // Type-agnostic provides.files pass.
+  // Every artifact type honors provides.files entries — used to ship auxiliary
+  // files (hook handlers, helpers, shared libs) alongside the primary layout.
+  // Previously only `component` honored this, which silently broke any
+  // multi-artifact package using a different primary type. See issue #84.
+  const declaredFiles = manifest.provides?.files ?? [];
+  const filesCreated: Array<{ source: string; target: string }> = [];
+  const filesMissingSource: Array<{ source: string; target: string }> = [];
+  for (const file of declaredFiles) {
+    const sourcePath = join(installDir, file.source);
+    const targetPath = file.target.replace(/^~/, homedir());
+    if (!existsSync(sourcePath)) {
+      filesMissingSource.push({ source: sourcePath, target: targetPath });
+      continue;
+    }
+    await mkdir(dirname(targetPath), { recursive: true });
+    await createSymlink(sourcePath, targetPath);
+    filesCreated.push({ source: sourcePath, target: targetPath });
+  }
+
+  return { filesCreated, filesMissingSource };
 }
 
 /**

@@ -343,6 +343,166 @@ describe("install command", () => {
   });
 });
 
+describe("install provides.files (issue #84)", () => {
+  /**
+   * Build a skill repo whose arc-manifest.yaml declares provides.files and/or
+   * provides.hooks. Used to exercise the type-agnostic provides.files pass and
+   * the hook-target validation gate.
+   */
+  async function buildRepoWithProvides(opts: {
+    name: string;
+    extraFiles?: Record<string, string>;
+    providesFiles?: Array<{ source: string; target: string }>;
+    providesHooks?: Array<{ event: string; command: string }>;
+  }): Promise<string> {
+    const repoDir = join(env.root, `mock-${opts.name}`);
+    const { mkdir, writeFile } = await import("fs/promises");
+    await mkdir(join(repoDir, "skill"), { recursive: true });
+    await writeFile(
+      join(repoDir, "skill", "SKILL.md"),
+      `---\nname: ${opts.name}\ndescription: Test\n---\n# ${opts.name}\n`,
+    );
+    for (const [path, content] of Object.entries(opts.extraFiles ?? {})) {
+      const abs = join(repoDir, path);
+      await mkdir(join(abs, ".."), { recursive: true });
+      await writeFile(abs, content);
+    }
+    const lines: string[] = [
+      `name: ${opts.name}`,
+      `version: 1.0.0`,
+      `type: skill`,
+      `tier: custom`,
+      `author:`,
+      `  name: testuser`,
+      `  github: testuser`,
+      `provides:`,
+      `  skill:`,
+      `    - trigger: ${opts.name.toLowerCase()}`,
+    ];
+    if (opts.providesFiles?.length) {
+      lines.push(`  files:`);
+      for (const f of opts.providesFiles) {
+        lines.push(`    - source: ${JSON.stringify(f.source)}`);
+        lines.push(`      target: ${JSON.stringify(f.target)}`);
+      }
+    }
+    if (opts.providesHooks?.length) {
+      lines.push(`  hooks:`);
+      for (const h of opts.providesHooks) {
+        lines.push(`    - event: ${h.event}`);
+        lines.push(`      command: ${JSON.stringify(h.command)}`);
+      }
+    }
+    lines.push(`capabilities:`);
+    lines.push(`  filesystem: { read: [], write: [] }`);
+    lines.push(`  network: []`);
+    lines.push(`  bash: { allowed: false }`);
+    lines.push(`  secrets: []`);
+    await writeFile(join(repoDir, "arc-manifest.yaml"), lines.join("\n") + "\n");
+    Bun.spawnSync(["git", "init"], { cwd: repoDir, stdout: "pipe", stderr: "pipe" });
+    Bun.spawnSync(["git", "add", "."], { cwd: repoDir, stdout: "pipe", stderr: "pipe" });
+    Bun.spawnSync(
+      ["git", "-c", "user.name=Test", "-c", "user.email=t@t.com", "commit", "-m", "init"],
+      { cwd: repoDir, stdout: "pipe", stderr: "pipe" },
+    );
+    return repoDir;
+  }
+
+  test("honors provides.files entries on a skill-type package", async () => {
+    const targetPath = join(env.root, "out", "handler.ts");
+    const repoUrl = await buildRepoWithProvides({
+      name: "FileSkill",
+      extraFiles: { "src/handler.ts": "// handler\n" },
+      providesFiles: [{ source: "src/handler.ts", target: targetPath }],
+    });
+
+    const result = await install({
+      paths: env.paths,
+      db: env.db,
+      repoUrl,
+      yes: true,
+    });
+
+    expect(result.success).toBe(true);
+    expect(existsSync(targetPath)).toBe(true);
+    expect(lstatSync(targetPath).isSymbolicLink()).toBe(true);
+    expect(readlinkSync(targetPath)).toContain("src/handler.ts");
+  });
+
+  test("fails install when provides.files source is missing from package", async () => {
+    const targetPath = join(env.root, "out", "missing.ts");
+    const repoUrl = await buildRepoWithProvides({
+      name: "MissingSourceSkill",
+      providesFiles: [{ source: "src/missing.ts", target: targetPath }],
+    });
+
+    const result = await install({
+      paths: env.paths,
+      db: env.db,
+      repoUrl,
+      yes: true,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("provides.files");
+    expect(result.error).toContain("src/missing.ts");
+    expect(existsSync(targetPath)).toBe(false);
+  });
+
+  test("fails install when provides.hooks command points at non-existent file", async () => {
+    const missingHandler = join(env.root, "ghost", "handler.ts");
+    const repoUrl = await buildRepoWithProvides({
+      name: "GhostHookSkill",
+      providesHooks: [
+        { event: "Stop", command: missingHandler },
+      ],
+    });
+
+    const result = await install({
+      paths: env.paths,
+      db: env.db,
+      repoUrl,
+      yes: true,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("hooks");
+    expect(result.error).toContain(missingHandler);
+    // settings.json must not have been written with the broken hook
+    if (existsSync(env.paths.settingsPath)) {
+      const settings = JSON.parse(await Bun.file(env.paths.settingsPath).text());
+      const stopHooks = settings.hooks?.Stop ?? [];
+      const ghostFound = stopHooks.some((g: { _pai_pkg?: string }) => g._pai_pkg === "GhostHookSkill");
+      expect(ghostFound).toBe(false);
+    }
+  });
+
+  test("provides.hooks with $PKG_DIR resolves to installed file and registers", async () => {
+    const repoUrl = await buildRepoWithProvides({
+      name: "GoodHookSkill",
+      extraFiles: { "hooks/Stop.ts": "// stop\n" },
+      providesHooks: [
+        { event: "Stop", command: "${PKG_DIR}/hooks/Stop.ts" },
+      ],
+    });
+
+    const result = await install({
+      paths: env.paths,
+      db: env.db,
+      repoUrl,
+      yes: true,
+    });
+
+    expect(result.success).toBe(true);
+    const settings = JSON.parse(await Bun.file(env.paths.settingsPath).text());
+    const stopHooks = settings.hooks?.Stop ?? [];
+    const ours = stopHooks.find((g: { _pai_pkg?: string }) => g._pai_pkg === "GoodHookSkill");
+    expect(ours).toBeDefined();
+    expect(ours.hooks[0].command).toContain("hooks/Stop.ts");
+    expect(ours.hooks[0].command).not.toContain("${PKG_DIR}");
+  });
+});
+
 describe("parseNameVersion", () => {
   test("parses name@version", () => {
     expect(parseNameVersion("MySkill@1.2.0")).toEqual({ name: "MySkill", version: "1.2.0" });

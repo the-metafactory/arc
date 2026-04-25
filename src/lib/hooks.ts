@@ -128,6 +128,39 @@ function resolveCommandPaths(
 }
 
 /**
+ * Inspect resolved hook commands and return any that reference an absolute
+ * file path that does not exist on disk. A hook that points at a missing
+ * file silently breaks every session (see issue #84), so install must refuse
+ * to register such hooks.
+ *
+ * Heuristic: split each command on whitespace, look at tokens starting with
+ * "/" (absolute paths) or "~" (home-relative). Tokens may be quoted; strip
+ * outer single/double quotes before checking. Non-path tokens are ignored.
+ */
+export function findMissingHookFiles(
+  hooks: InlineHook[],
+): Array<{ event: string; command: string; missingPath: string }> {
+  const issues: Array<{ event: string; command: string; missingPath: string }> = [];
+  for (const hook of hooks) {
+    for (const token of hook.command.split(/\s+/)) {
+      const stripped = token.replace(/^['"]|['"]$/g, "");
+      if (!stripped) continue;
+      let path: string | null = null;
+      if (stripped.startsWith("/")) {
+        path = stripped;
+      } else if (stripped.startsWith("~/")) {
+        path = stripped.replace(/^~/, process.env.HOME ?? "");
+      }
+      if (!path) continue;
+      if (!existsSync(path)) {
+        issues.push({ event: hook.event, command: hook.command, missingPath: path });
+      }
+    }
+  }
+  return issues;
+}
+
+/**
  * Check whether a manifest has any hooks declared (either format).
  */
 export function hasHooks(hooks: HooksDeclaration | undefined): boolean {
