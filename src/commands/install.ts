@@ -6,7 +6,12 @@ import { readManifest, readLibraryArtifacts, assessRisk, formatCapabilities } fr
 import { recordInstall, getSkill } from "../lib/db.js";
 import { runScript } from "../lib/scripts.js";
 import { registerHooks, resolveHooksFromManifest, findMissingHookFiles } from "../lib/hooks.js";
-import { createArtifactSymlinks, resolveArtifactSourceDir, installNodeDependencies } from "../lib/artifact-installer.js";
+import {
+  createArtifactSymlinks,
+  resolveArtifactSourceDir,
+  installNodeDependencies,
+  rollbackArtifactSymlinks,
+} from "../lib/artifact-installer.js";
 import { wireExtensions } from "../lib/extensions.js";
 import { extractRepoName } from "../lib/repo-name.js";
 
@@ -288,6 +293,10 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
       const detail = missingHookFiles
         .map((m) => `  - ${m.event}: ${m.command}\n      missing: ${m.missingPath}`)
         .join("\n");
+      // #89: roll back any symlinks/shims createArtifactSymlinks placed before
+      // we hit this gate, so the install fails clean rather than leaving
+      // orphan entries under ~/.claude/{skills,bin,...} for the user to clean.
+      await rollbackArtifactSymlinks(symlinkResult.record);
       return {
         success: false,
         error:
@@ -556,6 +565,10 @@ export async function installSingleArtifact(
       const detail = missingHookFiles
         .map((m) => `  - ${m.event}: ${m.command}\n      missing: ${m.missingPath}`)
         .join("\n");
+      // #89: roll back any symlinks/shims createArtifactSymlinks placed before
+      // we hit this gate, so the install fails clean rather than leaving
+      // orphan entries under ~/.claude/{skills,bin,...} for the user to clean.
+      await rollbackArtifactSymlinks(symlinkResult.record);
       return {
         success: false,
         error:
