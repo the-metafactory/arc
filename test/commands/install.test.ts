@@ -354,6 +354,7 @@ describe("install provides.files (issue #84)", () => {
     extraFiles?: Record<string, string>;
     providesFiles?: Array<{ source: string; target: string }>;
     providesHooks?: Array<{ event: string; command: string }>;
+    providesCli?: Array<{ command: string; name: string }>;
   }): Promise<string> {
     const repoDir = join(env.root, `mock-${opts.name}`);
     const { mkdir, writeFile } = await import("fs/promises");
@@ -391,6 +392,13 @@ describe("install provides.files (issue #84)", () => {
       for (const h of opts.providesHooks) {
         lines.push(`    - event: ${h.event}`);
         lines.push(`      command: ${JSON.stringify(h.command)}`);
+      }
+    }
+    if (opts.providesCli?.length) {
+      lines.push(`  cli:`);
+      for (const c of opts.providesCli) {
+        lines.push(`    - command: ${JSON.stringify(c.command)}`);
+        lines.push(`      name: ${c.name}`);
       }
     }
     lines.push(`capabilities:`);
@@ -557,16 +565,21 @@ describe("install provides.files (issue #84)", () => {
     expect(existsSync(join(env.paths.skillsDir, "RollbackPreValidate"))).toBe(false);
   });
 
-  test("hook gate failure rolls back per-type symlinks + provides.files targets", async () => {
+  test("hook gate failure rolls back per-type symlinks + provides.files targets + CLI shims", async () => {
     // Pre-validation passes (provides.files source exists), per-type primary
-    // symlinks get created, provides.files target gets created. Then the hook
-    // gate trips on a separate ${PAI_DIR}/missing.ts entry. Install must fail
-    // AND clean up the symlinks already placed.
+    // symlinks get created, CLI shim gets created, provides.files target
+    // gets created. Then the hook gate trips on a separate
+    // ${PAI_DIR}/Ghost.ts entry. Install must fail AND clean up everything
+    // that was placed before the gate ran.
     const filesTarget = join(env.paths.claudeRoot, "handlers", "Live.ts");
     const repoUrl = await buildRepoWithProvides({
       name: "RollbackOnHookGate",
-      extraFiles: { "handlers/Live.ts": "// live\n" },
+      extraFiles: {
+        "handlers/Live.ts": "// live\n",
+        "src/cli.ts": "#!/usr/bin/env bun\nconsole.log('hi');\n",
+      },
       providesFiles: [{ source: "handlers/Live.ts", target: filesTarget }],
+      providesCli: [{ command: "bun src/cli.ts", name: "rollbackgate" }],
       providesHooks: [
         // Live.ts will be landed by provides.files — fine.
         { event: "Stop", command: "${PAI_DIR}/handlers/Live.ts" },
@@ -584,10 +597,12 @@ describe("install provides.files (issue #84)", () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toContain("hooks");
-    // Skill dir symlink, bin shim, and provides.files target must all be gone
-    // — install rolled them back when the hook gate tripped.
+    // Every artifact placed before the gate must be gone.
     expect(existsSync(join(env.paths.skillsDir, "RollbackOnHookGate"))).toBe(false);
     expect(existsSync(filesTarget)).toBe(false);
+    // bin symlink + PATH shim for the declared CLI
+    expect(existsSync(join(env.paths.binDir, "rollbackgate"))).toBe(false);
+    expect(existsSync(join(env.paths.shimDir, "rollbackgate"))).toBe(false);
   });
 
   test("install succeeds when ${PAI_DIR} hook target is landed via provides.files", async () => {

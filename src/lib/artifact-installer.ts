@@ -260,16 +260,36 @@ export async function createArtifactSymlinks(opts: {
 
 /**
  * Roll back every symlink and shim recorded by createArtifactSymlinks.
- * Used by install when a downstream gate (hook validation, postinstall
- * script) fails — see issue #89. Best-effort: individual unlink errors
- * are swallowed so cleanup can proceed across all entries.
+ *
+ * Currently called by install when the hook-validation gate fails — see
+ * issue #89. Postinstall-script failure also leaves partial state (symlinks
+ * + registered hooks pointing at a package the DB has no record of) but is
+ * a strictly larger fix because it also requires unregistering hooks from
+ * settings.json; tracked separately.
+ *
+ * Best-effort across all entries: an ENOENT on one path doesn't abort
+ * cleanup of the others. Non-ENOENT errors (e.g. permission denied) are
+ * surfaced via console.warn so the user sees orphans they need to inspect
+ * manually rather than failing silently.
  */
 export async function rollbackArtifactSymlinks(record: ArtifactSymlinkRecord): Promise<void> {
   for (const link of record.symlinks) {
-    await removeSymlink(link).catch(() => {});
+    try {
+      await removeSymlink(link);
+    } catch (err: any) {
+      if (err?.code !== "ENOENT") {
+        console.warn(`  ⚠ rollback: failed to remove symlink ${link}: ${err?.message ?? err}`);
+      }
+    }
   }
   for (const name of record.shims.names) {
-    await removeCliShim(record.shims.dir, name).catch(() => {});
+    try {
+      await removeCliShim(record.shims.dir, name);
+    } catch (err: any) {
+      if (err?.code !== "ENOENT") {
+        console.warn(`  ⚠ rollback: failed to remove shim ${name}: ${err?.message ?? err}`);
+      }
+    }
   }
 }
 
