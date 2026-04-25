@@ -133,6 +133,51 @@ capabilities:
 
     await expect(readManifest(tempDir)).rejects.toThrow("missing required fields");
   });
+
+  // Issue #87: when capabilities is missing on a non-component/non-rules
+  // manifest, the error must guide first-time publishers — not just say
+  // "field missing". Surface the canonical block, list which types require
+  // it, and link to the README section.
+  test("missing capabilities error includes minimal example and exempt types", async () => {
+    await Bun.write(
+      join(tempDir, MANIFEST_FILENAME),
+      `name: example-tool
+version: 0.1.0
+type: tool
+author:
+  name: t
+  github: t
+`,
+    );
+
+    let err: Error | null = null;
+    try {
+      await readManifest(tempDir);
+    } catch (e) {
+      err = e as Error;
+    }
+    expect(err).not.toBeNull();
+    const msg = err!.message;
+    expect(msg).toContain("missing required field 'capabilities'");
+    // Lists the exempt types so a publisher can decide if they qualify.
+    expect(msg).toContain("component");
+    expect(msg).toContain("rules");
+    // Required-type list must NOT advertise "action" — it's not a member of
+    // the ArcManifest.type union, and recommending it would send users into
+    // a different validation failure later.
+    expect(msg).not.toContain("action");
+    // Includes a copyable canonical block.
+    expect(msg).toContain("filesystem:");
+    expect(msg).toContain("network:");
+    expect(msg).toContain("bash:");
+    expect(msg).toContain("secrets:");
+    expect(msg).toContain("reason:");
+    // Points at the schema doc with the actual heading anchor on README.md
+    // (### Capability Declarations → #capability-declarations). A bare
+    // #capabilities anchor would render but scroll to top, defeating the
+    // affordance.
+    expect(msg).toContain("README.md#capability-declarations");
+  });
 });
 
 describe("assessRisk", () => {
