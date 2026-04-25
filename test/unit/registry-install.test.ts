@@ -424,6 +424,102 @@ describe("downloadPackage", () => {
       globalThis.fetch = originalFetch;
     }
   });
+
+  // Issue #83: auth-gated metafactory storage endpoints (e.g. dev.meta-factory.ai)
+  // require Bearer auth on /api/v1/storage/download. Anonymous installs against
+  // unauthenticated registries must continue to work.
+  test("sends Bearer token when source is metafactory with token", async () => {
+    const originalFetch = globalThis.fetch;
+    let capturedAuth: string | null = null;
+    globalThis.fetch = mockFetch(async (_input: any, init?: any) => {
+      const headers = new Headers(init?.headers);
+      capturedAuth = headers.get("Authorization");
+      return new Response(new ArrayBuffer(10), { status: 200 });
+    });
+
+    try {
+      const result = await downloadPackage(
+        "https://example.com/pkg.tar.gz",
+        env.paths.reposDir,
+        metafactorySource("test-token-abc"),
+      );
+      expect(result.success).toBe(true);
+      expect(capturedAuth as string | null).toBe("Bearer test-token-abc");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("omits Authorization header when source has no token", async () => {
+    const originalFetch = globalThis.fetch;
+    let capturedAuth: string | null = null;
+    globalThis.fetch = mockFetch(async (_input: any, init?: any) => {
+      const headers = new Headers(init?.headers);
+      capturedAuth = headers.get("Authorization");
+      return new Response(new ArrayBuffer(10), { status: 200 });
+    });
+
+    try {
+      await downloadPackage(
+        "https://example.com/pkg.tar.gz",
+        env.paths.reposDir,
+        metafactorySource(),
+      );
+      expect(capturedAuth).toBeNull();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("omits Authorization header for non-metafactory source even with token", async () => {
+    // A registry-type source should never receive the bearer; tokens belong
+    // to the metafactory API surface.
+    const originalFetch = globalThis.fetch;
+    let capturedAuth: string | null = null;
+    globalThis.fetch = mockFetch(async (_input: any, init?: any) => {
+      const headers = new Headers(init?.headers);
+      capturedAuth = headers.get("Authorization");
+      return new Response(new ArrayBuffer(10), { status: 200 });
+    });
+
+    try {
+      const registrySource: RegistrySource = {
+        name: "registry-test",
+        url: "https://example.com",
+        tier: "official",
+        enabled: true,
+        type: "registry",
+        token: "should-not-be-sent",
+      };
+      await downloadPackage(
+        "https://example.com/pkg.tar.gz",
+        env.paths.reposDir,
+        registrySource,
+      );
+      expect(capturedAuth).toBeNull();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("auth-gated 401 still surfaces Access denied error", async () => {
+    // Even with a token in hand, the server can reject (expired/invalid).
+    // Caller-facing error message stays the same.
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mockFetch(async () => new Response("Unauthorized", { status: 401 }));
+
+    try {
+      const result = await downloadPackage(
+        "https://example.com/pkg.tar.gz",
+        env.paths.reposDir,
+        metafactorySource("expired-token"),
+      );
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("Access denied");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------

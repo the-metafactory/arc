@@ -140,17 +140,32 @@ export interface DownloadResult {
   error?: string;
 }
 
-/** Download a package tarball from the storage endpoint (anonymous) */
+/**
+ * Download a package tarball from the storage endpoint.
+ *
+ * When `source` is provided and is a metafactory source with a stored bearer
+ * token, attaches `Authorization: Bearer <token>` so the request can pass
+ * through an auth-gated storage endpoint (issue #83). For sources without a
+ * token, or registry-type sources, the request stays anonymous (DD-80) so
+ * public unauthenticated installs continue to work.
+ */
 export async function downloadPackage(
   url: string,
   tempDir: string,
+  source?: RegistrySource,
 ): Promise<DownloadResult> {
   const tempPath = join(tempDir, `arc-download-${Date.now()}.tar.gz`);
+
+  const headers: Record<string, string> = {};
+  if (source && source.token && getSourceType(source) === "metafactory") {
+    headers.Authorization = `Bearer ${source.token}`;
+  }
 
   let lastError: string | undefined;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       const response = await fetch(url, {
+        headers,
         signal: AbortSignal.timeout(60_000),
       });
 

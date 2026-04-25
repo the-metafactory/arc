@@ -158,9 +158,11 @@ program
 
       console.log(`Found ${formatPackageRef(pkgRef)} v${resolved.version} in ${resolved.source.name} [${resolved.source.tier}]`);
 
-      // Download (anonymous — no auth required per DD-80)
+      // Download. Anonymous by default (DD-80); the resolved source is passed
+      // through so an auth-gated metafactory storage endpoint receives the
+      // bearer token from `arc login` (issue #83).
       console.log(`Downloading...`);
-      const download = await downloadPackage(resolved.downloadUrl, paths.reposDir);
+      const download = await downloadPackage(resolved.downloadUrl, paths.reposDir, resolved.source);
       if (!download.success || !download.tempPath) {
         console.error(`${download.error}`);
         process.exit(1);
