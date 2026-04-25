@@ -424,6 +424,207 @@ describe("downloadPackage", () => {
       globalThis.fetch = originalFetch;
     }
   });
+
+  // Issue #83: auth-gated metafactory storage endpoints (e.g. dev.meta-factory.ai)
+  // require Bearer auth on /api/v1/storage/download. Anonymous installs against
+  // unauthenticated registries must continue to work.
+  test("sends Bearer token when source is metafactory with token", async () => {
+    const originalFetch = globalThis.fetch;
+    let capturedAuth: string | null = null;
+    globalThis.fetch = mockFetch(async (_input: any, init?: any) => {
+      const headers = new Headers(init?.headers);
+      capturedAuth = headers.get("Authorization");
+      return new Response(new ArrayBuffer(10), { status: 200 });
+    });
+
+    try {
+      const result = await downloadPackage(
+        "https://example.com/pkg.tar.gz",
+        env.paths.reposDir,
+        metafactorySource("test-token-abc"),
+      );
+      expect(result.success).toBe(true);
+      expect(capturedAuth as string | null).toBe("Bearer test-token-abc");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("omits Authorization header when source has no token", async () => {
+    const originalFetch = globalThis.fetch;
+    let capturedAuth: string | null = null;
+    globalThis.fetch = mockFetch(async (_input: any, init?: any) => {
+      const headers = new Headers(init?.headers);
+      capturedAuth = headers.get("Authorization");
+      return new Response(new ArrayBuffer(10), { status: 200 });
+    });
+
+    try {
+      await downloadPackage(
+        "https://example.com/pkg.tar.gz",
+        env.paths.reposDir,
+        metafactorySource(),
+      );
+      expect(capturedAuth).toBeNull();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("omits Authorization header for non-metafactory source even with token", async () => {
+    // A registry-type source should never receive the bearer; tokens belong
+    // to the metafactory API surface.
+    const originalFetch = globalThis.fetch;
+    let capturedAuth: string | null = null;
+    globalThis.fetch = mockFetch(async (_input: any, init?: any) => {
+      const headers = new Headers(init?.headers);
+      capturedAuth = headers.get("Authorization");
+      return new Response(new ArrayBuffer(10), { status: 200 });
+    });
+
+    try {
+      const registrySource: RegistrySource = {
+        name: "registry-test",
+        url: "https://example.com",
+        tier: "official",
+        enabled: true,
+        type: "registry",
+        token: "should-not-be-sent",
+      };
+      await downloadPackage(
+        "https://example.com/pkg.tar.gz",
+        env.paths.reposDir,
+        registrySource,
+      );
+      expect(capturedAuth).toBeNull();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("auth-gated 401 still surfaces Access denied error", async () => {
+    // Even with a token in hand, the server can reject (expired/invalid).
+    // Caller-facing error message stays the same.
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mockFetch(async () => new Response("Unauthorized", { status: 401 }));
+
+    try {
+      const result = await downloadPackage(
+        "https://example.com/pkg.tar.gz",
+        env.paths.reposDir,
+        metafactorySource("expired-token"),
+      );
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("Access denied");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  // Defense-in-depth: if storage 302s to a presigned URL on a different
+  // origin (R2/S3/CDN), the bearer token must not reach the redirect target.
+  test("strips Authorization on cross-origin redirect", async () => {
+    const originalFetch = globalThis.fetch;
+    const requests: Array<{ url: string; auth: string | null }> = [];
+    globalThis.fetch = mockFetch(async (input: any, init?: any) => {
+      const url = typeof input === "string" ? input : input.url;
+      const headers = new Headers(init?.headers);
+      requests.push({ url, auth: headers.get("Authorization") });
+      if (url.startsWith("https://meta-factory.test/")) {
+        return new Response(null, {
+          status: 302,
+          headers: { Location: "https://r2.cloudflarestorage.com/bucket/pkg.tar.gz" },
+        });
+      }
+      return new Response(new ArrayBuffer(64), { status: 200 });
+    });
+
+    try {
+      const result = await downloadPackage(
+        "https://meta-factory.test/api/v1/storage/download/abc",
+        env.paths.reposDir,
+        metafactorySource("super-secret-token"),
+      );
+      expect(result.success).toBe(true);
+      expect(requests).toHaveLength(2);
+      // First hop (origin server) gets the bearer.
+      expect(requests[0].url).toContain("meta-factory.test");
+      expect(requests[0].auth).toBe("Bearer super-secret-token");
+      // Second hop (cross-origin storage) MUST NOT see the bearer.
+      expect(requests[1].url).toContain("r2.cloudflarestorage.com");
+      expect(requests[1].auth).toBeNull();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("aborts after too many redirects rather than auto-following", async () => {
+    // If a server keeps issuing 3xx responses, we must NOT silently fall
+    // back to the runtime's default redirect-following — that would void
+    // the cross-origin auth-strip contract for any hop past the cap.
+    const originalFetch = globalThis.fetch;
+    let attempts = 0;
+    globalThis.fetch = mockFetch(async (_input: any) => {
+      attempts++;
+      // Bounce through a chain of cross-origin hosts forever.
+      const next = `https://hop-${attempts}.example.com/x`;
+      return new Response(null, {
+        status: 302,
+        headers: { Location: next },
+      });
+    });
+
+    try {
+      const result = await downloadPackage(
+        "https://meta-factory.test/api/v1/storage/download/abc",
+        env.paths.reposDir,
+        metafactorySource("super-secret-token"),
+      );
+      // downloadPackage's retry loop catches the thrown "too many redirects"
+      // as a generic network error after both attempts. The important part
+      // is that no auto-followed fetch ever happens beyond the cap.
+      expect(result.success).toBe(false);
+      // Two retries × MAX_REDIRECTS hops each = 10 attempts at most.
+      expect(attempts).toBeLessThanOrEqual(10);
+      expect(attempts).toBeGreaterThanOrEqual(5);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("preserves Authorization on same-origin redirect", async () => {
+    // Internal redirect (e.g. /v1/storage/download/abc → /v2/storage/download/abc
+    // on the same origin) is part of the auth surface; strip would break installs.
+    const originalFetch = globalThis.fetch;
+    const requests: Array<{ url: string; auth: string | null }> = [];
+    globalThis.fetch = mockFetch(async (input: any, init?: any) => {
+      const url = typeof input === "string" ? input : input.url;
+      const headers = new Headers(init?.headers);
+      requests.push({ url, auth: headers.get("Authorization") });
+      if (url.endsWith("/v1/storage/download/abc")) {
+        return new Response(null, {
+          status: 307,
+          headers: { Location: "/v2/storage/download/abc" },
+        });
+      }
+      return new Response(new ArrayBuffer(64), { status: 200 });
+    });
+
+    try {
+      const result = await downloadPackage(
+        "https://meta-factory.test/v1/storage/download/abc",
+        env.paths.reposDir,
+        metafactorySource("super-secret-token"),
+      );
+      expect(result.success).toBe(true);
+      expect(requests).toHaveLength(2);
+      expect(requests[0].auth).toBe("Bearer super-secret-token");
+      expect(requests[1].auth).toBe("Bearer super-secret-token");
+      expect(requests[1].url).toContain("/v2/storage/download/abc");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------

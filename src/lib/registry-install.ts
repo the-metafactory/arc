@@ -140,17 +140,84 @@ export interface DownloadResult {
   error?: string;
 }
 
-/** Download a package tarball from the storage endpoint (anonymous) */
+/** Maximum number of HTTP redirects to follow on a single download. */
+const MAX_REDIRECTS = 5;
+
+/**
+ * Fetch with explicit cross-origin Authorization stripping.
+ *
+ * If an auth'd request is redirected to a different origin (e.g. storage
+ * 302s to a presigned R2/S3 URL), drop the Authorization header on the
+ * next hop so the bearer token never reaches the redirect target. The
+ * WHATWG `fetch` spec already mandates this, but pinning the contract
+ * here protects against runtime changes and makes the intent observable
+ * in tests. Same-origin redirects keep the header.
+ *
+ * After MAX_REDIRECTS hops without reaching a non-3xx response, throw —
+ * never fall back to default fetch redirect-following, which would void
+ * the no-leak contract this function exists to enforce.
+ */
+async function fetchFollowingRedirects(
+  url: string,
+  init: { headers: Record<string, string>; signal: AbortSignal },
+): Promise<Response> {
+  let currentUrl = url;
+  let currentHeaders = { ...init.headers };
+  for (let hop = 0; hop < MAX_REDIRECTS; hop++) {
+    const response = await fetch(currentUrl, {
+      headers: currentHeaders,
+      signal: init.signal,
+      redirect: "manual",
+    });
+    const status = response.status;
+    if (status < 300 || status >= 400) {
+      return response;
+    }
+    const location = response.headers.get("location");
+    if (!location) {
+      return response;
+    }
+    const nextUrl = new URL(location, currentUrl).toString();
+    const sameOrigin = new URL(nextUrl).origin === new URL(currentUrl).origin;
+    currentUrl = nextUrl;
+    if (!sameOrigin && currentHeaders.Authorization) {
+      const { Authorization: _drop, ...rest } = currentHeaders;
+      currentHeaders = rest;
+    }
+  }
+  throw new Error(`Too many redirects (>${MAX_REDIRECTS}) following ${url}`);
+}
+
+/**
+ * Download a package tarball from the storage endpoint.
+ *
+ * When `source` is provided and is a metafactory source with a stored bearer
+ * token, attaches `Authorization: Bearer <token>` so the request can pass
+ * through an auth-gated storage endpoint (issue #83). For sources without a
+ * token, or registry-type sources, the request stays anonymous (DD-80) so
+ * public unauthenticated installs continue to work.
+ *
+ * Redirects are followed manually: on a cross-origin redirect (e.g. 302 to
+ * a presigned R2/S3 URL), the Authorization header is stripped before the
+ * next hop so the bearer never leaks to a third-party storage origin.
+ */
 export async function downloadPackage(
   url: string,
   tempDir: string,
+  source?: RegistrySource,
 ): Promise<DownloadResult> {
   const tempPath = join(tempDir, `arc-download-${Date.now()}.tar.gz`);
+
+  const headers: Record<string, string> = {};
+  if (source && source.token && getSourceType(source) === "metafactory") {
+    headers.Authorization = `Bearer ${source.token}`;
+  }
 
   let lastError: string | undefined;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const response = await fetch(url, {
+      const response = await fetchFollowingRedirects(url, {
+        headers,
         signal: AbortSignal.timeout(60_000),
       });
 
