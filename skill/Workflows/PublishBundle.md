@@ -1,6 +1,6 @@
 # PublishBundle Workflow
 
-> Publish a built arc bundle (skill, tool, agent, or other artifact type) to the metafactory registry through the `arc bundle -> arc publish --dry-run -> confirm -> arc publish -> arc verify` round-trip. Two-phase gate at the dry-run step; halt for explicit confirmation before mutating the registry.
+> Publish a built arc bundle (skill, tool, agent, or other artifact type) to the metafactory registry through the `arc bundle -> arc publish --dry-run -> confirm -> arc publish -> registry sha256 round-trip` flow. Two-phase gate at the dry-run step; halt for explicit confirmation before mutating the registry. The post-publish round-trip is manual today (registry GET + sha256 compare); a first-class `arc verify <name>@<version>` is tracked under AP-102 -- see Step 6.
 
 ## When to Use
 
@@ -76,20 +76,21 @@ Built ./dist/<name>-<version>.tgz (NN KB)
 arc publish --dry-run
 ```
 
-Expected output includes:
+Expected output (per `arc/src/commands/publish.ts` `formatPublish`, lines 150-156) is exactly:
 
-- `name`: the package name
-- `version`: the version about to be published
-- `scope` / `namespace`: where the package will land
-- `registry target`: the registry URL it will be pushed to
-- `sha256`: the bundle's content hash
-- `capabilities` summary: what the package declares it needs
+```
+[DRY RUN] Would publish @<scope>/<name> v<version>
+  SHA-256:  <sha256>
+  Source:   <source-name>
+```
 
-**Echo all of the above back to the operator verbatim.** Then write a clear, single-line halt prompt:
+So the dry-run gives you exactly five facts: the **scope**, the **name**, the **version**, the **sha256** of the tarball, and the configured **source** (the registry the publish will target). It does not include a registry URL line or a capabilities summary -- if you need those, derive them from `arc-manifest.yaml` and your local `~/.config/arc/sources.yaml` before the halt.
 
-> **HALT.** Bundle ready for publish: `<name>@<version>` -> `<registry-target>` (sha256 `<first-12-chars>...`). Confirm publish? (yes / no)
+**Echo the dry-run output back to the operator verbatim.** Then write a clear, single-line halt prompt:
 
-**Verify:** The dry-run completed without errors. The sha256 is recorded (write it down, copy it to a scratch buffer, or paste it into the chat). The registry target matches the intended destination.
+> **HALT.** Bundle ready for publish: `@<scope>/<name>@<version>` -> source `<source-name>` (sha256 `<first-12-chars>...`). Confirm publish? (yes / no)
+
+**Verify:** The dry-run completed without errors. The sha256 is recorded (write it down, copy it to a scratch buffer, or paste it into the chat). The scope and source match the intended destination.
 
 **Anti-pattern:** Skipping the dry-run because "I just did it last time". The dry-run is what gives you the sha256 and the scope confirmation; skipping it makes Step 6's verification impossible.
 
@@ -97,7 +98,7 @@ Expected output includes:
 
 **Action:** Wait for explicit confirmation from the operator (or the upstream agent in an agent-to-agent loop).
 
-Acceptable confirmations: `yes`, `confirm`, `proceed`, `ship it`. Anything else (including ambiguous responses) is a deny.
+Acceptable confirmations: any clearly affirmative response -- "yes", "confirm", "proceed", "ship it", "do it", "go", and obvious paraphrases ("yeah do it", "approved"). The bar is intent, not a literal token match. Ambiguous, hedged, or non-committal responses ("looks fine", "sure I guess", "lgtm but...") are a deny -- if you cannot honestly summarise the response as "the operator unambiguously said yes", treat it as no.
 
 If the operator denies:
 
@@ -129,21 +130,41 @@ Capture the output. Note the published bundle's sha256 -- it should match the sh
 
 **Action:** Confirm the published bundle on the registry has the same sha256 as the local bundle from Step 3.
 
-```bash
-arc verify <name>@<version>
-```
+> **Capability gap (today):** `arc verify` does NOT do this. The current `arc verify <name>` command (see `arc/src/commands/verify.ts`) takes a package name only -- no `@version` -- and checks the integrity of an *installed* skill (repo dir present, `arc-manifest.yaml` parses, symlink valid, git tree clean, hook command paths resolve). It is not a registry round-trip. A first-class `arc verify <name>@<version>` registry-integrity command is the right home for this gate and is tracked under **AP-102** (pre-publish + post-publish validation). Until AP-102 lands, do the round-trip manually as described below.
 
-(`arc verify` resolves the package version against the registry, downloads the bundle metadata, and reports the registered sha256.)
+**Manual round-trip (today):**
 
-Compare the registered sha256 against the sha256 from Step 3. They MUST be identical.
+1. Resolve the published version against the registry. The registry exposes per-version detail at `<source.url>/api/v1/packages/@<scope>/<name>@<version>`, which returns a JSON body that includes the registered `sha256` (see `arc/src/lib/registry-install.ts:81-105` for the exact request shape that `arc install` already uses).
+
+   ```bash
+   curl -fsS -H 'Accept: application/json' \
+     "<source-url>/api/v1/packages/@<scope>/<name>@<version>" \
+     | jq -r .sha256
+   ```
+
+   `<source-url>` is the configured source URL for the registry you published to (in `~/.config/arc/sources.yaml`). `<scope>` and `<name>` come from `arc-manifest.yaml`.
+
+2. Compare the registered sha256 against the sha256 from Step 3. They MUST be byte-for-byte identical.
+
+3. (Optional but recommended) Re-download the tarball at `<source-url>/api/v1/storage/download/<sha256>` and recompute its sha256 locally to confirm storage integrity end-to-end:
+
+   ```bash
+   curl -fsS -o /tmp/<name>-<version>.tgz \
+     "<source-url>/api/v1/storage/download/<sha256-from-registry>"
+   shasum -a 256 /tmp/<name>-<version>.tgz
+   ```
+
+   The locally-recomputed sha256 must equal both the registry-reported sha256 AND the Step 3 sha256.
+
+**Once AP-102 lands:** this whole step collapses to `arc verify <name>@<version>`, which performs the registry GET, the (optional) re-download, and the sha256 compare in one command and exits non-zero on mismatch.
 
 **If they match:** the round-trip is verified. Proceed to Step 7.
 
 **If they do not match: HALT.** This is a content-integrity failure. Do not announce. Do not promote. Do not rebuild and re-publish to "make it match" -- the registry has now recorded a sha256 that you do not control. Escalate to the metafactory steward.
 
-**Verify:** sha256 from Step 3 == sha256 from Step 6. Both bytewise equal.
+**Verify:** sha256 from Step 3 == sha256 from the registry GET (and, if you did the re-download, == sha256 of the re-downloaded tarball). All three bytewise equal.
 
-**Anti-pattern:** Announcing the publish before the verify step succeeds. If the sha256s don't match, you have just told the world a bundle is live that doesn't match what you built locally -- a supply-chain incident in slow motion.
+**Anti-pattern:** Announcing the publish before the verify step succeeds. If the sha256s don't match, you have just told the world a bundle is live that doesn't match what you built locally -- a supply-chain incident in slow motion. The other anti-pattern is calling `arc verify <name>` (no `@version`) and treating its "all checks passed" output as a round-trip pass: it is not -- it only confirms a *previously-installed* copy of the skill is intact on disk, not that the published artifact matches the local build.
 
 ### 7. Announce
 
@@ -177,7 +198,7 @@ After completing all steps:
 - [ ] `arc publish --dry-run` ran successfully and the sha256 was recorded
 - [ ] Operator confirmation was explicit and in-band
 - [ ] `arc publish` returned success and the same sha256 as the dry-run
-- [ ] `arc verify` returned the same sha256 as both the dry-run and the publish
+- [ ] Registry round-trip (manual today: `curl ... /api/v1/packages/@<scope>/<name>@<version>` → `.sha256`; AP-102 will collapse this to `arc verify <name>@<version>`) returned the same sha256 as both the dry-run and the publish
 - [ ] An announcement was posted with the registry URL and sha256
 
 ## What NOT To Do

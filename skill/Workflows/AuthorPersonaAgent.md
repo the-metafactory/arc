@@ -126,7 +126,7 @@ The persona file MUST NOT:
 
 ### 5. Write the Agent Manifest
 
-**Action:** Write `arc-manifest.yaml` at the agent bundle root with `type: agent` and the eight required fields per `forge/design/agent-platform.md`.
+**Action:** Write `arc-manifest.yaml` at the agent bundle root with `type: agent` and the nine required fields per `forge/design/agent-platform.md` (lines 159-171): `type`, `tier`, `identity`, `persona.file`, `blueprints[]`, `guardrails`, `triggers[]`, `instanceStateSpec`, and `instantiation.scope`. `hooks` and `roster[]` are recommended (and the conformance checklist asserts `hooks.onStart` separately) but not required by the schema.
 
 Skeleton (replace placeholders; full schema in the design doc):
 
@@ -197,7 +197,7 @@ instantiation:
 
 `guardrails.allowedSkills` MUST list every bundle declared in `blueprints[]` and nothing else. Mismatches between the two are a host-side denial waiting to happen.
 
-**Verify:** The manifest contains all eight required fields per `forge/design/agent-platform.md`. `arc bundle --dry-run` (or whatever pre-publish validation arc grows under AP-102) does not error.
+**Verify:** The manifest contains all nine required fields per `forge/design/agent-platform.md` (lines 159-171). `arc bundle --dry-run` (or whatever pre-publish validation arc grows under AP-102) does not error.
 
 **Anti-pattern:** Inventing manifest fields not in the schema. Hosts read only the fields they understand; extra fields are silently dropped, and the operator gets surprised behavior. If the schema needs extending, that is a `forge/design/agent-platform.md` change first, not an in-manifest extension.
 
@@ -231,7 +231,7 @@ Re-paste it here for convenience; tick each:
 
 - [ ] Persona file is <= 200 lines.
 - [ ] Persona file ships in the agent bundle, not in any skill bundle.
-- [ ] Manifest declares `type: agent` and includes all eight required fields.
+- [ ] Manifest declares `type: agent` and includes all nine required fields per `forge/design/agent-platform.md`: `type`, `tier`, `identity`, `persona.file`, `blueprints[]`, `guardrails`, `triggers[]`, `instanceStateSpec`, `instantiation.scope`.
 - [ ] Every entry in the persona's routing table maps to an existing workflow in one of the listed `blueprints[]`. No dangling references.
 - [ ] No procedure is duplicated across two `blueprints[]`.
 - [ ] No authority declared in the persona file that isn't also in `guardrails`.
@@ -256,7 +256,7 @@ After completing all steps:
 - [ ] Step 2: every new skill bundle exists, is published, and is installable on a clean machine
 - [ ] Step 3: every workflow file the persona routes to exists and follows Action/Verify/Anti-pattern
 - [ ] Step 4: persona file is <= 200 lines, lives in the agent bundle, restates no authority
-- [ ] Step 5: agent manifest has all eight required fields and is internally consistent (allowedSkills matches blueprints[])
+- [ ] Step 5: agent manifest has all nine required fields per `forge/design/agent-platform.md` and is internally consistent (allowedSkills matches blueprints[])
 - [ ] Step 6: host has been wired (or `grove install agent` has run, post-AP-104) and the agent responds to its declared trigger
 - [ ] Step 7: § 12.7 conformance checklist is fully ticked
 

@@ -705,7 +705,7 @@ A persona-driven agent is exactly four things, each with a clear owner and a cle
 |-------|-----------|----------------|----------|
 | **Persona** | Voice, judgment defaults, routing table, output rules, hard rules. Pure markdown. | Inside the agent bundle as `persona.md`. Host copies to `~/.config/<host>/personas/<name>.md` on install. | Bumps with the agent manifest version. |
 | **Skill bundle** (a.k.a. **blueprint**) | Procedure, scripts, workflow MDs, conventions. The HOW of one capability. | Its own arc-installable repo (`type: skill`). Installed at `~/.claude/skills/<name>/`. | Bumps with the skill bundle's own version, independent of any agent that uses it. |
-| **Bundle** (built artifact) | The tarball produced by `arc bundle` for either an agent or a skill. Content-addressed by sha256. Read-only after publish. | Local cache + the metafactory registry. | Immutable per `name@version`. |
+| **Manifest** | The single declarative artifact that names the agent's components and their wiring. References the persona file and pins skill bundles by name + version. The portable thing a host installs. | `arc-manifest.yaml` at the agent bundle root (`type: agent`). | Bumps with the agent itself; immutable per `name@version` once published. |
 | **Instance state** | Live errands, dashboard, retros, env context. The WHAT-is-happening of one running agent on one host. | Per-host operator config: `~/.config/<host>/agents/<name>/`. Owned by the AgentState bundle. | Persists across uninstalls unless `--purge-state`. |
 
 The four layers compose in one direction only: instance state references a manifest, the manifest references bundles by name and version, a bundle ships a persona file. Information never flows back the other way. A bundle does not know which agents use it. A persona does not know which instance is running it.
@@ -792,20 +792,20 @@ The persona file can refer to the guardrails ("you operate under the bashAllowli
 
 #### 12.6 Two-Phase Gates for Irreversible Operations
 
-Any operation that mutates shared state outside the agent's instance dir is a two-phase gate. **Each gate is its own workflow run** so the operator (or the upstream agent) can confirm between phases.
+Any operation that mutates shared state outside the agent's instance dir is a two-phase gate. **The workflow halts between phases** for an explicit operator confirmation (or upstream-agent confirmation in an agent-to-agent loop) before the irreversible step runs.
 
 Examples that MUST be two-phase:
 
 | Operation | Phase 1 (dry-run) | Phase 2 (commit) |
 |-----------|-------------------|-------------------|
-| Publish a bundle | `arc publish --dry-run` (echo sha256, scope, registry target) | `arc publish` |
+| Publish a bundle | `arc publish --dry-run` (echo sha256, scope) | `arc publish` |
 | Deploy a release | render diff + announce-message preview | `wrangler deploy` / `arc upgrade <repo>` |
 | Merge a PR | post review verdict + counts | `gh pr merge` |
 | Bump shared config | render diff against live config | apply diff |
 
-Each phase is a separate workflow file. The Phase 1 workflow ends by handing control back to the operator with a clear "ready to commit?" prompt. The Phase 2 workflow refuses to run if Phase 1 wasn't run in the same logical session (e.g. by checking that a dry-run sha256 was recorded).
+The implementation pattern is **one workflow file with discrete operator-confirmed steps**: a Phase 1 step that produces the dry-run artifact (sha256, diff, verdict, etc.) and ends with an explicit halt prompt; an operator-confirmation step that waits for an in-band yes/no; and a Phase 2 step that refuses to run unless the Phase 1 artifact (e.g. a recorded sha256) is present. The phases are gated by operator confirmation, not by file boundary. `PublishBundle.md` is the canonical implementation.
 
-Anti-pattern: collapsing the two phases into one workflow with a `--yes` flag. The point of the gate is the human-in-the-loop pause; bypassing it via a flag defeats the design. `PublishBundle.md` is the canonical implementation.
+Anti-pattern: collapsing the two phases into one command with a `--yes` flag, or skipping the confirmation halt. The point of the gate is the human-in-the-loop pause; bypassing it via a flag or a silent fall-through defeats the design.
 
 #### 12.7 Conformance Checklist
 
@@ -813,7 +813,7 @@ Before publishing a persona-driven agent, every item below MUST pass.
 
 - [ ] Persona file is **<= 200 lines**. Longer than that and it is doing the work of a skill bundle; extract.
 - [ ] Persona file ships in the agent bundle (next to `arc-manifest.yaml`), not in any skill bundle.
-- [ ] Manifest declares `type: agent` and includes all eight required fields (`identity`, `persona`, `blueprints[]`, `guardrails`, `triggers[]`, `hooks`, `roster[]`, `instanceStateSpec`) per `forge/design/agent-platform.md`.
+- [ ] Manifest declares `type: agent` and includes all nine required fields per `forge/design/agent-platform.md` (lines 159-171): `type`, `tier`, `identity`, `persona.file`, `blueprints[]`, `guardrails`, `triggers[]`, `instanceStateSpec`, `instantiation.scope`. (`hooks` and `roster[]` are recommended, not required — but `hooks.onStart` is asserted separately below.)
 - [ ] Every entry in the persona's routing table maps to an existing workflow in one of the listed `blueprints[]`. No dangling references.
 - [ ] No procedure is duplicated across two `blueprints[]`. If two leaned-on skills both implement the same step, the duplication moves into a shared bundle.
 - [ ] No authority declared in the persona file that isn't also in `guardrails`. The manifest is the source of truth.
