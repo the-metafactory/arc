@@ -13,6 +13,10 @@ triggers:
   - metafactory package
   - author-builder
   - package conventions
+  - author persona agent
+  - persona-driven agent
+  - compose blueprints
+  - publish bundle
 ---
 
 # PackageBuilder
@@ -41,6 +45,8 @@ Do NOT use this skill for:
 |----------|---------|------|
 | **CreatePackage** | "build package", "create package", "new package", "author-builder onramp" | `Workflows/CreatePackage.md` |
 | **SubmitPackage** | "submit package", "package review", "prepare for registry", "publish package" | `Workflows/SubmitPackage.md` |
+| **PublishBundle** | "publish bundle", "bundle and publish", "arc publish round-trip", "dry-run then publish" | `Workflows/PublishBundle.md` |
+| **AuthorPersonaAgent** | "author persona agent", "persona-driven agent", "compose blueprints into agent", "new agent on top of skills" | `Workflows/AuthorPersonaAgent.md` |
 
 When neither workflow is an exact match, use this skill's convention reference (below) to answer questions about specific conventions.
 
@@ -682,6 +688,163 @@ Before submitting your package, verify every item. Each is binary pass/fail.
 - [ ] PR includes arc manifest capability summary
 - [ ] Worktree was used (branch is not main)
 - [ ] Version bumped per versioning SOP
+
+---
+
+### 12. Persona-Driven Agents (Authoring Convention)
+
+A persona-driven agent is a thin voice and routing file that sits on top of one or more versioned skill bundles. The persona is what makes the agent recognisably itself; the skill bundles are how it actually does work. This section codifies the convention so any future agent author (Forge, Distiller, Backlogger, ...) inherits the same shape.
+
+The authoritative metafactory-level design is `forge/design/agent-platform.md`. Read it before authoring an agent, especially the manifest schema and the host-responsibilities section. This convention reference uses the same terminology (persona, blueprint, bundle, instance state) and is consistent with that doc. If anything here drifts from the design doc, the design doc wins.
+
+#### 12.1 The Four-Layer Layout
+
+A persona-driven agent is exactly four things, each with a clear owner and a clear lifetime.
+
+| Layer | What it is | Where it lives | Lifetime |
+|-------|-----------|----------------|----------|
+| **Persona** | Voice, judgment defaults, routing table, output rules, hard rules. Pure markdown. | Inside the agent bundle as `persona.md`. Host copies to `~/.config/<host>/personas/<name>.md` on install. | Bumps with the agent manifest version. |
+| **Skill bundle** (a.k.a. **blueprint**) | Procedure, scripts, workflow MDs, conventions. The HOW of one capability. | Its own arc-installable repo (`type: skill`). Installed at `~/.claude/skills/<name>/`. | Bumps with the skill bundle's own version, independent of any agent that uses it. |
+| **Manifest** | The single declarative artifact that names the agent's components and their wiring. References the persona file and pins skill bundles by name + version. The portable thing a host installs. | `arc-manifest.yaml` at the agent bundle root (`type: agent`). | Bumps with the agent itself; immutable per `name@version` once published. |
+| **Instance state** | Live errands, dashboard, retros, env context. The WHAT-is-happening of one running agent on one host. | Per-host operator config: `~/.config/<host>/agents/<name>/`. Owned by the AgentState bundle. | Persists across uninstalls unless `--purge-state`. |
+
+The four layers compose in one direction only: instance state references a manifest, the manifest references bundles by name and version, a bundle ships a persona file. Information never flows back the other way. A bundle does not know which agents use it. A persona does not know which instance is running it.
+
+#### 12.2 Bundle / Persona Decoupling
+
+This is the lesson the metafactory got wrong twice before landing on the correct shape (grove#230). Internalise it:
+
+- A **persona references skills by name**, via the manifest's `blueprints[]` array. It does not import them, vendor them, or wrap them.
+- **Skills do not ship inside personas.** A persona file is a few hundred lines of markdown. A skill bundle is its own repo with its own version and its own publish cadence.
+- **Personas do not ship inside skill bundles.** A skill is reusable across many agents (e.g. `AgentState`, `PackageBuilder`); coupling it to one persona breaks reuse.
+
+The host wires persona and bundles together at install time by reading the manifest. The persona prompt context names the bundles it leans on; the host enforces `allowedSkills` against the same list.
+
+#### 12.3 Blueprint Contents
+
+A skill bundle (blueprint) is a single repo with a fixed shape. Workflows reference scripts by relative path so the bundle is portable across hosts.
+
+```
+my-skill/
+  arc-manifest.yaml            # type: skill
+  skill/
+    SKILL.md                   # entry point: triggers + workflow routing
+    Workflows/                  # one MD per discrete operation
+      DoOneThing.md
+      DoAnotherThing.md
+    scripts/                    # bun-runnable CLIs invoked by workflows
+      one-thing.ts
+      another-thing.ts
+    References/                 # optional domain knowledge docs
+    Templates/                  # optional template files
+  src/                          # if the skill also exposes library code
+  tests/
+  blueprint.yaml
+  CLAUDE.md
+```
+
+Workflow MDs reference scripts by **relative path from the skill root** (e.g. ``bun ./scripts/one-thing.ts --arg``) so a workflow file can be read in isolation and still find its tools. Hosts that run lifecycle hooks resolve those relative paths against the bundle install location (see `forge/design/agent-platform.md` host-responsibilities section, hook invocation contract).
+
+#### 12.4 Composition
+
+An agent leans on multiple skills; a skill is reused across multiple agents. **Compose, don't duplicate.**
+
+Forge (release agent) lists in its manifest:
+
+```yaml
+blueprints:
+  - name: ReleaseManager       # Forge-specific procedure
+    version: ">=0.1.0"
+  - name: AgentState           # shared across every persona-driven agent
+    version: ">=0.1.0"
+  - name: PackageBuilder       # shared with anyone authoring a package
+    version: ">=0.2.0"
+  - name: BlueprintTracker
+    version: ">=0.1.0"
+```
+
+`AgentState` and `PackageBuilder` are shared infrastructure; `ReleaseManager` is genuinely new domain logic that justifies its own bundle. Before authoring a new skill bundle, check the registry (`arc list`) for an existing one that already does what you need. Genuinely new domain logic gets its own bundle. Wrappers around existing skills do not.
+
+When two agents both need a capability, the capability moves into a shared bundle. When a bundle starts to carry persona-specific judgment, that judgment moves into the agent persona file. The boundary is: bundles are reusable procedure, personas are agent-specific voice.
+
+#### 12.5 Authority via Host Primitives
+
+Persona-driven agents declare authority **declaratively in the manifest**, and the host enforces it via its existing primitives. The persona file does not invent authority mechanisms.
+
+Manifest:
+
+```yaml
+guardrails:
+  allowedDirs: ["~/Developer/<repo-in-scope>"]
+  readOnlyDirs: ["~/Developer/compass"]
+  allowedSkills: ["ReleaseManager", "AgentState", "PackageBuilder"]
+  disallowedTools: ["Edit", "Write"]
+  bashAllowlist:
+    rules:
+      - pattern: "^gh\\s+"
+      - pattern: "^git\\s+"
+      - pattern: "^arc\\s+"
+```
+
+Grove's role-resolver projects these onto CC session flags (`--allowedDirs`, `--disallowed-tools`, `GROVE_ALLOWED_SKILLS`). Pilot will project them onto its own surface. The persona must not duplicate these as prose ("you may only run gh and git" type statements buried in the markdown), because that creates two sources of truth and they will drift.
+
+The persona file can refer to the guardrails ("you operate under the bashAllowlist declared in the manifest") but the source of truth is the manifest. If a guardrail is missing at runtime, that is a host bug (or a missing manifest field), not a prompt to fix.
+
+#### 12.6 Two-Phase Gates for Irreversible Operations
+
+Any operation that mutates shared state outside the agent's instance dir is a two-phase gate. **The workflow halts between phases** for an explicit operator confirmation (or upstream-agent confirmation in an agent-to-agent loop) before the irreversible step runs.
+
+Examples that MUST be two-phase:
+
+| Operation | Phase 1 (dry-run) | Phase 2 (commit) |
+|-----------|-------------------|-------------------|
+| Publish a bundle | `arc publish --dry-run` (echo sha256, scope) | `arc publish` |
+| Deploy a release | render diff + announce-message preview | `wrangler deploy` / `arc upgrade <repo>` |
+| Merge a PR | post review verdict + counts | `gh pr merge` |
+| Bump shared config | render diff against live config | apply diff |
+
+The implementation pattern is **one workflow file with discrete operator-confirmed steps**: a Phase 1 step that produces the dry-run artifact (sha256, diff, verdict, etc.) and ends with an explicit halt prompt; an operator-confirmation step that waits for an in-band yes/no; and a Phase 2 step that refuses to run unless the Phase 1 artifact (e.g. a recorded sha256) is present. The phases are gated by operator confirmation, not by file boundary. `PublishBundle.md` is the canonical implementation.
+
+Anti-pattern: collapsing the two phases into one command with a `--yes` flag, or skipping the confirmation halt. The point of the gate is the human-in-the-loop pause; bypassing it via a flag or a silent fall-through defeats the design.
+
+#### 12.7 Conformance Checklist
+
+Before publishing a persona-driven agent, every item below MUST pass.
+
+- [ ] Persona file is **<= 200 lines**. Longer than that and it is doing the work of a skill bundle; extract.
+- [ ] Persona file ships in the agent bundle (next to `arc-manifest.yaml`), not in any skill bundle.
+- [ ] Manifest declares `type: agent` and includes all nine required fields per `forge/design/agent-platform.md` (lines 159-171): `type`, `tier`, `identity`, `persona.file`, `blueprints[]`, `guardrails`, `triggers[]`, `instanceStateSpec`, `instantiation.scope`. (`hooks` and `roster[]` are recommended, not required — but `hooks.onStart` is asserted separately below.)
+- [ ] Every entry in the persona's routing table maps to an existing workflow in one of the listed `blueprints[]`. No dangling references.
+- [ ] No procedure is duplicated across two `blueprints[]`. If two leaned-on skills both implement the same step, the duplication moves into a shared bundle.
+- [ ] No authority declared in the persona file that isn't also in `guardrails`. The manifest is the source of truth.
+- [ ] `instanceStateSpec.blueprint` is set (almost always to `AgentState`).
+- [ ] All `blueprints[]` entries resolve via `arc install` on a clean machine.
+- [ ] `hooks.onStart` is set (typically `AgentState/ReplayPending`) so an in-flight queue is recovered after restart.
+- [ ] Manifest passes `arc validate` (when `arc validate` lands per AP-102).
+
+A persona that fails any of these is not yet a conformant agent. Fix the gap before publishing.
+
+#### 12.8 Instance vs Bundle Separation
+
+The bundle is read-only after `arc upgrade`; the instance state is per-operator and persists.
+
+| Concern | Bundle (read-only) | Instance state (per-operator) |
+|---------|--------------------|--------------------------------|
+| Persona markdown | `~/.claude/skills/<agent>/persona.md` (host-managed copy) | Operator override at `~/.config/<host>/personas/<agent>.md.local` |
+| Workflow MDs | `~/.claude/skills/<skill>/skill/Workflows/*.md` | n/a |
+| Scripts | `~/.claude/skills/<skill>/skill/scripts/*.ts` | n/a |
+| Errands queue | n/a | `~/.config/<host>/agents/<agent>/state.sqlite` |
+| Dashboard | n/a | `~/.config/<host>/agents/<agent>/dashboard.md` |
+| Retros | n/a | `~/.config/<host>/agents/<agent>/retros/` |
+| Per-instance prompt context | n/a | `~/.config/<host>/agents/<agent>/CLAUDE.md` (the bridge) |
+
+The `CLAUDE.md` in the instance folder is the **bridge** between the read-only bundle and the live state. It is the only place the agent gets to see "where am I, what is my current queue, what host am I running on" without crossing into mutation. The host writes it; the agent reads it.
+
+Anti-patterns:
+
+- Editing `persona.md` in the install location (the bundle copy). Host-managed; will be overwritten by the next `arc upgrade`. Use the `.md.local` sibling for env-specific tweaks.
+- Storing per-operator state inside a skill bundle. State has its own scope (`per-host` / `per-network` / `per-repo` per `instantiation.scope`); bundles are global.
+- Cross-instance state sharing through filesystem paths the agent invents. If two instances need to share state, that is a network-scope or repo-scope decision encoded in the manifest, not a path the persona writes.
 
 ---
 
