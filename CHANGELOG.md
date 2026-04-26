@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.22.0
+
+### Added
+
+- `PackageBuilder` § 12: **Persona-Driven Agents (Authoring Convention)**. Codifies the four-layer split (persona / skill bundle / built bundle / instance state), bundle-and-persona decoupling, blueprint contents, composition rules, authority-via-host-primitives, two-phase gates for irreversible operations, conformance checklist, and instance-vs-bundle separation. Aligns with the metafactory agent-platform design at [`forge/design/agent-platform.md`](https://github.com/the-metafactory/forge/blob/main/design/agent-platform.md). Closes [arc#100](https://github.com/the-metafactory/arc/issues/100), pairs with [grove#230](https://github.com/the-metafactory/grove/issues/230), part of [mf#390](https://github.com/the-metafactory/meta-factory/issues/390) Phase 4.
+- New workflow `skill/Workflows/PublishBundle.md`: walks `arc bundle` -> `arc publish --dry-run` -> operator confirm -> `arc publish` -> `arc verify` round-trip. Two-phase gate at the dry-run step (halt for confirmation). Sha256 verification at the end; halt on mismatch.
+- New workflow `skill/Workflows/AuthorPersonaAgent.md`: six-step walk (decide new vs reusable, scaffold new bundles, write workflow MDs, write persona, write manifest, wire host, verify conformance) for composing a persona-driven agent on top of one or more existing skill bundles.
+- `triggers:` extended in `skill/SKILL.md` frontmatter with `author persona agent`, `persona-driven agent`, `compose blueprints`, `publish bundle`.
+
+### Notes
+
+- Docs-only release: no test suite covers SKILL.md or workflow markdown content. Existing `bun test` suite continues to pass; no behavior change in arc CLI.
+- Out of scope (post-MVP): manifest signing (SkillSeal), `arc install --type agent` runtime flow. Tracked separately under [the-metafactory/meta-factory#389](https://github.com/the-metafactory/meta-factory/issues/389).
+
 ## 0.21.0
 
 ### Added
