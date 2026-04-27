@@ -174,9 +174,9 @@ export const QUARANTINE_EXIT_CODE = 4;
 
 /**
  * ANSI helpers. We keep them inline (no chalk dep) and fall back to plain
- * text when stdout is not a TTY — pipelines, CI logs, and `arc … 2>&1` all
+ * text when stderr is not a TTY — pipelines, CI logs, and `arc … 2>&1` all
  * stay free of escape sequences. The `colorEnabled` arg is injectable so
- * tests can assert both code paths without spoofing process.stdout.
+ * tests can assert both code paths without spoofing process.stderr.
  */
 const ANSI_RESET = "\x1b[0m";
 const ANSI_BOLD = "\x1b[1m";
