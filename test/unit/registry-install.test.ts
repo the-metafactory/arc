@@ -9,6 +9,10 @@ import {
   extractPackage,
   resolveFromRegistry,
   downloadPackage,
+  formatQuarantineMessage,
+  isQuarantineReasonCode,
+  QUARANTINE_EXIT_CODE,
+  QUARANTINE_REASON_CODES,
 } from "../../src/lib/registry-install.js";
 import type { RegistrySource } from "../../src/types.js";
 
@@ -624,6 +628,326 @@ describe("downloadPackage", () => {
     } finally {
       globalThis.fetch = originalFetch;
     }
+  });
+
+  // -------------------------------------------------------------------------
+  // arc#105 / mf#76 — quarantine reason codes (HTTP 451)
+  // -------------------------------------------------------------------------
+
+  test("451 with X-Quarantine-Reason-Code: SECURITY → quarantine result", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mockFetch(async () => new Response(
+      JSON.stringify({
+        error: "Unavailable for Legal Reasons",
+        reason_code: "QUARANTINED_SECURITY",
+        reason: "Embedded credential exfiltration discovered by trip-wire scan.",
+        status: 451,
+      }),
+      {
+        status: 451,
+        headers: {
+          "Content-Type": "application/json",
+          "X-Quarantine-Reason-Code": "QUARANTINED_SECURITY",
+        },
+      },
+    ));
+
+    try {
+      const result = await downloadPackage("https://example.com/pkg.tar.gz", env.paths.reposDir);
+      expect(result.success).toBe(false);
+      expect(result.quarantine).toBeDefined();
+      expect(result.quarantine!.reasonCode).toBe("QUARANTINED_SECURITY");
+      expect(result.quarantine!.reason).toContain("trip-wire");
+      expect(result.error).toContain("QUARANTINED_SECURITY");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("451 with each reason code variant maps through correctly", async () => {
+    for (const code of QUARANTINE_REASON_CODES) {
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = mockFetch(async () => new Response(
+        JSON.stringify({ error: "Unavailable for Legal Reasons", reason_code: code, reason: "test", status: 451 }),
+        { status: 451, headers: { "Content-Type": "application/json", "X-Quarantine-Reason-Code": code } },
+      ));
+
+      try {
+        const result = await downloadPackage("https://example.com/pkg.tar.gz", env.paths.reposDir);
+        expect(result.success).toBe(false);
+        expect(result.quarantine?.reasonCode).toBe(code);
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    }
+  });
+
+  test("451 falls back to body reason_code when header missing", async () => {
+    // A misconfigured edge cache might strip custom headers but preserve the
+    // body. We must still surface the correct code.
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mockFetch(async () => new Response(
+      JSON.stringify({ error: "Unavailable for Legal Reasons", reason_code: "QUARANTINED_LEGAL", reason: "DMCA", status: 451 }),
+      { status: 451, headers: { "Content-Type": "application/json" } },
+    ));
+
+    try {
+      const result = await downloadPackage("https://example.com/pkg.tar.gz", env.paths.reposDir);
+      expect(result.quarantine?.reasonCode).toBe("QUARANTINED_LEGAL");
+      expect(result.quarantine?.reason).toBe("DMCA");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("451 with unknown reason code collapses to QUARANTINED_OTHER", async () => {
+    // Forward-compat: a future server roll might add a code arc doesn't
+    // know yet. Don't crash — render the safest fallback.
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mockFetch(async () => new Response(
+      JSON.stringify({ reason_code: "QUARANTINED_FUTURE_KIND", reason: "x", status: 451 }),
+      { status: 451, headers: { "Content-Type": "application/json", "X-Quarantine-Reason-Code": "QUARANTINED_FUTURE_KIND" } },
+    ));
+
+    try {
+      const result = await downloadPackage("https://example.com/pkg.tar.gz", env.paths.reposDir);
+      expect(result.quarantine?.reasonCode).toBe("QUARANTINED_OTHER");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("451 with empty/non-JSON body still surfaces a quarantine result", async () => {
+    // Defensive: server might return 451 with no body at all (e.g. HEAD-style
+    // truncation by an upstream proxy). Header alone must drive UX.
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mockFetch(async () => new Response(
+      "not json at all",
+      { status: 451, headers: { "X-Quarantine-Reason-Code": "QUARANTINED_POLICY" } },
+    ));
+
+    try {
+      const result = await downloadPackage("https://example.com/pkg.tar.gz", env.paths.reposDir);
+      expect(result.success).toBe(false);
+      expect(result.quarantine?.reasonCode).toBe("QUARANTINED_POLICY");
+      expect(result.quarantine?.reason).toBe("");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("451 without header AND without parseable body → QUARANTINED_OTHER", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mockFetch(async () => new Response("", { status: 451 }));
+
+    try {
+      const result = await downloadPackage("https://example.com/pkg.tar.gz", env.paths.reposDir);
+      expect(result.success).toBe(false);
+      expect(result.quarantine?.reasonCode).toBe("QUARANTINED_OTHER");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("451 does NOT retry — quarantine is deliberate, not transient", async () => {
+    // 401/403/404/451 are all "stop now" failures; retrying would just
+    // hammer a server that already gave a final answer. Compare with the
+    // existing "retries on network error" behaviour.
+    const originalFetch = globalThis.fetch;
+    let attempts = 0;
+    globalThis.fetch = mockFetch(async () => {
+      attempts++;
+      return new Response("", { status: 451, headers: { "X-Quarantine-Reason-Code": "QUARANTINED_SECURITY" } });
+    });
+
+    try {
+      await downloadPackage("https://example.com/pkg.tar.gz", env.paths.reposDir);
+      expect(attempts).toBe(1);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// arc#105 — quarantine rendering + helpers
+// ---------------------------------------------------------------------------
+
+describe("formatQuarantineMessage", () => {
+  test("SECURITY banner uses red palette when colour enabled", () => {
+    const lines = formatQuarantineMessage(
+      "@scope/pkg",
+      { reasonCode: "QUARANTINED_SECURITY", reason: "trip-wire" },
+      true,
+    );
+    expect(lines.join("\n")).toContain("SECURITY QUARANTINE");
+    expect(lines.join("\n")).toContain("\x1b[41;97m"); // red bg
+    expect(lines.join("\n")).toContain("trip-wire");
+    expect(lines.join("\n")).toContain("QUARANTINED_SECURITY");
+  });
+
+  test("colour disabled produces plain bracketed labels — no ANSI escapes", () => {
+    const lines = formatQuarantineMessage(
+      "@scope/pkg",
+      { reasonCode: "QUARANTINED_SECURITY", reason: "" },
+      false,
+    );
+    const out = lines.join("\n");
+    expect(out).toContain("[SECURITY QUARANTINE]");
+    expect(out).not.toContain("\x1b[");
+  });
+
+  test("POLICY banner uses yellow palette", () => {
+    const lines = formatQuarantineMessage(
+      "@scope/pkg",
+      { reasonCode: "QUARANTINED_POLICY", reason: "naming squat" },
+      true,
+    );
+    expect(lines.join("\n")).toContain("POLICY QUARANTINE");
+    expect(lines.join("\n")).toContain("\x1b[43;30m");
+  });
+
+  test("LEGAL banner uses neutral grey palette", () => {
+    const lines = formatQuarantineMessage(
+      "@scope/pkg",
+      { reasonCode: "QUARANTINED_LEGAL", reason: "DMCA notice" },
+      true,
+    );
+    const out = lines.join("\n");
+    expect(out).toContain("LEGAL QUARANTINE");
+    expect(out).toContain("DMCA notice");
+    // Legal never wears alarm colours: must NOT use red.
+    expect(out).not.toContain("\x1b[41");
+  });
+
+  test("OTHER banner uses neutral framing", () => {
+    const lines = formatQuarantineMessage(
+      "@scope/pkg",
+      { reasonCode: "QUARANTINED_OTHER", reason: "" },
+      false,
+    );
+    expect(lines.join("\n")).toContain("[QUARANTINED]");
+    expect(lines.join("\n")).toContain("QUARANTINED_OTHER");
+  });
+
+  test("empty reason text omits the Reason: line but keeps the code", () => {
+    const lines = formatQuarantineMessage(
+      "@scope/pkg",
+      { reasonCode: "QUARANTINED_SECURITY", reason: "   " }, // whitespace only
+      false,
+    );
+    const out = lines.join("\n");
+    expect(out).not.toMatch(/Reason: \s*$/m);
+    expect(out).toContain("Reason code: QUARANTINED_SECURITY");
+  });
+
+  test("includes the package label in the first line", () => {
+    const lines = formatQuarantineMessage(
+      "@evil/pkg@1.2.3",
+      { reasonCode: "QUARANTINED_SECURITY", reason: "" },
+      false,
+    );
+    expect(lines[0]).toContain("@evil/pkg@1.2.3");
+  });
+
+  // -------------------------------------------------------------------------
+  // Holly cycle-2 finding: terminal control sequence injection via reason.
+  // The wire is the trust boundary. A steward-supplied reason like
+  //   "\x1b[2J\x1b[HFAKE: install OK"
+  // would clear the screen and repaint, defeating the warning we just
+  // rendered. C0 + C1 control bytes (except \n/\t) must not survive into
+  // the output stream.
+  // -------------------------------------------------------------------------
+  test("strips ESC-bracket sequences from reason text", () => {
+    const lines = formatQuarantineMessage(
+      "@evil/pkg",
+      { reasonCode: "QUARANTINED_SECURITY", reason: "\x1b[2J\x1b[Hpwn'd by steward" },
+      false,
+    );
+    const out = lines.join("\n");
+    expect(out).not.toContain("\x1b[");
+    expect(out).not.toContain("\x1b");
+    expect(out).toContain("pwn'd by steward");
+  });
+
+  test("strips OSC sequences and bell from reason", () => {
+    const lines = formatQuarantineMessage(
+      "@evil/pkg",
+      { reasonCode: "QUARANTINED_LEGAL", reason: "\x1b]0;FAKE WINDOW TITLE\x07trailing prose" },
+      false,
+    );
+    const out = lines.join("\n");
+    expect(out).not.toContain("\x1b");
+    expect(out).not.toContain("\x07");
+    expect(out).toContain("trailing prose");
+  });
+
+  test("strips carriage return so a payload cannot overwrite prior line", () => {
+    const lines = formatQuarantineMessage(
+      "@evil/pkg",
+      { reasonCode: "QUARANTINED_POLICY", reason: "real reason\rOK" },
+      false,
+    );
+    const out = lines.join("\n");
+    expect(out).not.toContain("\r");
+  });
+
+  test("strips C1 high-control bytes (0x80-0x9F)", () => {
+    const lines = formatQuarantineMessage(
+      "@evil/pkg",
+      { reasonCode: "QUARANTINED_SECURITY", reason: "before\x9bafter" },
+      false,
+    );
+    const out = lines.join("\n");
+    expect(out).not.toContain("\x9b");
+    expect(out).toContain("before");
+    expect(out).toContain("after");
+  });
+
+  test("preserves newline and tab — those are legitimate prose punctuation", () => {
+    const lines = formatQuarantineMessage(
+      "@evil/pkg",
+      { reasonCode: "QUARANTINED_SECURITY", reason: "line one\nline two\tcol two" },
+      false,
+    );
+    const out = lines.join("\n");
+    expect(out).toContain("line one\nline two");
+    expect(out).toContain("\tcol two");
+  });
+
+  test("ANSI banner colours from the renderer itself still render — sanitisation only touches reason", () => {
+    // Defensive: make sure sanitisation didn't accidentally strip the
+    // banner's own escape sequences. The threat is the wire input, not
+    // the renderer's own palette.
+    const lines = formatQuarantineMessage(
+      "@evil/pkg",
+      { reasonCode: "QUARANTINED_SECURITY", reason: "" },
+      true,
+    );
+    expect(lines.join("\n")).toContain("\x1b[41;97m");
+  });
+});
+
+describe("isQuarantineReasonCode", () => {
+  test("accepts every code in the closed enum", () => {
+    for (const code of QUARANTINE_REASON_CODES) {
+      expect(isQuarantineReasonCode(code)).toBe(true);
+    }
+  });
+
+  test("rejects unknown strings, numbers, null, undefined", () => {
+    expect(isQuarantineReasonCode("QUARANTINED_FOO")).toBe(false);
+    expect(isQuarantineReasonCode("")).toBe(false);
+    expect(isQuarantineReasonCode(0)).toBe(false);
+    expect(isQuarantineReasonCode(null)).toBe(false);
+    expect(isQuarantineReasonCode(undefined)).toBe(false);
+    expect(isQuarantineReasonCode({ reason_code: "QUARANTINED_SECURITY" })).toBe(false);
+  });
+});
+
+describe("QUARANTINE_EXIT_CODE", () => {
+  test("is 4 — distinct from generic failure (1) and reserved POSIX codes", () => {
+    expect(QUARANTINE_EXIT_CODE).toBe(4);
   });
 });
 
