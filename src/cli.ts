@@ -64,6 +64,8 @@ import {
   downloadPackage,
   verifyChecksum,
   extractPackage,
+  formatQuarantineMessage,
+  QUARANTINE_EXIT_CODE,
 } from "./lib/registry-install.js";
 import { verifyVersionSignature } from "./lib/registry-signing.js";
 import { verifyPackageSigstore } from "./lib/cosign-verify.js";
@@ -164,6 +166,20 @@ program
       console.log(`Downloading...`);
       const download = await downloadPackage(resolved.downloadUrl, paths.reposDir, resolved.source);
       if (!download.success || !download.tempPath) {
+        // 451 quarantine (mf#76 / arc#105) gets dedicated UX + a distinct
+        // exit code so scripts can tell deliberate-removal apart from
+        // missing/network failures.
+        if (download.quarantine) {
+          const colorEnabled = process.stderr.isTTY === true;
+          for (const line of formatQuarantineMessage(
+            formatPackageRef(pkgRef),
+            download.quarantine,
+            colorEnabled,
+          )) {
+            console.error(line);
+          }
+          process.exit(QUARANTINE_EXIT_CODE);
+        }
         console.error(`${download.error}`);
         process.exit(1);
       }
