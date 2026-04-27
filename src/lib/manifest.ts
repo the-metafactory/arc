@@ -15,11 +15,46 @@ export const MANIFEST_FILENAMES = [MANIFEST_FILENAME, LEGACY_MANIFEST_FILENAME] 
 /**
  * Read and parse an arc-manifest.yaml (or legacy pai-manifest.yaml) from a directory.
  * Prefers arc-manifest.yaml; falls back to pai-manifest.yaml.
- * Returns null if neither file exists.
- * Throws if a file exists but is invalid.
+ *
+ * Search order (arc#102):
+ *   1. <dir>/arc-manifest.yaml
+ *   2. <dir>/pai-manifest.yaml          (legacy)
+ *   3. <dir>/agent/arc-manifest.yaml    (persona-driven-agent bundles whose
+ *                                        source repo nests the agent files
+ *                                        under agent/, e.g. the-metafactory/forge)
+ *   4. <dir>/agent/pai-manifest.yaml
+ *
+ * Falling back into agent/ is gated to a manifest whose `type` is `agent`
+ * — we never silently install something under a non-canonical layout for
+ * other artifact types. Returns null if no manifest exists. Throws if a
+ * file exists but is invalid.
  */
 export async function readManifest(
   dir: string
+): Promise<ArcManifest | null> {
+  // Try root first (the canonical location for every artifact type).
+  const rootResult = await readManifestFromDir(dir);
+  if (rootResult) return rootResult;
+
+  // Fallback: agent/<manifest> for persona-driven-agent source repos that
+  // ship the agent files under agent/ at the repo root (forge layout).
+  // Only honor the fallback when the manifest declares type: agent —
+  // skills/tools/prompts must continue to fail at the root if missing.
+  const agentDir = join(dir, "agent");
+  const agentResult = await readManifestFromDir(agentDir);
+  if (agentResult && agentResult.type === "agent") {
+    return agentResult;
+  }
+  return null;
+}
+
+/**
+ * Read a manifest from a single directory. Returns null if neither
+ * arc-manifest.yaml nor pai-manifest.yaml is present in that directory.
+ * Throws if a file is present but malformed.
+ */
+async function readManifestFromDir(
+  dir: string,
 ): Promise<ArcManifest | null> {
   for (const filename of MANIFEST_FILENAMES) {
     const manifestPath = join(dir, filename);
@@ -39,12 +74,21 @@ export async function readManifest(
         return parsed;
       }
 
-      // capabilities optional for component and rules types, required for others
-      if (!parsed.capabilities && parsed.type !== "component" && parsed.type !== "rules") {
+      // capabilities optional for component, rules, and agent types, required for others.
+      // Persona-driven agents (arc#100 §12 / arc#102) declare authority via
+      // `guardrails` instead of `capabilities` — the host enforces guardrails
+      // through its own primitives (allowedDirs, disallowedTools, bashAllowlist),
+      // so the per-package capabilities block does not apply.
+      if (
+        !parsed.capabilities &&
+        parsed.type !== "component" &&
+        parsed.type !== "rules" &&
+        parsed.type !== "agent"
+      ) {
         throw new Error(
           [
             `Invalid ${filename}: missing required field 'capabilities'`,
-            `Required for type: skill, tool, agent, prompt, pipeline, system (optional only for: component, rules).`,
+            `Required for type: skill, tool, prompt, pipeline, system (optional only for: component, rules, agent).`,
             ``,
             `Minimal example:`,
             ``,

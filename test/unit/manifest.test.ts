@@ -178,6 +178,132 @@ author:
     // affordance.
     expect(msg).toContain("README.md#capability-declarations");
   });
+
+  // arc#102 Phase 9.1 — type:agent install. Persona-driven agents declare
+  // authority via `guardrails`, not `capabilities`, so the capabilities
+  // block is optional. Install must NOT reject these manifests.
+  test("type: agent allows missing capabilities (persona-driven shape)", async () => {
+    await Bun.write(
+      join(tempDir, MANIFEST_FILENAME),
+      `schema: pai/v1
+name: PersonaAgent
+version: 0.1.0
+type: agent
+tier: custom
+author:
+  name: testuser
+  github: testuser
+persona:
+  file: persona.md
+guardrails:
+  allowedDirs: ["~/Developer/scope"]
+  disallowedTools: ["Edit"]
+`,
+    );
+
+    const manifest = await readManifest(tempDir);
+    expect(manifest).not.toBeNull();
+    expect(manifest!.type).toBe("agent");
+    expect(manifest!.capabilities).toBeUndefined();
+  });
+
+  // arc#102 — fallback search into agent/ for persona-driven-agent source
+  // repos that nest the agent files under agent/ (e.g. forge: agent/{persona.md,
+  // arc-manifest.yaml, scaffold-instance.sh, CLAUDE.md}). The fallback only
+  // applies when the nested manifest declares type: agent — never silently
+  // for skills/tools/etc.
+  test("falls back to agent/arc-manifest.yaml for type: agent (forge layout)", async () => {
+    const { mkdir } = await import("fs/promises");
+    await mkdir(join(tempDir, "agent"), { recursive: true });
+    await Bun.write(
+      join(tempDir, "agent", MANIFEST_FILENAME),
+      `name: NestedAgent
+version: 0.1.0
+type: agent
+tier: custom
+author:
+  name: testuser
+  github: testuser
+persona:
+  file: persona.md
+`,
+    );
+
+    const manifest = await readManifest(tempDir);
+    expect(manifest).not.toBeNull();
+    expect(manifest!.name).toBe("NestedAgent");
+    expect(manifest!.type).toBe("agent");
+  });
+
+  // Negative: a skill manifest at agent/arc-manifest.yaml is NOT a valid
+  // fallback target. The fallback is gated to type: agent so misplaced
+  // skills can never silently install under the wrong layout.
+  test("agent/ fallback ignores non-agent manifests", async () => {
+    const { mkdir } = await import("fs/promises");
+    await mkdir(join(tempDir, "agent"), { recursive: true });
+    await Bun.write(
+      join(tempDir, "agent", MANIFEST_FILENAME),
+      `name: MisplacedSkill
+version: 0.1.0
+type: skill
+tier: custom
+author:
+  name: testuser
+  github: testuser
+provides:
+  skill:
+    - trigger: misplaced
+capabilities:
+  filesystem: { read: [], write: [] }
+  network: []
+  bash: { allowed: false }
+  secrets: []
+`,
+    );
+
+    const manifest = await readManifest(tempDir);
+    // No root manifest, and the agent/ candidate is type: skill — fallback
+    // gated, so we get null (caller surfaces "no arc-manifest.yaml found").
+    expect(manifest).toBeNull();
+  });
+
+  // Root manifest takes precedence over an agent/ sibling. The fallback
+  // only fires when the root has no manifest — never as a silent override.
+  test("root manifest takes precedence over agent/ sibling", async () => {
+    const { mkdir } = await import("fs/promises");
+    await mkdir(join(tempDir, "agent"), { recursive: true });
+    await Bun.write(
+      join(tempDir, MANIFEST_FILENAME),
+      `name: RootAgent
+version: 0.1.0
+type: agent
+tier: custom
+author:
+  name: testuser
+  github: testuser
+persona:
+  file: agent/persona.md
+`,
+    );
+    await Bun.write(
+      join(tempDir, "agent", MANIFEST_FILENAME),
+      `name: NestedSibling
+version: 9.9.9
+type: agent
+tier: custom
+author:
+  name: testuser
+  github: testuser
+persona:
+  file: persona.md
+`,
+    );
+
+    const manifest = await readManifest(tempDir);
+    expect(manifest).not.toBeNull();
+    expect(manifest!.name).toBe("RootAgent");
+    expect(manifest!.version).toBe("0.1.0");
+  });
 });
 
 describe("assessRisk", () => {

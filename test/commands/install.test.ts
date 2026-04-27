@@ -236,6 +236,211 @@ describe("install command", () => {
     expect(getSkill(env.db, "A_DISCOVER_REPOS")).toBeNull();
   });
 
+  // arc#102 Phase 9.1 — type:agent install (git-URL path).
+  test("installs canonical agent bundle (manifest at root, persona at agent/<name>.md)", async () => {
+    const repo = await createMockSkillRepo(env.root, {
+      name: "TestAgent",
+      type: "agent",
+    });
+
+    const result = await install({
+      paths: env.paths,
+      db: env.db,
+      repoUrl: repo.url,
+      yes: true,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.name).toBe("TestAgent");
+
+    // Bundle landed at the canonical reposDir path (the user-facing
+    // contract from arc#102: `~/.config/metafactory/pkg/repos/<name>/`).
+    const repoDir = join(env.paths.reposDir, "mock-TestAgent");
+    expect(existsSync(repoDir)).toBe(true);
+    expect(existsSync(join(repoDir, "arc-manifest.yaml"))).toBe(true);
+
+    // DB row records the artifact_type so subsequent `arc list --type agent`
+    // and host-side discovery can find this install.
+    const skill = getSkill(env.db, "TestAgent");
+    expect(skill).not.toBeNull();
+    expect(skill!.artifact_type).toBe("agent");
+    expect(skill!.status).toBe("active");
+
+    // Symlink convenience: createArtifactSymlinks landed something under
+    // agentsDir for legacy single-file discovery. The persona-driven
+    // contract owned by the host (grove) does not depend on this, but
+    // we keep the link-shape check so future regressions to the
+    // artifact-installer agent case surface here.
+    expect(existsSync(join(env.paths.agentsDir, "TestAgent.md"))).toBe(true);
+  });
+
+  // Persona-driven agent shape (arc#100 § 12) — no `capabilities` block.
+  // Authority is declared in `guardrails`; the host enforces. Install
+  // must succeed without forcing the publisher to declare capabilities.
+  test("installs agent bundle without capabilities (persona-driven shape)", async () => {
+    const repoDir = join(env.root, "mock-PersonaAgent");
+    const { mkdir, writeFile } = await import("fs/promises");
+    await mkdir(join(repoDir, "agent"), { recursive: true });
+    await writeFile(
+      join(repoDir, "agent", "persona.md"),
+      `# PersonaAgent\n\nVoice file. Host copies this to ~/.config/<host>/personas/<name>.md on install.\n`,
+    );
+    await writeFile(
+      join(repoDir, "arc-manifest.yaml"),
+      [
+        `schema: pai/v1`,
+        `name: PersonaAgent`,
+        `version: 0.1.0`,
+        `type: agent`,
+        `tier: custom`,
+        `description: Persona-driven agent (no capabilities block)`,
+        `author:`,
+        `  name: testuser`,
+        `  github: testuser`,
+        `persona:`,
+        `  file: agent/persona.md`,
+        `guardrails:`,
+        `  allowedDirs:`,
+        `    - "~/Developer/scope"`,
+        `  disallowedTools:`,
+        `    - Edit`,
+        ``,
+      ].join("\n"),
+    );
+    Bun.spawnSync(["git", "init"], { cwd: repoDir, stdout: "pipe", stderr: "pipe" });
+    Bun.spawnSync(["git", "add", "."], { cwd: repoDir, stdout: "pipe", stderr: "pipe" });
+    Bun.spawnSync(
+      ["git", "-c", "user.name=Test", "-c", "user.email=t@t.com", "commit", "-m", "init"],
+      { cwd: repoDir, stdout: "pipe", stderr: "pipe" },
+    );
+
+    const result = await install({
+      paths: env.paths,
+      db: env.db,
+      repoUrl: repoDir,
+      yes: true,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.name).toBe("PersonaAgent");
+
+    const skill = getSkill(env.db, "PersonaAgent");
+    expect(skill).not.toBeNull();
+    expect(skill!.artifact_type).toBe("agent");
+  });
+
+  // Forge shape (arc#102): manifest nested under agent/ at the repo root.
+  // The readManifest fallback discovers it; install lands the bundle at
+  // ~/.config/metafactory/pkg/repos/<repo-name>/, with the manifest still
+  // accessible at <bundle>/agent/arc-manifest.yaml — matching the smoke
+  // test in arc#102.
+  test("installs agent bundle with manifest nested under agent/ (forge shape)", async () => {
+    const repoDir = join(env.root, "mock-NestedAgent");
+    const { mkdir, writeFile } = await import("fs/promises");
+    await mkdir(join(repoDir, "agent"), { recursive: true });
+    await writeFile(
+      join(repoDir, "agent", "persona.md"),
+      `# NestedAgent\n\nPersona.\n`,
+    );
+    await writeFile(
+      join(repoDir, "agent", "scaffold-instance.sh"),
+      `#!/bin/bash\necho "scaffolding $1"\n`,
+    );
+    await writeFile(
+      join(repoDir, "agent", "CLAUDE.md"),
+      `# Per-instance bridge\n`,
+    );
+    await writeFile(
+      join(repoDir, "agent", "arc-manifest.yaml"),
+      [
+        `schema: pai/v1`,
+        `name: NestedAgent`,
+        `version: 0.1.0`,
+        `type: agent`,
+        `tier: custom`,
+        `description: Agent bundle with manifest nested under agent/`,
+        `author:`,
+        `  name: testuser`,
+        `  github: testuser`,
+        `persona:`,
+        `  file: persona.md`,
+        ``,
+      ].join("\n"),
+    );
+    Bun.spawnSync(["git", "init"], { cwd: repoDir, stdout: "pipe", stderr: "pipe" });
+    Bun.spawnSync(["git", "add", "."], { cwd: repoDir, stdout: "pipe", stderr: "pipe" });
+    Bun.spawnSync(
+      ["git", "-c", "user.name=Test", "-c", "user.email=t@t.com", "commit", "-m", "init"],
+      { cwd: repoDir, stdout: "pipe", stderr: "pipe" },
+    );
+
+    const result = await install({
+      paths: env.paths,
+      db: env.db,
+      repoUrl: repoDir,
+      yes: true,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.name).toBe("NestedAgent");
+
+    // Bundle landed at canonical reposDir; manifest accessible at
+    // <bundle>/agent/arc-manifest.yaml (matches arc#102 smoke test).
+    const bundleRoot = join(env.paths.reposDir, "mock-NestedAgent");
+    expect(existsSync(join(bundleRoot, "agent", "arc-manifest.yaml"))).toBe(true);
+    expect(existsSync(join(bundleRoot, "agent", "persona.md"))).toBe(true);
+
+    const skill = getSkill(env.db, "NestedAgent");
+    expect(skill).not.toBeNull();
+    expect(skill!.artifact_type).toBe("agent");
+  });
+
+  // Negative case: a non-agent manifest under agent/ must NOT be picked
+  // up by the fallback. The fallback is gated to type: agent so we never
+  // silently install a misplaced skill under the wrong layout.
+  test("readManifest fallback into agent/ is gated to type: agent only", async () => {
+    const repoDir = join(env.root, "mock-WrongTypeUnderAgent");
+    const { mkdir, writeFile } = await import("fs/promises");
+    await mkdir(join(repoDir, "agent"), { recursive: true });
+    await writeFile(
+      join(repoDir, "agent", "arc-manifest.yaml"),
+      [
+        `name: WrongTypeUnderAgent`,
+        `version: 0.1.0`,
+        `type: skill`,
+        `tier: custom`,
+        `author:`,
+        `  name: testuser`,
+        `  github: testuser`,
+        `provides:`,
+        `  skill:`,
+        `    - trigger: wrongtype`,
+        `capabilities:`,
+        `  filesystem: { read: [], write: [] }`,
+        `  network: []`,
+        `  bash: { allowed: false }`,
+        `  secrets: []`,
+        ``,
+      ].join("\n"),
+    );
+    Bun.spawnSync(["git", "init"], { cwd: repoDir, stdout: "pipe", stderr: "pipe" });
+    Bun.spawnSync(["git", "add", "."], { cwd: repoDir, stdout: "pipe", stderr: "pipe" });
+    Bun.spawnSync(
+      ["git", "-c", "user.name=Test", "-c", "user.email=t@t.com", "commit", "-m", "init"],
+      { cwd: repoDir, stdout: "pipe", stderr: "pipe" },
+    );
+
+    const result = await install({
+      paths: env.paths,
+      db: env.db,
+      repoUrl: repoDir,
+      yes: true,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("No arc-manifest.yaml");
+  });
+
   test("rejects already-installed skill", async () => {
     const repo = await createMockSkillRepo(env.root, {
       name: "TestSkill",
