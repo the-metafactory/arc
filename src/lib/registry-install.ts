@@ -190,6 +190,24 @@ function banner(label: string, palette: string, colorEnabled: boolean): string {
 }
 
 /**
+ * Strip C0 (0x00–0x1F, except `\n` and `\t`) and C1 (0x7F–0x9F) control
+ * bytes from a steward-supplied string before rendering to stderr.
+ *
+ * The marketplace `reason` field is operator-typed text on the other side
+ * of an HTTP wire we don't control. Without sanitisation, an `\x1b[2J\x1b[H`
+ * payload would clear the user's terminal and reposition the cursor; an OSC
+ * sequence could mutate window title or set a hyperlink that points
+ * somewhere else; a literal `\r` could overwrite the rendered banner with
+ * spoofed "OK" text. Treat the wire as the trust boundary even when the
+ * other end is the marketplace operator — the operator can be compromised,
+ * impersonated, or simply careless. Newline + tab survive because they're
+ * legitimate prose punctuation; everything else gets replaced with U+FFFD.
+ */
+function sanitizeForTerminal(s: string): string {
+  return s.replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, "�");
+}
+
+/**
  * Build the CLI output block for a 451 quarantine response.
  *
  * Pure function: no console writes, no exit. Callers print the returned
@@ -226,7 +244,7 @@ export function formatQuarantineMessage(
   }
   if (info.reason && info.reason.trim().length > 0) {
     lines.push("");
-    lines.push(`Reason: ${info.reason.trim()}`);
+    lines.push(`Reason: ${sanitizeForTerminal(info.reason.trim())}`);
   }
   lines.push("");
   lines.push(`Reason code: ${info.reasonCode}`);

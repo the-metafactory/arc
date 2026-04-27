@@ -849,6 +849,83 @@ describe("formatQuarantineMessage", () => {
     );
     expect(lines[0]).toContain("@evil/pkg@1.2.3");
   });
+
+  // -------------------------------------------------------------------------
+  // Holly cycle-2 finding: terminal control sequence injection via reason.
+  // The wire is the trust boundary. A steward-supplied reason like
+  //   "\x1b[2J\x1b[HFAKE: install OK"
+  // would clear the screen and repaint, defeating the warning we just
+  // rendered. C0 + C1 control bytes (except \n/\t) must not survive into
+  // the output stream.
+  // -------------------------------------------------------------------------
+  test("strips ESC-bracket sequences from reason text", () => {
+    const lines = formatQuarantineMessage(
+      "@evil/pkg",
+      { reasonCode: "QUARANTINED_SECURITY", reason: "\x1b[2J\x1b[Hpwn'd by steward" },
+      false,
+    );
+    const out = lines.join("\n");
+    expect(out).not.toContain("\x1b[");
+    expect(out).not.toContain("\x1b");
+    expect(out).toContain("pwn'd by steward");
+  });
+
+  test("strips OSC sequences and bell from reason", () => {
+    const lines = formatQuarantineMessage(
+      "@evil/pkg",
+      { reasonCode: "QUARANTINED_LEGAL", reason: "\x1b]0;FAKE WINDOW TITLE\x07trailing prose" },
+      false,
+    );
+    const out = lines.join("\n");
+    expect(out).not.toContain("\x1b");
+    expect(out).not.toContain("\x07");
+    expect(out).toContain("trailing prose");
+  });
+
+  test("strips carriage return so a payload cannot overwrite prior line", () => {
+    const lines = formatQuarantineMessage(
+      "@evil/pkg",
+      { reasonCode: "QUARANTINED_POLICY", reason: "real reason\rOK" },
+      false,
+    );
+    const out = lines.join("\n");
+    expect(out).not.toContain("\r");
+  });
+
+  test("strips C1 high-control bytes (0x80-0x9F)", () => {
+    const lines = formatQuarantineMessage(
+      "@evil/pkg",
+      { reasonCode: "QUARANTINED_SECURITY", reason: "before\x9bafter" },
+      false,
+    );
+    const out = lines.join("\n");
+    expect(out).not.toContain("\x9b");
+    expect(out).toContain("before");
+    expect(out).toContain("after");
+  });
+
+  test("preserves newline and tab — those are legitimate prose punctuation", () => {
+    const lines = formatQuarantineMessage(
+      "@evil/pkg",
+      { reasonCode: "QUARANTINED_SECURITY", reason: "line one\nline two\tcol two" },
+      false,
+    );
+    const out = lines.join("\n");
+    expect(out).toContain("line one\nline two");
+    expect(out).toContain("\tcol two");
+  });
+
+  test("ANSI banner colours from the renderer itself still render — sanitisation only touches reason", () => {
+    // Defensive: make sure sanitisation didn't accidentally strip the
+    // banner's own escape sequences. The threat is the wire input, not
+    // the renderer's own palette.
+    const lines = formatQuarantineMessage(
+      "@evil/pkg",
+      { reasonCode: "QUARANTINED_SECURITY", reason: "" },
+      true,
+    );
+    expect(lines.join("\n")).toContain("\x1b[41;97m");
+  });
 });
 
 describe("isQuarantineReasonCode", () => {
