@@ -846,6 +846,46 @@ Anti-patterns:
 - Storing per-operator state inside a skill bundle. State has its own scope (`per-host` / `per-network` / `per-repo` per `instantiation.scope`); bundles are global.
 - Cross-instance state sharing through filesystem paths the agent invents. If two instances need to share state, that is a network-scope or repo-scope decision encoded in the manifest, not a path the persona writes.
 
+#### 12.9 Installing a Persona-Driven Agent (arc#102)
+
+Once a persona-driven agent bundle conforms to § 12.7, it installs through arc the same way a skill bundle does. The git-URL path is the canonical entry point for Phase 9.1; registry-resolved name install (`arc install <name>`) follows once the agent is published.
+
+**From a git URL:**
+
+```bash
+arc install https://github.com/the-metafactory/<agent-repo> -y
+```
+
+What arc does:
+
+1. Clones the repo to `~/.config/metafactory/pkg/repos/<repo-name>/`.
+2. Reads `arc-manifest.yaml` from the bundle root. If no root manifest is present, falls back to `<repo>/agent/arc-manifest.yaml` — but only when the nested manifest declares `type: agent`. The fallback exists so source repos that nest the agent files under `agent/` (e.g. forge: `agent/{persona.md, scaffold-instance.sh, CLAUDE.md, arc-manifest.yaml}`) install cleanly without forcing a layout migration. Skills/tools/etc. continue to require the manifest at the repo root.
+3. Validates the manifest. For `type: agent`, the `capabilities` block is **optional** — persona-driven agents declare authority via `guardrails`, and the host enforces it through its own primitives (`allowedDirs`, `disallowedTools`, `bashAllowlist`). Authoring a `capabilities` block on an agent manifest is allowed for forward compatibility but is not required.
+4. Records the install in `packages.db` with `artifact_type: agent` so `arc list --type agent` and host-side discovery can find it.
+5. Creates a convenience symlink under `~/.claude/agents/<name>` pointing at the bundle. Persona-driven hosts (grove, pilot) read the bundle directly from `~/.config/metafactory/pkg/repos/<name>/`; the symlink is for legacy single-file agent discovery.
+
+**What arc does NOT do (host responsibility):**
+
+- Copy `persona.md` to `~/.config/<host>/personas/<name>.md`. That belongs to the host install step (`grove install agent <name>`, etc.) per `forge/design/agent-platform.md` § "Instantiation flow".
+- Wire the agent into a host's adapter config (Discord bot ID, GitHub login, mention pattern). The host derives those from the manifest's `identity` block.
+- Install the bundles named in `blueprints[]`. The host (or operator) runs `arc install <bundle>` for each before installing the agent — see § "Instantiation flow" step 3 in `forge/design/agent-platform.md`.
+
+**Verifying the install:**
+
+```bash
+# Bundle landed at canonical reposDir
+ls ~/.config/metafactory/pkg/repos/<repo-name>/
+
+# Manifest is readable (root, or under agent/ for nested-source repos)
+cat ~/.config/metafactory/pkg/repos/<repo-name>/arc-manifest.yaml \
+  || cat ~/.config/metafactory/pkg/repos/<repo-name>/agent/arc-manifest.yaml
+
+# DB row exists with artifact_type: agent
+arc list --type agent
+```
+
+After this verification passes, the agent is ready for the host install step.
+
 ---
 
 ## Quick Reference
