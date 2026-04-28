@@ -189,5 +189,14 @@ features:
     name: arc install registry signature verification
     status: done
     iteration: 6
-    depends: [A-406, meta-factory:F-501]
+    depends: [A-406, meta-factory:F5-501]
     description: "arc install fetches /.well-known/metafactory-signing-key from the registry and verifies the Ed25519 registry_signature bound to each version against manifest_canonical — blocks install on verification failure, no --force override. Unsigned/legacy versions emit a warning and proceed (matches meta-factory graceful degradation). Implemented in src/lib/registry-signing.ts + wired in src/cli.ts after SHA-256 check."
+
+  # Iteration 7 — NATS server lifecycle (federation prerequisite for grove G-1000)
+  - id: A-600
+    name: nats-server lifecycle + NKey provisioning
+    status: planned
+    iteration: 7
+    issue: 108
+    depends: [meta-factory:I-500, meta-factory:I-501]
+    description: "arc install nats-server (process lifecycle: start/stop/status, brew/binary install, config templating) + arc nats provision-operator (NKey/JWT operator credential generation tied to grove-auth identity). Federation prerequisite for grove G-1000 NATS migration. Builds on meta-factory federation anchors (I-500 hub, I-501 NKey JWT model)."
