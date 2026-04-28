@@ -155,6 +155,13 @@ features:
     depends: [A-404, meta-factory:F2-200]
     description: "arc bundle + arc publish — create tarballs, upload to R2, register versions via bootstrap API. Phase 1 of DD-97 convergence."
 
+  - id: A-52
+    name: Anonymous install and search (no auth for read ops)
+    status: done
+    iteration: 5
+    depends: [A-200, A-401]
+    description: "Strip bearer tokens from all read-only API paths (install, search, info) per DD-80. Auth now only required for arc publish — install/search work without arc login. 401/403 error messages no longer suggest login for read ops. Shipped in PR #66 (2026-04-13)."
+
   # Remote info & inspection
   - id: A-500
     name: Remote package info
