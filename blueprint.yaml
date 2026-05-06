@@ -207,3 +207,25 @@ features:
     issue: 108
     depends: [meta-factory:I-500, meta-factory:I-501]
     description: "arc install nats-server (process lifecycle: start/stop/status, brew/binary install, config templating) + arc nats provision-operator (NKey/JWT operator credential generation tied to grove-auth identity). Federation prerequisite for grove G-1000 NATS migration. Builds on meta-factory federation anchors (I-500 hub, I-501 NKey JWT model)."
+
+  # Iteration 8: aPaaS Discovery (depends on meta-factory L7 indexing)
+  - id: A-700
+    name: Capability-filtered search
+    status: planned
+    iteration: 8
+    depends: [A-200, meta-factory:F7-703]
+    description: "arc search --capability filesystem_read --category text-processing --keyword summarize. Passes new query params to meta-factory extended search API (F7-703). Results include capability summary, risk level, category. Agents can programmatically discover skills that match their needs."
+
+  - id: A-701
+    name: Myelin envelope library as arc package
+    status: planned
+    iteration: 8
+    depends: [myelin:MY-102]
+    description: "Publish the myelin envelope TypeScript library as an arc package. Any agent in the ecosystem can arc install myelin to create/validate/parse envelopes. First protocol-level arc package — establishes the pattern."
+
+  - id: A-702
+    name: Agent contract display in arc info
+    status: planned
+    iteration: 8
+    depends: [A-700, myelin:MY-100]
+    description: "arc info <package> shows the agent's contract: declared capabilities, input/output interfaces (when available), risk level, category, NATS subjects it publishes/subscribes to. The 'API docs' for any agent on the network."
