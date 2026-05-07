@@ -5,12 +5,13 @@
  * Part of grove#320 (bot-level AAA) — operator-level infrastructure tooling.
  */
 
-import { existsSync, writeFileSync, unlinkSync, mkdirSync, chmodSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync, chmodSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { homedir } from "node:os";
 import { spawnSync } from "node:child_process";
 
 const CREDS_DIR = join(homedir(), ".config", "nats");
+const NSC_CONFIG = join(homedir(), ".config", "nats", "nsc", "nsc.json");
 const NAMING_RE = /^[a-z][a-z0-9-]*$/;
 const NATS_SUBJECT_RE = /^[a-zA-Z0-9.*>_-]+$/;
 
@@ -20,7 +21,6 @@ function nsc(args: string[]): string {
     const msg = (result.stderr || result.stdout || "unknown error").trim();
     throw new Error(`nsc ${args[0]} failed: ${msg}`);
   }
-  // nsc writes some output to stderr (e.g., `nsc env`)
   return (result.stdout + result.stderr).trim();
 }
 
@@ -40,6 +40,18 @@ function validateSubject(subject: string): void {
 }
 
 export function detectAccount(): string {
+  // Primary: read NSC config file (stable, no parsing)
+  if (existsSync(NSC_CONFIG)) {
+    try {
+      const config = JSON.parse(readFileSync(NSC_CONFIG, "utf-8"));
+      if (config.account && typeof config.account === "string") {
+        return config.account;
+      }
+    } catch {
+      // fall through to regex
+    }
+  }
+  // Fallback: parse nsc env output
   const output = nsc(["env"]);
   const match = output.match(/Current Account\s+\|[^|]*\|\s+(\S+)/);
   if (match) return match[1];
@@ -106,27 +118,35 @@ export function addBot(name: string, opts: AddBotOptions): void {
   }
 
   nsc(["add", "user", "-a", account, "-n", name]);
+
+  // Permissions + creds generation wrapped for rollback on failure
+  try {
+    if (opts.pub) {
+      for (const subj of opts.pub.split(",").map((s) => s.trim())) {
+        validateSubject(subj);
+        nsc(["edit", "user", "-a", account, "-n", name, "--allow-pub", subj]);
+      }
+    }
+
+    if (opts.sub) {
+      for (const subj of opts.sub.split(",").map((s) => s.trim())) {
+        validateSubject(subj);
+        nsc(["edit", "user", "-a", account, "-n", name, "--allow-sub", subj]);
+      }
+    }
+
+    const creds = nsc(["generate", "creds", "-a", account, "-n", name]);
+    ensureCredsDir(outPath);
+    writeCredsFile(outPath, creds);
+  } catch (err) {
+    // Rollback: delete the partially-configured user
+    try { nsc(["delete", "user", "-a", account, "-n", name]); } catch { /* best effort */ }
+    throw new Error(`Failed to configure user "${name}" — rolled back. Cause: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
   console.log(`Created NATS user: ${name} (account: ${account})`);
-
-  if (opts.pub) {
-    for (const subj of opts.pub.split(",").map((s) => s.trim())) {
-      validateSubject(subj);
-      nsc(["edit", "user", "-a", account, "-n", name, "--allow-pub", subj]);
-    }
-    console.log(`  publish: ${opts.pub}`);
-  }
-
-  if (opts.sub) {
-    for (const subj of opts.sub.split(",").map((s) => s.trim())) {
-      validateSubject(subj);
-      nsc(["edit", "user", "-a", account, "-n", name, "--allow-sub", subj]);
-    }
-    console.log(`  subscribe: ${opts.sub}`);
-  }
-
-  const creds = nsc(["generate", "creds", "-a", account, "-n", name]);
-  ensureCredsDir(outPath);
-  writeCredsFile(outPath, creds);
+  if (opts.pub) console.log(`  publish: ${opts.pub}`);
+  if (opts.sub) console.log(`  subscribe: ${opts.sub}`);
   console.log(`  credentials: ${outPath} (mode 600)`);
 }
 
@@ -145,22 +165,15 @@ export function reissueBot(name: string, opts: ReissueBotOptions): void {
     process.exit(1);
   }
 
-  // Capture existing user config before delete for rollback
-  let existingConfig: string;
-  try {
-    existingConfig = nsc(["describe", "user", "-a", account, "-n", name, "--json"]);
-  } catch {
-    console.error(`Error: cannot read existing user config for "${name}".`);
-    process.exit(1);
-  }
-
   nsc(["delete", "user", "-a", account, "-n", name]);
 
   try {
     nsc(["add", "user", "-a", account, "-n", name]);
   } catch (err) {
-    console.error(`Error: failed to re-create user "${name}". Previous config saved to stderr.`);
-    process.stderr.write(`Previous user config:\n${existingConfig}\n`);
+    console.error(`CRITICAL: failed to re-create user "${name}" after delete.`);
+    console.error(`The user has been removed but could not be re-created.`);
+    console.error(`Manual recovery: nsc add user -a ${account} -n ${name}`);
+    console.error(`Cause: ${err instanceof Error ? err.message : String(err)}`);
     process.exit(1);
   }
 
