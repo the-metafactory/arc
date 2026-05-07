@@ -22,13 +22,22 @@ const NSC_CONFIG_CANDIDATES = [
 
 function nsc(args: string[]): string {
   const result = Bun.spawnSync(["nsc", ...args], { stderr: "pipe", stdout: "pipe" });
-  const stdout = result.stdout.toString();
-  const stderr = result.stderr.toString();
+  const stdout = result.stdout.toString().trim();
+  const stderr = result.stderr.toString().trim();
   if (result.exitCode !== 0) {
-    const msg = (stderr || stdout || "unknown error").trim();
-    throw new Error(`nsc ${args[0]} failed: ${msg}`);
+    throw new Error(`nsc ${args[0]} failed: ${stderr || stdout || "unknown error"}`);
   }
-  return (stdout + stderr).trim();
+  return stdout;
+}
+
+function nscWithStderr(args: string[]): string {
+  const result = Bun.spawnSync(["nsc", ...args], { stderr: "pipe", stdout: "pipe" });
+  if (result.exitCode !== 0) {
+    const stderr = result.stderr.toString().trim();
+    const stdout = result.stdout.toString().trim();
+    throw new Error(`nsc ${args[0]} failed: ${stderr || stdout || "unknown error"}`);
+  }
+  return (result.stdout.toString() + result.stderr.toString()).trim();
 }
 
 export function ensureNscInstalled(): void {
@@ -36,6 +45,13 @@ export function ensureNscInstalled(): void {
   if (result.exitCode !== 0) {
     console.error("Error: nsc not found on PATH.");
     console.error("Install: brew install nats-io/nats-tools/nsc");
+    process.exit(1);
+  }
+}
+
+function validateBotName(name: string): void {
+  if (!NAMING_RE.test(name)) {
+    console.error(`Error: bot name "${name}" must be lowercase alphanumeric + hyphens.`);
     process.exit(1);
   }
 }
@@ -58,8 +74,8 @@ export function detectAccount(): string {
       continue;
     }
   }
-  // Fallback: parse nsc env output
-  const output = nsc(["env"]);
+  // Fallback: parse nsc env output (env writes to stderr)
+  const output = nscWithStderr(["env"]);
   const match = output.match(/Current Account\s+\|[^|]*\|\s+(\S+)/);
   if (match) return match[1];
   throw new Error("Cannot detect NSC account. Run: nsc env -a <account>");
@@ -105,10 +121,7 @@ export interface AddBotOptions {
 export function addBot(name: string, opts: AddBotOptions): void {
   ensureNscInstalled();
 
-  if (!NAMING_RE.test(name)) {
-    console.error(`Error: bot name "${name}" must be lowercase alphanumeric + hyphens.`);
-    process.exit(1);
-  }
+  validateBotName(name);
 
   const account = opts.account ?? detectAccount();
   const outPath = opts.output ?? defaultCredsPath(name);
@@ -164,6 +177,7 @@ export interface ReissueBotOptions {
 
 export function reissueBot(name: string, opts: ReissueBotOptions): void {
   ensureNscInstalled();
+  validateBotName(name);
   const account = opts.account ?? detectAccount();
   const outPath = opts.output ?? defaultCredsPath(name);
 
@@ -172,9 +186,8 @@ export function reissueBot(name: string, opts: ReissueBotOptions): void {
     process.exit(1);
   }
 
-  // Generate new creds BEFORE deleting old user — validate the operation succeeds
-  // before making destructive changes. nsc requires delete+add for new keys,
-  // but we can at least back up the old creds file.
+  // nsc requires delete+add for new keys (no in-place rekey).
+  // Back up old creds file before the destructive delete.
   if (existsSync(outPath)) {
     const backup = `${outPath}.bak`;
     writeFileSync(backup, readFileSync(outPath));
@@ -221,6 +234,7 @@ export interface RemoveBotOptions {
 
 export function removeBot(name: string, opts: RemoveBotOptions): void {
   ensureNscInstalled();
+  validateBotName(name);
   const account = opts.account ?? detectAccount();
 
   if (!userExists(account, name)) {
