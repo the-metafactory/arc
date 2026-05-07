@@ -37,7 +37,7 @@ import {
 import type { CatalogEntry, ArtifactType, PackageTier, RegistrySource, SourceType } from "./types.js";
 import { login } from "./commands/login.js";
 import { logout } from "./commands/logout.js";
-import { addBot, reissueBot, listBots, removeBot } from "./commands/nats.js";
+import { addBot, reissueBot, listBots, removeBot, setupOperator } from "./commands/nats.js";
 import { generateIdentity, exportPrincipals, importPrincipals, listPrincipals } from "./commands/identity.js";
 import { bundle, formatBundle } from "./commands/bundle.js";
 import { publish, formatPublish } from "./commands/publish.js";
@@ -1217,6 +1217,20 @@ nats
   .option("--delete-creds", "Also delete the credentials file")
   .action((name: string, opts: { account?: string; output?: string; deleteCreds?: boolean }) => {
     removeBot(name, opts);
+  });
+
+nats
+  .command("setup-operator <account>")
+  .description("Provision multiple bots with NATS creds + signing identity in one command")
+  .requiredOption("--bots <names>", "Comma-separated bot names (e.g. jc-pilot,jc-luna,jc-ivy)")
+  .option("--force", "Overwrite existing users and keys")
+  .action(async (account: string, opts: { bots: string; force?: boolean }) => {
+    const botNames = opts.bots.split(",").map(s => s.trim()).filter(Boolean);
+    if (botNames.length === 0) {
+      console.error("Error: --bots requires at least one bot name");
+      process.exit(1);
+    }
+    await setupOperator(account, botNames, { force: opts.force });
   });
 
 // ── Identity management commands ──────────────────────────

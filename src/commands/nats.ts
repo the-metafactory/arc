@@ -242,6 +242,46 @@ export interface RemoveBotOptions {
   output?: string;
 }
 
+export interface SetupOperatorOptions {
+  force?: boolean;
+}
+
+export async function setupOperator(account: string, botNames: string[], opts: SetupOperatorOptions): Promise<void> {
+  ensureNscInstalled();
+
+  console.log(`Setting up ${botNames.length} bot(s) for operator ${account}...\n`);
+
+  const results: { name: string; ok: boolean; error?: string }[] = [];
+
+  const { generateIdentity } = await import("./identity");
+
+  for (const name of botNames) {
+    try {
+      console.log(`── ${name} ──`);
+      addBot(name, { account, force: opts.force });
+      await generateIdentity(name, account, { force: opts.force });
+      console.log();
+      results.push({ name, ok: true });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`  FAILED: ${msg}\n`);
+      results.push({ name, ok: false, error: msg });
+    }
+  }
+
+  console.log(`\n── Summary ──`);
+  const ok = results.filter(r => r.ok);
+  const failed = results.filter(r => !r.ok);
+  console.log(`  ${ok.length}/${botNames.length} bots provisioned`);
+  if (failed.length > 0) {
+    console.log(`  Failed: ${failed.map(r => r.name).join(", ")}`);
+  }
+  console.log(`\nNext steps:`);
+  console.log(`  1. arc identity export > ${account.toLowerCase()}-principals.json`);
+  console.log(`  2. Send the file to other operators`);
+  console.log(`  3. arc identity import <other-operator>-principals.json`);
+}
+
 export function removeBot(name: string, opts: RemoveBotOptions): void {
   ensureNscInstalled();
   validateBotName(name);
