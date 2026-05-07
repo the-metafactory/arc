@@ -1,20 +1,18 @@
 import { describe, test, expect, afterAll } from "bun:test";
 import { detectAccount, addBot, removeBot } from "../../src/commands/nats.js";
-import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 
-const NSC_AVAILABLE = spawnSync("which", ["nsc"], { encoding: "utf-8" }).status === 0;
+const NSC_AVAILABLE = Bun.spawnSync(["which", "nsc"]).exitCode === 0;
 const TEST_ACCOUNT = "OP_JC";
 const TEST_BOT = "arc-test-bot";
 const CREDS_PATH = join(homedir(), ".config", "nats", `${TEST_BOT}.creds`);
 
-// Cleanup in case prior run left state — use spawnSync to avoid process.exit
 function cleanupTestBot(): void {
-  spawnSync("nsc", ["delete", "user", "-a", TEST_ACCOUNT, "-n", TEST_BOT], { encoding: "utf-8" });
-  const p = join(homedir(), ".config", "nats", `${TEST_BOT}.creds`);
-  try { require("fs").unlinkSync(p); } catch { /* ok */ }
+  Bun.spawnSync(["nsc", "delete", "user", "-a", TEST_ACCOUNT, "-n", TEST_BOT]);
+  try { unlinkSync(CREDS_PATH); } catch { /* ok */ }
+  try { unlinkSync(`${CREDS_PATH}.bak`); } catch { /* ok */ }
 }
 
 afterAll(() => {
@@ -52,23 +50,20 @@ describe("nats commands", () => {
 
   describe("subject validation", () => {
     test.skipIf(!NSC_AVAILABLE)("rejects subjects with shell metacharacters via CLI", () => {
-      const result = spawnSync("bun", [
-        "src/cli.ts", "nats", "add-bot", "subj-test",
-        "-a", TEST_ACCOUNT,
-        "--pub", "valid.subject,$(evil)",
-      ], { encoding: "utf-8", cwd: join(import.meta.dir, "../..") });
+      const result = Bun.spawnSync(["bun", "src/cli.ts", "nats", "add-bot", "subj-test",
+        "-a", TEST_ACCOUNT, "--pub", "valid.subject,$(evil)",
+      ], { cwd: join(import.meta.dir, "../.."), stderr: "pipe" });
 
-      expect(result.status).not.toBe(0);
-      expect(result.stderr).toContain("Invalid NATS subject");
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr.toString()).toContain("Invalid NATS subject");
     });
 
     test.skipIf(!NSC_AVAILABLE)("rejects invalid bot name via CLI", () => {
-      const result = spawnSync("bun", [
-        "src/cli.ts", "nats", "add-bot", "UPPER-CASE",
+      const result = Bun.spawnSync(["bun", "src/cli.ts", "nats", "add-bot", "UPPER-CASE",
         "-a", TEST_ACCOUNT,
-      ], { encoding: "utf-8", cwd: join(import.meta.dir, "../..") });
+      ], { cwd: join(import.meta.dir, "../.."), stderr: "pipe" });
 
-      expect(result.status).not.toBe(0);
+      expect(result.exitCode).not.toBe(0);
     });
   });
 

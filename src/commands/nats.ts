@@ -8,25 +8,32 @@
 import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync, chmodSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { homedir } from "node:os";
-import { spawnSync } from "node:child_process";
 
-const CREDS_DIR = join(homedir(), ".config", "nats");
-const NSC_CONFIG = join(homedir(), ".config", "nats", "nsc", "nsc.json");
+const DEFAULT_CREDS_DIR = join(homedir(), ".config", "nats");
 const NAMING_RE = /^[a-z][a-z0-9-]*$/;
 const NATS_SUBJECT_RE = /^[a-zA-Z0-9.*>_-]+$/;
 
+// NSC config can live in several locations depending on version/platform
+const NSC_CONFIG_CANDIDATES = [
+  join(homedir(), ".config", "nats", "nsc", "nsc.json"),
+  join(homedir(), ".nsc", "nsc.json"),
+  join(process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config"), "nsc", "nsc.json"),
+];
+
 function nsc(args: string[]): string {
-  const result = spawnSync("nsc", args, { encoding: "utf-8" });
-  if (result.status !== 0) {
-    const msg = (result.stderr || result.stdout || "unknown error").trim();
+  const result = Bun.spawnSync(["nsc", ...args], { stderr: "pipe", stdout: "pipe" });
+  const stdout = result.stdout.toString();
+  const stderr = result.stderr.toString();
+  if (result.exitCode !== 0) {
+    const msg = (stderr || stdout || "unknown error").trim();
     throw new Error(`nsc ${args[0]} failed: ${msg}`);
   }
-  return (result.stdout + result.stderr).trim();
+  return (stdout + stderr).trim();
 }
 
 export function ensureNscInstalled(): void {
-  const result = spawnSync("which", ["nsc"], { encoding: "utf-8" });
-  if (result.status !== 0) {
+  const result = Bun.spawnSync(["which", "nsc"], { stdout: "pipe" });
+  if (result.exitCode !== 0) {
     console.error("Error: nsc not found on PATH.");
     console.error("Install: brew install nats-io/nats-tools/nsc");
     process.exit(1);
@@ -40,15 +47,15 @@ function validateSubject(subject: string): void {
 }
 
 export function detectAccount(): string {
-  // Primary: read NSC config file (stable, no parsing)
-  if (existsSync(NSC_CONFIG)) {
+  for (const candidate of NSC_CONFIG_CANDIDATES) {
+    if (!existsSync(candidate)) continue;
     try {
-      const config = JSON.parse(readFileSync(NSC_CONFIG, "utf-8"));
+      const config = JSON.parse(readFileSync(candidate, "utf-8"));
       if (config.account && typeof config.account === "string") {
         return config.account;
       }
     } catch {
-      // fall through to regex
+      continue;
     }
   }
   // Fallback: parse nsc env output
@@ -58,8 +65,8 @@ export function detectAccount(): string {
   throw new Error("Cannot detect NSC account. Run: nsc env -a <account>");
 }
 
-function credsPath(name: string): string {
-  return join(CREDS_DIR, `${name}.creds`);
+function defaultCredsPath(name: string): string {
+  return join(DEFAULT_CREDS_DIR, `${name}.creds`);
 }
 
 function userExists(account: string, name: string): boolean {
@@ -71,15 +78,18 @@ function userExists(account: string, name: string): boolean {
   }
 }
 
-function ensureCredsDir(path: string): void {
-  const dir = dirname(path);
-  if (!existsSync(dir)) {
-    mkdirSync(dir, { recursive: true, mode: 0o700 });
+function ensureDefaultCredsDir(): void {
+  if (!existsSync(DEFAULT_CREDS_DIR)) {
+    mkdirSync(DEFAULT_CREDS_DIR, { recursive: true, mode: 0o700 });
   }
-  chmodSync(dir, 0o700);
+  chmodSync(DEFAULT_CREDS_DIR, 0o700);
 }
 
 function writeCredsFile(path: string, content: string): void {
+  // Only enforce directory permissions on the default creds dir
+  if (dirname(path) === DEFAULT_CREDS_DIR) {
+    ensureDefaultCredsDir();
+  }
   writeFileSync(path, content, { mode: 0o600 });
   chmodSync(path, 0o600);
 }
@@ -101,7 +111,7 @@ export function addBot(name: string, opts: AddBotOptions): void {
   }
 
   const account = opts.account ?? detectAccount();
-  const outPath = opts.output ?? credsPath(name);
+  const outPath = opts.output ?? defaultCredsPath(name);
 
   if (existsSync(outPath) && !opts.force) {
     console.error(`Error: credentials exist at ${outPath}. Use --force to overwrite.`);
@@ -119,7 +129,6 @@ export function addBot(name: string, opts: AddBotOptions): void {
 
   nsc(["add", "user", "-a", account, "-n", name]);
 
-  // Permissions + creds generation wrapped for rollback on failure
   try {
     if (opts.pub) {
       for (const subj of opts.pub.split(",").map((s) => s.trim())) {
@@ -136,10 +145,8 @@ export function addBot(name: string, opts: AddBotOptions): void {
     }
 
     const creds = nsc(["generate", "creds", "-a", account, "-n", name]);
-    ensureCredsDir(outPath);
     writeCredsFile(outPath, creds);
   } catch (err) {
-    // Rollback: delete the partially-configured user
     try { nsc(["delete", "user", "-a", account, "-n", name]); } catch { /* best effort */ }
     throw new Error(`Failed to configure user "${name}" — rolled back. Cause: ${err instanceof Error ? err.message : String(err)}`);
   }
@@ -158,28 +165,42 @@ export interface ReissueBotOptions {
 export function reissueBot(name: string, opts: ReissueBotOptions): void {
   ensureNscInstalled();
   const account = opts.account ?? detectAccount();
-  const outPath = opts.output ?? credsPath(name);
+  const outPath = opts.output ?? defaultCredsPath(name);
 
   if (!userExists(account, name)) {
     console.error(`Error: user "${name}" not found under "${account}".`);
     process.exit(1);
   }
 
+  // Generate new creds BEFORE deleting old user — validate the operation succeeds
+  // before making destructive changes. nsc requires delete+add for new keys,
+  // but we can at least back up the old creds file.
+  if (existsSync(outPath)) {
+    const backup = `${outPath}.bak`;
+    writeFileSync(backup, readFileSync(outPath));
+    chmodSync(backup, 0o600);
+    console.log(`  backup: ${backup}`);
+  }
+
   nsc(["delete", "user", "-a", account, "-n", name]);
 
   try {
     nsc(["add", "user", "-a", account, "-n", name]);
+    const creds = nsc(["generate", "creds", "-a", account, "-n", name]);
+    writeCredsFile(outPath, creds);
   } catch (err) {
     console.error(`CRITICAL: failed to re-create user "${name}" after delete.`);
-    console.error(`The user has been removed but could not be re-created.`);
+    if (existsSync(`${outPath}.bak`)) {
+      console.error(`Old credentials backed up at: ${outPath}.bak`);
+      console.error(`Note: old creds are invalidated — backup is for reference only.`);
+    }
     console.error(`Manual recovery: nsc add user -a ${account} -n ${name}`);
     console.error(`Cause: ${err instanceof Error ? err.message : String(err)}`);
     process.exit(1);
   }
 
-  const creds = nsc(["generate", "creds", "-a", account, "-n", name]);
-  ensureCredsDir(outPath);
-  writeCredsFile(outPath, creds);
+  // Clean up backup on success
+  try { unlinkSync(`${outPath}.bak`); } catch { /* ok if no backup */ }
 
   console.log(`Re-issued credentials for ${name}`);
   console.log(`  credentials: ${outPath} (mode 600)`);
@@ -211,7 +232,7 @@ export function removeBot(name: string, opts: RemoveBotOptions): void {
   console.log(`Removed user: ${name} (account: ${account})`);
 
   if (opts.deleteCreds) {
-    const path = opts.output ?? credsPath(name);
+    const path = opts.output ?? defaultCredsPath(name);
     if (existsSync(path)) {
       unlinkSync(path);
       console.log(`Deleted credentials: ${path}`);
