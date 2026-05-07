@@ -15,6 +15,7 @@
     "fetch-cosign": "bun scripts/fetch-cosign.ts"
   },
   "dependencies": {
+    "@noble/ed25519": "^3.1.0",
     "commander": "^13.0.0",
     "yaml": "^2.7.0"
   },

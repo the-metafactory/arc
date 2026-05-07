@@ -116,6 +116,7 @@ export interface AddBotOptions {
   sub?: string;
   output?: string;
   force?: boolean;
+  withIdentity?: boolean;
 }
 
 export function addBot(name: string, opts: AddBotOptions): void {
@@ -168,6 +169,15 @@ export function addBot(name: string, opts: AddBotOptions): void {
   if (opts.pub) console.log(`  publish: ${opts.pub}`);
   if (opts.sub) console.log(`  subscribe: ${opts.sub}`);
   console.log(`  credentials: ${outPath} (mode 600)`);
+
+  if (opts.withIdentity) {
+    import("./identity").then(({ generateIdentity }) =>
+      generateIdentity(name, account, { force: opts.force }),
+    ).catch((err: Error) => {
+      console.error(`Warning: identity generation failed: ${err.message}`);
+      console.error("NATS credentials were created successfully. Run 'arc identity generate' to retry.");
+    });
+  }
 }
 
 export interface ReissueBotOptions {
