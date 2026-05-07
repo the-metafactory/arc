@@ -8,6 +8,7 @@
 import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync, chmodSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { homedir } from "node:os";
+import { generateIdentity } from "./identity.js";
 
 const DEFAULT_CREDS_DIR = join(homedir(), ".config", "nats");
 const NAMING_RE = /^[a-z][a-z0-9-]*$/;
@@ -119,7 +120,7 @@ export interface AddBotOptions {
   withIdentity?: boolean;
 }
 
-export function addBot(name: string, opts: AddBotOptions): void {
+export async function addBot(name: string, opts: AddBotOptions): Promise<void> {
   ensureNscInstalled();
 
   validateBotName(name);
@@ -171,12 +172,7 @@ export function addBot(name: string, opts: AddBotOptions): void {
   console.log(`  credentials: ${outPath} (mode 600)`);
 
   if (opts.withIdentity) {
-    import("./identity").then(({ generateIdentity }) =>
-      generateIdentity(name, account, { force: opts.force }),
-    ).catch((err: Error) => {
-      console.error(`Warning: identity generation failed: ${err.message}`);
-      console.error("NATS credentials were created successfully. Run 'arc identity generate' to retry.");
-    });
+    await generateIdentity(name, account, { force: opts.force });
   }
 }
 
@@ -253,13 +249,10 @@ export async function setupOperator(account: string, botNames: string[], opts: S
 
   const results: { name: string; ok: boolean; error?: string }[] = [];
 
-  const { generateIdentity } = await import("./identity");
-
   for (const name of botNames) {
     try {
       console.log(`── ${name} ──`);
-      addBot(name, { account, force: opts.force });
-      await generateIdentity(name, account, { force: opts.force });
+      await addBot(name, { account, withIdentity: true, force: opts.force });
       console.log();
       results.push({ name, ok: true });
     } catch (err) {

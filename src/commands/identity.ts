@@ -15,7 +15,8 @@ const CONFIG_BASE = process.env.METAFACTORY_CONFIG_DIR ?? join(homedir(), ".conf
 const KEYS_DIR = join(CONFIG_BASE, "keys");
 const REGISTRY_PATH = join(CONFIG_BASE, "principals.json");
 const DID_RE = /^did:mf:[a-z][a-z0-9._-]+$/;
-const NAMING_RE = /^[a-z][a-z0-9-]*$/;
+const BASE64_RE = /^[A-Za-z0-9+/]+=*$/;
+const NAMING_RE = /^[a-z](?:[a-z0-9]|-(?=[a-z0-9]))*$/;
 
 export interface Principal {
   id: string;
@@ -44,6 +45,17 @@ function keyPath(name: string): string {
   return join(KEYS_DIR, `${name}.key`);
 }
 
+function validatePrincipal(p: unknown, index: number): asserts p is Principal {
+  if (!p || typeof p !== "object") throw new Error(`principals[${index}]: not an object`);
+  const r = p as Record<string, unknown>;
+  if (typeof r.id !== "string" || !DID_RE.test(r.id)) throw new Error(`principals[${index}].id: invalid DID "${r.id}"`);
+  if (typeof r.public_key !== "string" || !BASE64_RE.test(r.public_key) || r.public_key.length < 40) {
+    throw new Error(`principals[${index}].public_key: invalid (must be base64, ≥40 chars)`);
+  }
+  if (typeof r.operator !== "string" || r.operator.length === 0) throw new Error(`principals[${index}].operator: required`);
+  if (!["agent", "service", "operator"].includes(r.type as string)) throw new Error(`principals[${index}].type: must be agent/service/operator`);
+}
+
 function loadRegistry(): PrincipalRegistryFile {
   if (!existsSync(REGISTRY_PATH)) {
     return { version: 1, principals: [], trusted_hubs: [] };
@@ -63,13 +75,17 @@ function saveRegistry(registry: PrincipalRegistryFile): void {
   console.log(`  registry: ${REGISTRY_PATH}`);
 }
 
+function formatDisplayName(name: string): string {
+  return name.split("-").filter(Boolean).map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+}
+
 export async function generateIdentity(
   name: string,
   operator: string,
   opts: { force?: boolean } = {},
 ): Promise<{ publicKeyB64: string; did: string }> {
   if (!NAMING_RE.test(name)) {
-    throw new Error(`Invalid bot name: "${name}" — must be lowercase alphanumeric + hyphens`);
+    throw new Error(`Invalid bot name: "${name}" — lowercase alphanumeric + hyphens, no trailing/consecutive hyphens`);
   }
 
   ensureKeysDir();
@@ -79,101 +95,114 @@ export async function generateIdentity(
     throw new Error(`Signing key already exists at ${kp}. Use --force to overwrite.`);
   }
 
-  const privateKeyBytes = randomBytes(32);
-  const publicKeyBytes = await getPublicKeyAsync(privateKeyBytes);
+  // Set restrictive umask before writing private key
+  const prevUmask = process.umask(0o077);
+  try {
+    const privateKeyBytes = randomBytes(32);
+    const publicKeyBytes = await getPublicKeyAsync(privateKeyBytes);
 
-  const privateKeyB64 = Buffer.from(privateKeyBytes).toString("base64");
-  const publicKeyB64 = Buffer.from(publicKeyBytes).toString("base64");
+    const privateKeyB64 = Buffer.from(privateKeyBytes).toString("base64");
+    const publicKeyB64 = Buffer.from(publicKeyBytes).toString("base64");
 
-  writeFileSync(kp, privateKeyB64, { mode: 0o600 });
-  chmodSync(kp, 0o600);
+    writeFileSync(kp, privateKeyB64, { mode: 0o600 });
 
-  const did = `did:mf:${name}`;
+    const did = `did:mf:${name}`;
 
-  const registry = loadRegistry();
-  const existing = registry.principals.findIndex((p) => p.id === did);
-  const principal: Principal = {
-    id: did,
-    display_name: name.split("-").map((w) => w[0].toUpperCase() + w.slice(1)).join(" "),
-    operator,
-    public_key: publicKeyB64,
-    type: "agent",
-    created_at: new Date().toISOString(),
-  };
+    const registry = loadRegistry();
+    const existing = registry.principals.findIndex((p) => p.id === did);
+    const principal: Principal = {
+      id: did,
+      display_name: formatDisplayName(name),
+      operator,
+      public_key: publicKeyB64,
+      type: "agent",
+      created_at: new Date().toISOString(),
+    };
 
-  if (existing >= 0) {
-    registry.principals[existing] = principal;
-    console.log(`  updated principal: ${did}`);
-  } else {
-    registry.principals.push(principal);
-    console.log(`  added principal: ${did}`);
+    if (existing >= 0) {
+      registry.principals[existing] = principal;
+      console.log(`  updated principal: ${did}`);
+    } else {
+      registry.principals.push(principal);
+      console.log(`  added principal: ${did}`);
+    }
+    saveRegistry(registry);
+
+    console.log(`  signing key: ${kp} (mode 600)`);
+    console.log(`  public key: ${publicKeyB64}`);
+
+    return { publicKeyB64, did };
+  } finally {
+    process.umask(prevUmask);
   }
-  saveRegistry(registry);
-
-  console.log(`  signing key: ${kp} (mode 600)`);
-  console.log(`  public key: ${publicKeyB64}`);
-
-  return { publicKeyB64, did };
 }
 
 export function exportPrincipals(operator?: string): void {
   const registry = loadRegistry();
-  let principals = registry.principals;
 
+  // Default: export only principals that were locally generated (have a key file)
+  // With -a: filter to that operator
+  let principals = registry.principals;
   if (operator) {
     principals = principals.filter((p) => p.operator === operator);
-    if (principals.length === 0) {
-      console.error(`No principals found for operator "${operator}"`);
-      process.exit(1);
-    }
+  } else {
+    principals = principals.filter((p) => {
+      const name = p.id.replace(/^did:mf:/, "");
+      return existsSync(keyPath(name));
+    });
+  }
+
+  if (principals.length === 0) {
+    console.error(operator
+      ? `No principals found for operator "${operator}"`
+      : "No locally-generated principals found (no matching key files)");
+    process.exitCode = 1;
+    return;
   }
 
   const exportData: PrincipalRegistryFile = {
     version: 1,
     principals,
-    trusted_hubs: registry.trusted_hubs,
+    trusted_hubs: [],
   };
 
-  // Output to stdout for piping
   process.stdout.write(JSON.stringify(exportData, null, 2) + "\n");
 }
 
 export function importPrincipals(filePath: string): void {
   if (!existsSync(filePath)) {
     console.error(`File not found: ${filePath}`);
-    process.exit(1);
+    process.exitCode = 1;
+    return;
   }
 
   let incoming: PrincipalRegistryFile;
   try {
     const raw = JSON.parse(readFileSync(filePath, "utf-8"));
     if (raw.version !== 1 || !Array.isArray(raw.principals)) {
-      throw new Error("Invalid format");
+      throw new Error("expected { version: 1, principals: [...] }");
+    }
+    for (let i = 0; i < raw.principals.length; i++) {
+      validatePrincipal(raw.principals[i], i);
     }
     incoming = raw;
   } catch (err) {
     console.error(`Invalid principals file: ${err instanceof Error ? err.message : String(err)}`);
-    process.exit(1);
+    process.exitCode = 1;
+    return;
   }
 
-  for (const p of incoming.principals) {
-    if (!DID_RE.test(p.id)) {
-      console.error(`Skipping invalid DID: "${p.id}"`);
-      continue;
-    }
+  if (incoming.trusted_hubs?.length > 0) {
+    console.log(`  NOTE: trusted_hubs in import file ignored (security boundary — add manually if needed)`);
   }
 
   const registry = loadRegistry();
   let added = 0;
   let updated = 0;
   let skipped = 0;
+  let rejected = 0;
 
   for (const incoming_p of incoming.principals) {
-    if (!DID_RE.test(incoming_p.id)) {
-      skipped++;
-      continue;
-    }
-
     const existing = registry.principals.findIndex((p) => p.id === incoming_p.id);
     if (existing >= 0) {
       const old = registry.principals[existing];
@@ -181,25 +210,24 @@ export function importPrincipals(filePath: string): void {
         skipped++;
         continue;
       }
-      console.log(`  updated: ${incoming_p.id} (key changed)`);
+      // Key conflict: check operator consistency
+      if (old.operator !== incoming_p.operator) {
+        console.error(`  REJECTED: ${incoming_p.id} — operator mismatch (local: ${old.operator}, import: ${incoming_p.operator}). Manual resolution required.`);
+        rejected++;
+        continue;
+      }
+      console.log(`  UPDATED: ${incoming_p.id} (key rotated, same operator ${old.operator})`);
       registry.principals[existing] = incoming_p;
       updated++;
     } else {
-      console.log(`  added: ${incoming_p.id}`);
+      console.log(`  added: ${incoming_p.id} (operator: ${incoming_p.operator})`);
       registry.principals.push(incoming_p);
       added++;
     }
   }
 
-  // Merge trusted_hubs
-  const hubSet = new Set(registry.trusted_hubs);
-  for (const hub of incoming.trusted_hubs ?? []) {
-    hubSet.add(hub);
-  }
-  registry.trusted_hubs = [...hubSet];
-
   saveRegistry(registry);
-  console.log(`Import complete: ${added} added, ${updated} updated, ${skipped} unchanged`);
+  console.log(`Import complete: ${added} added, ${updated} updated, ${skipped} unchanged, ${rejected} rejected`);
 }
 
 export function listPrincipals(): void {
@@ -212,7 +240,8 @@ export function listPrincipals(): void {
 
   console.log(`Principals (${registry.principals.length}):\n`);
   for (const p of registry.principals) {
-    console.log(`  ${p.id}`);
+    const hasKey = existsSync(keyPath(p.id.replace(/^did:mf:/, "")));
+    console.log(`  ${p.id}${hasKey ? " (local)" : ""}`);
     console.log(`    operator: ${p.operator}`);
     console.log(`    type: ${p.type}`);
     console.log(`    key: ${p.public_key.slice(0, 16)}...`);

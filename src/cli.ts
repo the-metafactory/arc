@@ -1188,8 +1188,8 @@ nats
   .option("-o, --output <path>", "Credentials output path")
   .option("--force", "Overwrite existing user")
   .option("--with-identity", "Also generate Myelin signing keypair + register principal")
-  .action((name: string, opts: { account?: string; pub?: string; sub?: string; output?: string; force?: boolean; withIdentity?: boolean }) => {
-    addBot(name, opts);
+  .action(async (name: string, opts: { account?: string; pub?: string; sub?: string; output?: string; force?: boolean; withIdentity?: boolean }) => {
+    await addBot(name, opts);
   });
 
 nats
