@@ -11,7 +11,7 @@ import { homedir } from "node:os";
 import { generateIdentity } from "./identity.js";
 
 const DEFAULT_CREDS_DIR = join(homedir(), ".config", "nats");
-const NAMING_RE = /^[a-z][a-z0-9-]*$/;
+const NAMING_RE = /^[a-z](?:[a-z0-9]|-(?=[a-z0-9]))*$/;
 const NATS_SUBJECT_RE = /^[a-zA-Z0-9.*>_-]+$/;
 
 // NSC config can live in several locations depending on version/platform

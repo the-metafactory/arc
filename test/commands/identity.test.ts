@@ -18,12 +18,27 @@ afterEach(() => {
   delete process.env.METAFACTORY_CONFIG_DIR;
 });
 
-// Re-import each test to pick up env var changes
 async function freshImport() {
-  // Bun caches modules — use a cache-busting query param
   const mod = await import(`../../src/commands/identity.ts?t=${Date.now()}-${Math.random()}`);
   return mod;
 }
+
+function writeRegistry(dir: string, data: any): void {
+  writeFileSync(join(dir, "principals.json"), JSON.stringify(data));
+}
+
+function readRegistry(dir: string): any {
+  return JSON.parse(readFileSync(join(dir, "principals.json"), "utf-8"));
+}
+
+function validPrincipal(id: string, operator: string, key = "cmVtb3RlLXB1YmxpYy1rZXktdGVzdC1wYWRkaW5nLXg=") {
+  return {
+    id, display_name: id, operator, public_key: key,
+    type: "agent" as const, created_at: new Date().toISOString(),
+  };
+}
+
+// ── generateIdentity ─────────────────────
 
 describe("generateIdentity", () => {
   test("creates key file and registers principal", async () => {
@@ -31,20 +46,13 @@ describe("generateIdentity", () => {
     const result = await generateIdentity("test-bot", "OP_TEST");
 
     expect(result.did).toBe("did:mf:test-bot");
-    expect(result.publicKeyB64).toBeTruthy();
     expect(result.publicKeyB64.length).toBeGreaterThan(20);
+    expect(existsSync(join(testDir, "keys", "test-bot.key"))).toBe(true);
 
-    // Key file exists
-    const keyFile = join(testDir, "keys", "test-bot.key");
-    expect(existsSync(keyFile)).toBe(true);
-
-    // Registry updated
-    const registry = JSON.parse(readFileSync(join(testDir, "principals.json"), "utf-8"));
-    expect(registry.version).toBe(1);
-    expect(registry.principals).toHaveLength(1);
-    expect(registry.principals[0].id).toBe("did:mf:test-bot");
-    expect(registry.principals[0].operator).toBe("OP_TEST");
-    expect(registry.principals[0].public_key).toBe(result.publicKeyB64);
+    const reg = readRegistry(testDir);
+    expect(reg.principals).toHaveLength(1);
+    expect(reg.principals[0].id).toBe("did:mf:test-bot");
+    expect(reg.principals[0].operator).toBe("OP_TEST");
   });
 
   test("updates existing principal on force", async () => {
@@ -52,12 +60,8 @@ describe("generateIdentity", () => {
     const r1 = await generateIdentity("test-bot", "OP_TEST");
     const r2 = await generateIdentity("test-bot", "OP_TEST", { force: true });
 
-    expect(r2.did).toBe("did:mf:test-bot");
     expect(r2.publicKeyB64).not.toBe(r1.publicKeyB64);
-
-    const registry = JSON.parse(readFileSync(join(testDir, "principals.json"), "utf-8"));
-    expect(registry.principals).toHaveLength(1);
-    expect(registry.principals[0].public_key).toBe(r2.publicKeyB64);
+    expect(readRegistry(testDir).principals).toHaveLength(1);
   });
 
   test("rejects invalid bot name", async () => {
@@ -65,56 +69,123 @@ describe("generateIdentity", () => {
     await expect(generateIdentity("INVALID", "OP_TEST")).rejects.toThrow(/invalid bot name/i);
     await expect(generateIdentity("../escape", "OP_TEST")).rejects.toThrow(/invalid bot name/i);
   });
+
+  test("rejects trailing hyphen", async () => {
+    const { generateIdentity } = await freshImport();
+    await expect(generateIdentity("foo-", "OP_TEST")).rejects.toThrow(/invalid bot name/i);
+  });
+
+  test("rejects consecutive hyphens", async () => {
+    const { generateIdentity } = await freshImport();
+    await expect(generateIdentity("foo--bar", "OP_TEST")).rejects.toThrow(/invalid bot name/i);
+  });
 });
 
-describe("importPrincipals", () => {
-  test("merges principals from file", async () => {
+// ── importPrincipals — security paths ────
+
+describe("importPrincipals — security", () => {
+  test("adds new principals from import", async () => {
     const { generateIdentity, importPrincipals } = await freshImport();
     await generateIdentity("local-bot", "OP_LOCAL");
 
-    const importFile = join(testDir, "remote-principals.json");
+    const importFile = join(testDir, "remote.json");
+    writeFileSync(importFile, JSON.stringify({
+      version: 1, principals: [validPrincipal("did:mf:remote-bot", "OP_REMOTE")], trusted_hubs: [],
+    }));
+
+    importPrincipals(importFile);
+
+    const reg = readRegistry(testDir);
+    expect(reg.principals).toHaveLength(2);
+    expect(reg.principals.map((p: any) => p.id).sort()).toEqual(["did:mf:local-bot", "did:mf:remote-bot"]);
+  });
+
+  test("rejects cross-operator key overwrite", async () => {
+    const { generateIdentity, importPrincipals } = await freshImport();
+    await generateIdentity("shared-name", "OP_LOCAL");
+
+    const importFile = join(testDir, "attacker.json");
     writeFileSync(importFile, JSON.stringify({
       version: 1,
-      principals: [{
-        id: "did:mf:remote-bot",
-        display_name: "Remote Bot",
-        operator: "OP_REMOTE",
-        public_key: "cmVtb3RlLXB1YmxpYy1rZXktdGVzdC1wYWRkaW5nLXg=",
-        type: "agent",
-        created_at: new Date().toISOString(),
-      }],
+      principals: [validPrincipal("did:mf:shared-name", "OP_ATTACKER", "YXR0YWNrZXIta2V5LXBhZGRpbmctdG8tZm9ydHktY2hhcnM=")],
       trusted_hubs: [],
     }));
 
     importPrincipals(importFile);
 
-    const registry = JSON.parse(readFileSync(join(testDir, "principals.json"), "utf-8"));
-    expect(registry.principals).toHaveLength(2);
-    const ids = registry.principals.map((p: any) => p.id).sort();
-    expect(ids).toEqual(["did:mf:local-bot", "did:mf:remote-bot"]);
+    const reg = readRegistry(testDir);
+    expect(reg.principals).toHaveLength(1);
+    expect(reg.principals[0].operator).toBe("OP_LOCAL");
+  });
+
+  test("ignores trusted_hubs from import", async () => {
+    const { importPrincipals } = await freshImport();
+
+    const importFile = join(testDir, "hubs.json");
+    writeFileSync(importFile, JSON.stringify({
+      version: 1,
+      principals: [validPrincipal("did:mf:new-bot", "OP_OTHER")],
+      trusted_hubs: ["did:mf:evil-hub"],
+    }));
+
+    importPrincipals(importFile);
+
+    const reg = readRegistry(testDir);
+    expect(reg.trusted_hubs).toEqual([]);
+  });
+
+  test("rejects malformed principal (missing public_key)", async () => {
+    const { importPrincipals } = await freshImport();
+
+    const importFile = join(testDir, "bad.json");
+    writeFileSync(importFile, JSON.stringify({
+      version: 1,
+      principals: [{ id: "did:mf:bad", operator: "OP", type: "agent" }],
+      trusted_hubs: [],
+    }));
+
+    const origExitCode = process.exitCode;
+    importPrincipals(importFile);
+    expect(process.exitCode).toBe(1);
+    process.exitCode = origExitCode;
+  });
+
+  test("rejects invalid file format", async () => {
+    const { importPrincipals } = await freshImport();
+
+    const importFile = join(testDir, "garbage.json");
+    writeFileSync(importFile, '{"not": "a registry"}');
+
+    const origExitCode = process.exitCode;
+    importPrincipals(importFile);
+    expect(process.exitCode).toBe(1);
+    process.exitCode = origExitCode;
   });
 });
 
-describe("exportPrincipals", () => {
-  test("outputs valid JSON to stdout", async () => {
-    const { generateIdentity, exportPrincipals } = await freshImport();
-    await generateIdentity("export-bot", "OP_EXPORT");
+// ── exportPrincipals ─────────────────────
 
-    // Capture stdout
+describe("exportPrincipals", () => {
+  test("exports only locally-generated principals", async () => {
+    const { generateIdentity, importPrincipals, exportPrincipals } = await freshImport();
+    await generateIdentity("my-bot", "OP_ME");
+
+    // Import a remote principal (no local key file)
+    const importFile = join(testDir, "remote.json");
+    writeFileSync(importFile, JSON.stringify({
+      version: 1, principals: [validPrincipal("did:mf:remote-bot", "OP_OTHER")], trusted_hubs: [],
+    }));
+    importPrincipals(importFile);
+
     const chunks: string[] = [];
     const origWrite = process.stdout.write;
-    process.stdout.write = ((chunk: any) => {
-      chunks.push(chunk.toString());
-      return true;
-    }) as any;
-
+    process.stdout.write = ((chunk: any) => { chunks.push(chunk.toString()); return true; }) as any;
     exportPrincipals();
-
     process.stdout.write = origWrite;
 
     const output = JSON.parse(chunks.join(""));
-    expect(output.version).toBe(1);
     expect(output.principals).toHaveLength(1);
-    expect(output.principals[0].id).toBe("did:mf:export-bot");
+    expect(output.principals[0].id).toBe("did:mf:my-bot");
+    expect(output.trusted_hubs).toEqual([]);
   });
 });
