@@ -37,6 +37,7 @@ import {
 import type { CatalogEntry, ArtifactType, PackageTier, RegistrySource, SourceType } from "./types.js";
 import { login } from "./commands/login.js";
 import { logout } from "./commands/logout.js";
+import { addBot, reissueBot, listBots, removeBot } from "./commands/nats.js";
 import { bundle, formatBundle } from "./commands/bundle.js";
 import { publish, formatPublish } from "./commands/publish.js";
 import {
@@ -1173,8 +1174,6 @@ catalog
 
 // ── NATS bot identity commands ─────────────────────────────
 
-import { addBot, reissueBot, listBots, removeBot } from "./commands/nats.js";
-
 const nats = program
   .command("nats")
   .description("NATS bot identity management — provision per-bot users");
@@ -1212,8 +1211,9 @@ nats
   .command("remove-bot <name>")
   .description("Revoke a bot user and optionally delete credentials")
   .option("-a, --account <account>", "NSC account name")
+  .option("-o, --output <path>", "Credentials file path to delete (if --delete-creds)")
   .option("--delete-creds", "Also delete the credentials file")
-  .action((name: string, opts: { account?: string; deleteCreds?: boolean }) => {
+  .action((name: string, opts: { account?: string; output?: string; deleteCreds?: boolean }) => {
     removeBot(name, opts);
   });
 
