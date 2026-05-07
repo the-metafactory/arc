@@ -37,6 +37,7 @@ import {
 import type { CatalogEntry, ArtifactType, PackageTier, RegistrySource, SourceType } from "./types.js";
 import { login } from "./commands/login.js";
 import { logout } from "./commands/logout.js";
+import { addBot, reissueBot, listBots, removeBot } from "./commands/nats.js";
 import { bundle, formatBundle } from "./commands/bundle.js";
 import { publish, formatPublish } from "./commands/publish.js";
 import {
@@ -1169,6 +1170,51 @@ catalog
       console.error(`Error: ${result.error}`);
       process.exit(1);
     }
+  });
+
+// ── NATS bot identity commands ─────────────────────────────
+
+const nats = program
+  .command("nats")
+  .description("NATS bot identity management — provision per-bot users");
+
+nats
+  .command("add-bot <name>")
+  .description("Issue a new per-bot NATS user with credentials")
+  .option("-a, --account <account>", "NSC account name (default: active account)")
+  .option("--pub <subjects>", "Comma-separated publish permissions")
+  .option("--sub <subjects>", "Comma-separated subscribe permissions")
+  .option("-o, --output <path>", "Credentials output path")
+  .option("--force", "Overwrite existing user")
+  .action((name: string, opts: { account?: string; pub?: string; sub?: string; output?: string; force?: boolean }) => {
+    addBot(name, opts);
+  });
+
+nats
+  .command("reissue-bot <name>")
+  .description("Revoke and re-issue credentials for a bot user")
+  .option("-a, --account <account>", "NSC account name")
+  .option("-o, --output <path>", "Credentials output path")
+  .action((name: string, opts: { account?: string; output?: string }) => {
+    reissueBot(name, opts);
+  });
+
+nats
+  .command("list-bots")
+  .description("List bot users under current operator account")
+  .option("-a, --account <account>", "NSC account name")
+  .action((opts: { account?: string }) => {
+    listBots(opts.account);
+  });
+
+nats
+  .command("remove-bot <name>")
+  .description("Revoke a bot user and optionally delete credentials")
+  .option("-a, --account <account>", "NSC account name")
+  .option("-o, --output <path>", "Credentials file path to delete (if --delete-creds)")
+  .option("--delete-creds", "Also delete the credentials file")
+  .action((name: string, opts: { account?: string; output?: string; deleteCreds?: boolean }) => {
+    removeBot(name, opts);
   });
 
 program.parse();
