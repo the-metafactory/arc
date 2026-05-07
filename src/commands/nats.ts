@@ -8,9 +8,10 @@
 import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync, chmodSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { homedir } from "node:os";
+import { generateIdentity } from "./identity.js";
 
 const DEFAULT_CREDS_DIR = join(homedir(), ".config", "nats");
-const NAMING_RE = /^[a-z][a-z0-9-]*$/;
+const NAMING_RE = /^[a-z](?:[a-z0-9]|-(?=[a-z0-9]))*$/;
 const NATS_SUBJECT_RE = /^[a-zA-Z0-9.*>_-]+$/;
 
 // NSC config can live in several locations depending on version/platform
@@ -116,9 +117,10 @@ export interface AddBotOptions {
   sub?: string;
   output?: string;
   force?: boolean;
+  withIdentity?: boolean;
 }
 
-export function addBot(name: string, opts: AddBotOptions): void {
+export async function addBot(name: string, opts: AddBotOptions): Promise<void> {
   ensureNscInstalled();
 
   validateBotName(name);
@@ -168,6 +170,10 @@ export function addBot(name: string, opts: AddBotOptions): void {
   if (opts.pub) console.log(`  publish: ${opts.pub}`);
   if (opts.sub) console.log(`  subscribe: ${opts.sub}`);
   console.log(`  credentials: ${outPath} (mode 600)`);
+
+  if (opts.withIdentity) {
+    await generateIdentity(name, account, { force: opts.force });
+  }
 }
 
 export interface ReissueBotOptions {
@@ -230,6 +236,43 @@ export interface RemoveBotOptions {
   account?: string;
   deleteCreds?: boolean;
   output?: string;
+}
+
+export interface SetupOperatorOptions {
+  force?: boolean;
+}
+
+export async function setupOperator(account: string, botNames: string[], opts: SetupOperatorOptions): Promise<void> {
+  ensureNscInstalled();
+
+  console.log(`Setting up ${botNames.length} bot(s) for operator ${account}...\n`);
+
+  const results: { name: string; ok: boolean; error?: string }[] = [];
+
+  for (const name of botNames) {
+    try {
+      console.log(`── ${name} ──`);
+      await addBot(name, { account, withIdentity: true, force: opts.force });
+      console.log();
+      results.push({ name, ok: true });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`  FAILED: ${msg}\n`);
+      results.push({ name, ok: false, error: msg });
+    }
+  }
+
+  console.log(`\n── Summary ──`);
+  const ok = results.filter(r => r.ok);
+  const failed = results.filter(r => !r.ok);
+  console.log(`  ${ok.length}/${botNames.length} bots provisioned`);
+  if (failed.length > 0) {
+    console.log(`  Failed: ${failed.map(r => r.name).join(", ")}`);
+  }
+  console.log(`\nNext steps:`);
+  console.log(`  1. arc identity export > ${account.toLowerCase()}-principals.json`);
+  console.log(`  2. Send the file to other operators`);
+  console.log(`  3. arc identity import <other-operator>-principals.json`);
 }
 
 export function removeBot(name: string, opts: RemoveBotOptions): void {

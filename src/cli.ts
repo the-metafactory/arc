@@ -37,7 +37,8 @@ import {
 import type { CatalogEntry, ArtifactType, PackageTier, RegistrySource, SourceType } from "./types.js";
 import { login } from "./commands/login.js";
 import { logout } from "./commands/logout.js";
-import { addBot, reissueBot, listBots, removeBot } from "./commands/nats.js";
+import { addBot, reissueBot, listBots, removeBot, setupOperator } from "./commands/nats.js";
+import { generateIdentity, exportPrincipals, importPrincipals, listPrincipals } from "./commands/identity.js";
 import { bundle, formatBundle } from "./commands/bundle.js";
 import { publish, formatPublish } from "./commands/publish.js";
 import {
@@ -1186,8 +1187,9 @@ nats
   .option("--sub <subjects>", "Comma-separated subscribe permissions")
   .option("-o, --output <path>", "Credentials output path")
   .option("--force", "Overwrite existing user")
-  .action((name: string, opts: { account?: string; pub?: string; sub?: string; output?: string; force?: boolean }) => {
-    addBot(name, opts);
+  .option("--with-identity", "Also generate Myelin signing keypair + register principal")
+  .action(async (name: string, opts: { account?: string; pub?: string; sub?: string; output?: string; force?: boolean; withIdentity?: boolean }) => {
+    await addBot(name, opts);
   });
 
 nats
@@ -1215,6 +1217,57 @@ nats
   .option("--delete-creds", "Also delete the credentials file")
   .action((name: string, opts: { account?: string; output?: string; deleteCreds?: boolean }) => {
     removeBot(name, opts);
+  });
+
+nats
+  .command("setup-operator <account>")
+  .description("Provision multiple bots with NATS creds + signing identity in one command")
+  .requiredOption("--bots <names>", "Comma-separated bot names (e.g. jc-pilot,jc-luna,jc-ivy)")
+  .option("--force", "Overwrite existing users and keys")
+  .action(async (account: string, opts: { bots: string; force?: boolean }) => {
+    const botNames = opts.bots.split(",").map(s => s.trim()).filter(Boolean);
+    if (botNames.length === 0) {
+      console.error("Error: --bots requires at least one bot name");
+      process.exit(1);
+    }
+    await setupOperator(account, botNames, { force: opts.force });
+  });
+
+// ── Identity management commands ──────────────────────────
+
+const identity = program
+  .command("identity")
+  .description("Myelin signing identity — keypairs, principals, export/import");
+
+identity
+  .command("generate <name>")
+  .description("Generate Ed25519 signing keypair and register principal")
+  .requiredOption("-a, --account <account>", "Operator account (used as principal.operator)")
+  .option("--force", "Overwrite existing key")
+  .action(async (name: string, opts: { account: string; force?: boolean }) => {
+    await generateIdentity(name, opts.account, { force: opts.force });
+  });
+
+identity
+  .command("list")
+  .description("List registered principals")
+  .action(() => {
+    listPrincipals();
+  });
+
+identity
+  .command("export")
+  .description("Export principals to stdout (pipe to file for sharing)")
+  .option("-a, --account <account>", "Filter to one operator's principals")
+  .action((opts: { account?: string }) => {
+    exportPrincipals(opts.account);
+  });
+
+identity
+  .command("import <file>")
+  .description("Import principals from another operator's export file")
+  .action((file: string) => {
+    importPrincipals(file);
   });
 
 program.parse();
