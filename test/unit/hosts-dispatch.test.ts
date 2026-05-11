@@ -2,7 +2,7 @@ import { describe, test, expect } from "bun:test";
 import { mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { hostPathFor } from "../../src/lib/hosts/dispatch.js";
+import { hostPathFor, requireHostDir } from "../../src/lib/hosts/dispatch.js";
 import { createPaths, getDefaultHost } from "../../src/lib/paths.js";
 import { createArtifactSymlinks } from "../../src/lib/artifact-installer.js";
 import type { ArcManifest, HostAdapter } from "../../src/types.js";
@@ -155,5 +155,48 @@ describe("createArtifactSymlinks null-guard throws", () => {
     } finally {
       rmSync(tmp, { recursive: true, force: true });
     }
+  });
+});
+
+describe("requireHostDir", () => {
+  test("returns the directory for supported types (passthrough of hostPathFor)", () => {
+    const host = getDefaultHost({ root: "/tmp/test/.claude" });
+    expect(requireHostDir(host, "skill")).toBe("/tmp/test/.claude/skills");
+    expect(requireHostDir(host, "agent")).toBe("/tmp/test/.claude/agents");
+    expect(requireHostDir(host, "prompt")).toBe("/tmp/test/.claude/commands");
+    expect(requireHostDir(host, "tool")).toBe("/tmp/test/.claude/bin");
+  });
+
+  test("throws with default message when hostPathFor returns null", () => {
+    const host = getDefaultHost({ root: "/tmp/test/.claude" });
+    expect(() => requireHostDir(host, "rules")).toThrow(
+      /Host claude-code does not support rules artifacts/,
+    );
+  });
+
+  test("accepts a custom description for context-specific guards", () => {
+    const host = getDefaultHost({ root: "/tmp/test/.claude" });
+    expect(() =>
+      requireHostDir(host, "library", "expose a registry for library artifacts"),
+    ).toThrow(
+      /Host claude-code does not expose a registry for library artifacts/,
+    );
+  });
+
+  test("throws with host id baked into the error message", () => {
+    const stubHost = {
+      id: "claude-code" as const,
+      detect: () => false,
+      paths: {
+        root: "",
+        skillsDir: "",
+        agentsDir: "",
+        promptsDir: "",
+        binDir: "",
+        settingsPath: "",
+      },
+      supports: () => false,
+    };
+    expect(() => requireHostDir(stubHost, "skill")).toThrow(/^Host claude-code/);
   });
 });

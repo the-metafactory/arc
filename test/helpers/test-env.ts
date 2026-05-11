@@ -10,16 +10,30 @@ import { join } from "path";
 import { tmpdir } from "os";
 import { Database } from "bun:sqlite";
 import YAML from "yaml";
-import { createPaths } from "../../src/lib/paths.js";
+import {
+  createArcPaths,
+  createPaths,
+  ensureDirectories,
+  getDefaultHost,
+} from "../../src/lib/paths.js";
 import { openDatabase } from "../../src/lib/db.js";
-import { ensureDirectories } from "../../src/lib/paths.js";
-import type { PaiPaths } from "../../src/types.js";
+import type { ArcPaths, HostAdapter, PaiPaths } from "../../src/types.js";
 
 export interface TestEnv {
   /** Root temp directory for this test */
   root: string;
-  /** PaiPaths pointing to temp directories */
+  /**
+   * Combined arc + host paths for back-compat.
+   *
+   * @deprecated Use `env.arc` for arc state paths and `env.host.paths` for
+   *   host install paths. Kept during the #117 migration so existing tests
+   *   keep passing; will be removed once all test sites migrate.
+   */
   paths: PaiPaths;
+  /** arc's host-independent state paths (configRoot, dbPath, …). */
+  arc: ArcPaths;
+  /** Target host adapter (Claude Code by default, with paths rooted at the temp dir). */
+  host: HostAdapter;
   /** Open database for this test */
   db: Database;
   /** Clean up temp directory and close database */
@@ -33,32 +47,54 @@ export interface TestEnv {
 export async function createTestEnv(): Promise<TestEnv> {
   const root = await mkdtemp(join(tmpdir(), "arc-test-"));
 
-  const paths = createPaths({
-    claudeRoot: join(root, ".claude"),
-    configRoot: join(root, ".config", "pai"),
-    skillsDir: join(root, ".claude", "skills"),
-    agentsDir: join(root, ".claude", "agents"),
-    promptsDir: join(root, ".claude", "commands"),
-    binDir: join(root, ".claude", "bin"),
+  const claudeRoot = join(root, ".claude");
+  const configRoot = join(root, ".config", "pai");
+
+  const arc = createArcPaths({
+    configRoot,
+    reposDir: join(configRoot, "pkg", "repos"),
+    cachePath: join(configRoot, "pkg", "cache"),
+    dbPath: join(configRoot, "packages.db"),
+    sourcesPath: join(configRoot, "sources.yaml"),
+    secretsDir: join(configRoot, "secrets"),
+    runtimeDir: join(configRoot, "skills"),
+    actionsDir: join(configRoot, "actions"),
     shimDir: join(root, "bin"),
-    reposDir: join(root, ".config", "pai", "pkg", "repos"),
-    dbPath: join(root, ".config", "pai", "packages.db"),
-    secretsDir: join(root, ".config", "pai", "secrets"),
-    runtimeDir: join(root, ".config", "pai", "skills"),
     catalogPath: join(root, "catalog.yaml"),
     registryPath: join(root, "registry.yaml"),
-    sourcesPath: join(root, ".config", "pai", "sources.yaml"),
-    cachePath: join(root, ".config", "pai", "pkg", "cache"),
-    actionsDir: join(root, ".config", "pai", "actions"),
-    settingsPath: join(root, ".claude", "settings.json"),
+  });
+  const host = getDefaultHost({ root: claudeRoot });
+
+  // Compose the legacy PaiPaths object from arc + host for back-compat
+  // consumers. Once tests migrate to env.arc / env.host.paths this can go.
+  const paths = createPaths({
+    claudeRoot,
+    configRoot,
+    skillsDir: host.paths.skillsDir,
+    agentsDir: host.paths.agentsDir,
+    promptsDir: host.paths.promptsDir,
+    binDir: host.paths.binDir,
+    shimDir: arc.shimDir,
+    reposDir: arc.reposDir,
+    dbPath: arc.dbPath,
+    secretsDir: arc.secretsDir,
+    runtimeDir: arc.runtimeDir,
+    catalogPath: arc.catalogPath,
+    registryPath: arc.registryPath,
+    sourcesPath: arc.sourcesPath,
+    cachePath: arc.cachePath,
+    actionsDir: arc.actionsDir,
+    settingsPath: host.paths.settingsPath,
   });
 
   await ensureDirectories(paths);
-  const db = openDatabase(paths.dbPath);
+  const db = openDatabase(arc.dbPath);
 
   return {
     root,
     paths,
+    arc,
+    host,
     db,
     cleanup: async () => {
       db.close();
