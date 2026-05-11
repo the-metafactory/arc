@@ -150,9 +150,21 @@ describe("getDefaultHost", () => {
     expect(host.supports("action")).toBe(false);
   });
 
-  test("detect() returns boolean", () => {
+  test("detect() returns false when the host root does not exist", () => {
     const host = getDefaultHost({ root: "/tmp/definitely-does-not-exist-xyz" });
     expect(host.detect()).toBe(false);
+  });
+
+  test("detect() returns true when the host root exists", () => {
+    // Positive path matters more than the negative one — a false positive in
+    // Phase 2 would silently activate the wrong adapter.
+    const root = mkdtempSync(join(tmpdir(), "arc-host-detect-"));
+    try {
+      const host = getDefaultHost({ root });
+      expect(host.detect()).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 
