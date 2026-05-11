@@ -237,8 +237,7 @@ export async function createArtifactSymlinks(opts: {
     }
 
     case "skill":
-    case "system":
-    default: {
+    case "system": {
       // Skills: symlink skill/ subdirectory (or root) to the host's skillsDir.
       const skillsDir = hostPathFor(host, type);
       if (!skillsDir) {
@@ -253,21 +252,33 @@ export async function createArtifactSymlinks(opts: {
         await linkTracked(installDir, skillLinkPath);
       }
 
-      // Create bin symlinks and shims for all CLI entries (skills with CLI).
-      // binDir comes from the same host as the skill install — they ship together.
-      const binDir = hostPathFor(host, "tool");
-      if (!binDir) {
-        throw new Error(`Host ${host.id} does not expose a bin directory for skill CLIs`);
-      }
+      // CLI symlinks + shims only when the skill declares CLI entries.
+      // The binDir lookup must stay inside this guard so a future adapter
+      // that supports skills but exposes no bin directory still installs
+      // pure-content skills cleanly.
       const cliEntries = extractAllCliInfo(manifest);
-      for (const entry of cliEntries) {
-        const binLinkPath = join(binDir, entry.binName);
-        await linkTracked(installDir, binLinkPath);
-      }
       if (cliEntries.length) {
+        const binDir = hostPathFor(host, "tool");
+        if (!binDir) {
+          throw new Error(
+            `Host ${host.id} does not expose a bin directory for skill CLIs`,
+          );
+        }
+        for (const entry of cliEntries) {
+          const binLinkPath = join(binDir, entry.binName);
+          await linkTracked(installDir, binLinkPath);
+        }
         await shimTracked();
       }
       break;
+    }
+
+    default: {
+      // Library is unwound at install.ts:181 before reaching this dispatch;
+      // any other value is a programming bug, not a user-facing error.
+      throw new Error(
+        `Unsupported artifact type "${type as string}" in createArtifactSymlinks`,
+      );
     }
   }
 

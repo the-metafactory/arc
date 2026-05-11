@@ -108,4 +108,52 @@ describe("createArtifactSymlinks null-guard throws", () => {
       rmSync(tmp, { recursive: true, force: true });
     }
   });
+
+  test("skills without CLI entries install cleanly even when host has no binDir", async () => {
+    // Carryover from Holly's review on #119: the binDir guard used to fire
+    // unconditionally for every skill install. A skill with zero CLI
+    // entries doesn't need binDir, so a future adapter that supports
+    // skills but exposes no binDir should still install pure-content
+    // skills successfully.
+    const tmp = mkdtempSync(join(tmpdir(), "arc-skill-nocli-"));
+    try {
+      const paths = createPaths({
+        claudeRoot: join(tmp, ".claude"),
+        configRoot: join(tmp, ".config", "metafactory"),
+      });
+      // Host that exposes skillsDir but no binDir.
+      const skillsOnlyHost: HostAdapter = {
+        id: "claude-code",
+        detect: () => true,
+        paths: {
+          root: paths.claudeRoot,
+          skillsDir: join(paths.claudeRoot, "skills"),
+          agentsDir: "",
+          promptsDir: "",
+          binDir: "",
+          settingsPath: "",
+        },
+        supports: () => true,
+      };
+      const manifest: ArcManifest = {
+        name: "pure-content-skill",
+        version: "1.0.0",
+        type: "skill",
+      };
+
+      const result = await createArtifactSymlinks({
+        type: "skill",
+        manifest,
+        paths,
+        host: skillsOnlyHost,
+        installDir: tmp,
+        quiet: true,
+      });
+
+      expect(result.record.symlinks.length).toBe(1);
+      expect(result.record.shims.names.length).toBe(0);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
 });
