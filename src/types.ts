@@ -486,7 +486,15 @@ export interface HostAdapter {
   detect(): boolean;
   /** Per-host install paths. */
   paths: HostPaths;
-  /** Whether this host accepts the given artifact type. */
+  /**
+   * Whether this host *recognizes* the given artifact type.
+   *
+   * Note: `supports(type) === true` does NOT imply
+   * `hostPathFor(host, type) !== null`. Some types (`component`, `rules`,
+   * `library`) are recognized but don't install into a host directory —
+   * `hostPathFor()` returns `null` for them. The two predicates answer
+   * different questions; never bridge them.
+   */
   supports(type: ArtifactType): boolean;
 }
 

@@ -1,6 +1,11 @@
 import { describe, test, expect } from "bun:test";
+import { mkdtempSync, rmSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
 import { hostPathFor } from "../../src/lib/hosts/dispatch.js";
-import { getDefaultHost } from "../../src/lib/paths.js";
+import { createPaths, getDefaultHost } from "../../src/lib/paths.js";
+import { createArtifactSymlinks } from "../../src/lib/artifact-installer.js";
+import type { ArcManifest, HostAdapter } from "../../src/types.js";
 
 describe("hostPathFor", () => {
   const host = getDefaultHost({ root: "/tmp/test/.claude" });
@@ -43,5 +48,64 @@ describe("hostPathFor", () => {
 
   test("returns null for action (arc state, not host)", () => {
     expect(hostPathFor(host, "action")).toBeNull();
+  });
+});
+
+describe("createArtifactSymlinks null-guard throws", () => {
+  // Stub adapter with empty host paths — fires the `if (!dir) throw`
+  // branches in artifact-installer's switch when a future host adapter
+  // doesn't expose a directory for a given artifact type. With only the
+  // Claude-Code adapter shipping today, this is the only way to exercise
+  // those throws (see Holly's review on #119).
+  function makeEmptyPathHost(): HostAdapter {
+    return {
+      id: "claude-code",
+      detect: () => false,
+      paths: {
+        root: "",
+        skillsDir: "",
+        agentsDir: "",
+        promptsDir: "",
+        binDir: "",
+        settingsPath: "",
+      },
+      supports: () => false,
+    };
+  }
+
+  test("hostPathFor returns falsy for skill when host paths are empty", () => {
+    // The artifact-installer guard is `if (!dir)`, which catches both null
+    // and empty string — the runtime safety net works for both shapes.
+    const stub = makeEmptyPathHost();
+    expect(Boolean(hostPathFor(stub, "skill"))).toBe(false);
+  });
+
+  test("createArtifactSymlinks throws when the host has no agent directory", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "arc-guard-test-"));
+    try {
+      const paths = createPaths({
+        claudeRoot: join(tmp, ".claude"),
+        configRoot: join(tmp, ".config", "metafactory"),
+      });
+      const stub = makeEmptyPathHost();
+      const manifest: ArcManifest = {
+        name: "stub-agent",
+        version: "1.0.0",
+        type: "agent",
+      };
+
+      await expect(
+        createArtifactSymlinks({
+          type: "agent",
+          manifest,
+          paths,
+          host: stub,
+          installDir: tmp,
+          quiet: true,
+        }),
+      ).rejects.toThrow(/does not support agent artifacts/);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
   });
 });

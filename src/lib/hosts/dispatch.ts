@@ -18,6 +18,20 @@ import type { ArtifactType, HostAdapter } from "../../types.js";
  * Returning `null` is the right "I cannot install this" signal — callers
  * should fall back to the arc-state path or the consumer repo, never invent
  * a host directory the adapter didn't promise.
+ *
+ * ## Not equivalent to `HostAdapter.supports()`
+ *
+ * The two answer different questions:
+ *
+ *   - `supports(type)` → "does the host *recognize* this artifact type?"
+ *   - `hostPathFor(host, type)` → "does this type *install into* a host
+ *     directory, and if so, where?"
+ *
+ * `host.supports("component")` is `true` (Claude Code recognizes components)
+ * but `hostPathFor(host, "component")` is `null` (components don't install
+ * into a host directory). Don't bridge them — calling
+ * `hostPathFor(host, type)!` after a positive `supports()` check will hit a
+ * null on component / rules / library.
  */
 export function hostPathFor(
   host: HostAdapter,
