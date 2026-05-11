@@ -416,45 +416,101 @@ export interface AuditWarning {
   risk: RiskLevel;
 }
 
-/** Configurable paths — injected for test isolation */
-export interface PaiPaths {
-  /** Root of ~/.claude equivalent */
-  claudeRoot: string;
-  /** Skills directory (~/.claude/skills/) */
-  skillsDir: string;
-  /** Agents directory (~/.claude/agents/) */
-  agentsDir: string;
-  /** Prompts/commands directory (~/.claude/commands/) */
-  promptsDir: string;
-  /** Bin directory (~/.claude/bin/) */
-  binDir: string;
-  /** Package repos (~/.config/metafactory/pkg/repos/) */
-  reposDir: string;
-  /** Database path (~/.config/metafactory/packages.db) */
-  dbPath: string;
+// ── Host adapter types (multi-backend support, see issue #117) ─────
+// Split of legacy PaiPaths into two concerns:
+//   - ArcPaths: arc's own state, host-independent
+//   - HostPaths + HostAdapter: per-backend install dirs and behavior
+
+/**
+ * Supported agentic backends. The union expands when each adapter lands so
+ * the type stays truthful: a value of `HostId` should always correspond to
+ * an actually implemented `HostAdapter`. Phase 2 of #117 adds `"codex"`,
+ * `"cursor"`, etc. as those adapters arrive.
+ */
+export type HostId = "claude-code";
+
+/** arc's own state — host-independent. Lives under ~/.config/metafactory/. */
+export interface ArcPaths {
   /** Config root (~/.config/metafactory/) */
   configRoot: string;
+  /** Package repos (~/.config/metafactory/pkg/repos/) */
+  reposDir: string;
+  /** Remote registry cache directory (~/.config/metafactory/pkg/cache/) */
+  cachePath: string;
+  /** Database path (~/.config/metafactory/packages.db) */
+  dbPath: string;
+  /** Sources config path (~/.config/metafactory/sources.yaml) */
+  sourcesPath: string;
   /** Secrets directory (~/.config/metafactory/secrets/) */
   secretsDir: string;
   /** Runtime state (~/.config/metafactory/skills/) */
   runtimeDir: string;
-  /** PATH-accessible shim directory (~/bin/) */
+  /** Pipelines directory (~/.config/metafactory/pipelines/) */
+  pipelinesDir: string;
+  /** Actions directory (~/.config/metafactory/actions/) */
+  actionsDir: string;
+  /** PATH-accessible shim directory (~/bin/) — shared across hosts */
   shimDir: string;
   /** Catalog file path (repo-root/catalog.yaml) */
   catalogPath: string;
   /** Registry file path (repo-root/registry.yaml) */
   registryPath: string;
-  /** Sources config path (~/.config/metafactory/sources.yaml) */
-  sourcesPath: string;
-  /** Remote registry cache directory (~/.config/metafactory/pkg/cache/) */
-  cachePath: string;
-  /** Pipelines directory (~/.config/metafactory/pipelines/) */
-  pipelinesDir: string;
-  /** Actions directory (~/.config/metafactory/actions/) */
-  actionsDir: string;
-  /** Claude settings path (~/.claude/settings.json) */
+}
+
+/** Per-host install paths. Different backends place artifacts in different roots. */
+export interface HostPaths {
+  /** Host root (e.g. ~/.claude/, ~/.codex/, ~/.cursor/) */
+  root: string;
+  /** Skills directory (e.g. ~/.claude/skills/, ~/.codex/skills/) */
+  skillsDir: string;
+  /** Agents directory (Claude Code only today) */
+  agentsDir: string;
+  /** Slash commands/prompts directory */
+  promptsDir: string;
+  /** Tool bin directory (e.g. ~/.claude/bin/) */
+  binDir: string;
+  /** Host settings file (e.g. ~/.claude/settings.json, ~/.codex/config.toml) */
   settingsPath: string;
 }
+
+/**
+ * Host adapter — describes one agentic backend (Claude Code, Codex CLI, Cursor, …).
+ *
+ * Phase 1 (this PR): interface + Claude-Code default implementation. No dispatch yet.
+ * Phase 2: install/remove dispatch moves through `installArtifact()` and `removeArtifact()`.
+ * Phase 3: per-host MCP writers (out of scope for #117).
+ */
+export interface HostAdapter {
+  id: HostId;
+  /** True when this host is installed/configured on the system. */
+  detect(): boolean;
+  /** Per-host install paths. */
+  paths: HostPaths;
+  /** Whether this host accepts the given artifact type. */
+  supports(type: ArtifactType): boolean;
+}
+
+/**
+ * Configurable paths — injected for test isolation.
+ *
+ * @deprecated Use ArcPaths + HostAdapter instead. Will be removed in Phase 3 of #117.
+ *   Today kept as an intersection alias so existing call sites keep compiling while
+ *   the migration runs incrementally.
+ */
+export type PaiPaths = ArcPaths & {
+  /** @deprecated Use HostAdapter.paths.root */
+  claudeRoot: string;
+  /** @deprecated Use HostAdapter.paths.skillsDir */
+  skillsDir: string;
+  /** @deprecated Use HostAdapter.paths.agentsDir */
+  agentsDir: string;
+  /** @deprecated Use HostAdapter.paths.promptsDir */
+  promptsDir: string;
+  /** @deprecated Use HostAdapter.paths.binDir */
+  binDir: string;
+  /** @deprecated Use HostAdapter.paths.settingsPath */
+  settingsPath: string;
+};
 
 // ── Bundle and publish types ─────────────────────────────────
 
