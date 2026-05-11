@@ -23,12 +23,7 @@ import { extractRepoName } from "../lib/repo-name.js";
 
 export interface InstallOptions {
   paths: PaiPaths;
-  /**
-   * Target host adapter. Defaults to the Claude-Code adapter when omitted —
-   * Phase 2 of #117 keeps every existing caller working unchanged. Callers
-   * that want to install into a specific backend (Codex, Cursor, …) pass
-   * their adapter explicitly once Phase 2's host detection lands.
-   */
+  /** Target host adapter. Defaults to Claude-Code when omitted. */
   host?: HostAdapter;
   db: Database;
   repoUrl: string;

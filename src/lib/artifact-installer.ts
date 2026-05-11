@@ -71,13 +71,7 @@ export async function createArtifactSymlinks(opts: {
   type: ArtifactType | "rules" | "system";
   manifest: ArcManifest;
   paths: PaiPaths;
-  /**
-   * Target host adapter. Used to look up per-host install directories via
-   * `hostPathFor(host, type)`. Phase 2 of #117: today it's always the
-   * Claude-Code adapter (so the host paths match what `paths` carries), but
-   * the parameter is here so callers can target Codex/Cursor adapters once
-   * those land.
-   */
+  /** Target host adapter. Defaults to Claude-Code in the caller. */
   host: HostAdapter;
   installDir: string;
   consumerDir?: string;
