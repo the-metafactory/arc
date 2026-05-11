@@ -421,8 +421,13 @@ export interface AuditWarning {
 //   - ArcPaths: arc's own state, host-independent
 //   - HostPaths + HostAdapter: per-backend install dirs and behavior
 
-/** Supported agentic backends. New hosts (codex, cursor, …) added in Phase 2. */
-export type HostId = "claude-code" | "codex" | "cursor" | "continue" | "zed" | "roo";
+/**
+ * Supported agentic backends. The union expands when each adapter lands so
+ * the type stays truthful: a value of `HostId` should always correspond to
+ * an actually implemented `HostAdapter`. Phase 2 of #117 adds `"codex"`,
+ * `"cursor"`, etc. as those adapters arrive.
+ */
+export type HostId = "claude-code";
 
 /** arc's own state — host-independent. Lives under ~/.config/metafactory/. */
 export interface ArcPaths {
