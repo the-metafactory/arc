@@ -2,7 +2,7 @@ import { join, dirname } from "path";
 import { existsSync } from "fs";
 import { mkdir } from "fs/promises";
 import { homedir } from "os";
-import type { ArtifactType, ArcManifest, PaiPaths } from "../types.js";
+import type { ArtifactType, ArcManifest, HostAdapter, PaiPaths } from "../types.js";
 import {
   createSymlink,
   createCliShim,
@@ -11,6 +11,7 @@ import {
   removeCliShim,
 } from "./symlinks.js";
 import { generateRules } from "./rules.js";
+import { hostPathFor } from "./hosts/dispatch.js";
 
 /**
  * Maps an artifact type to its conventional source subdirectory within a cloned repo.
@@ -70,6 +71,8 @@ export async function createArtifactSymlinks(opts: {
   type: ArtifactType | "rules" | "system";
   manifest: ArcManifest;
   paths: PaiPaths;
+  /** Target host adapter. Defaults to Claude-Code in the caller. */
+  host: HostAdapter;
   installDir: string;
   consumerDir?: string;
   quiet?: boolean;
@@ -78,7 +81,7 @@ export async function createArtifactSymlinks(opts: {
   filesMissingSource: Array<{ source: string; target: string }>;
   record: ArtifactSymlinkRecord;
 }> {
-  const { type, manifest, paths, installDir, quiet } = opts;
+  const { type, manifest, paths, host, installDir, quiet } = opts;
   const record: ArtifactSymlinkRecord = { symlinks: [], shims: { dir: paths.shimDir, names: [] } };
 
   // Helper that wraps createSymlink + tracks the target for rollback (#89).
@@ -87,7 +90,7 @@ export async function createArtifactSymlinks(opts: {
     record.symlinks.push(target);
   };
   const shimTracked = async () => {
-    const created = await createCliShim(paths.shimDir, paths.binDir, manifest);
+    const created = await createCliShim(paths.shimDir, host.paths.binDir, manifest);
     record.shims.names.push(...created);
   };
 
@@ -138,16 +141,18 @@ export async function createArtifactSymlinks(opts: {
     }
 
     case "pipeline": {
-      // Pipelines: symlink repo root (or pipeline/ subdirectory) to pipelinesDir
+      // Pipelines: symlink repo root (or pipeline/ subdirectory) to pipelinesDir.
+      // pipelinesDir is arc state (host-independent) — pipelines aren't host-installed.
       const pipelineSourceDir = join(installDir, "pipeline");
       const sourceDir = existsSync(pipelineSourceDir) ? pipelineSourceDir : installDir;
       const pipelineLinkPath = join(paths.pipelinesDir, manifest.name);
       await linkTracked(sourceDir, pipelineLinkPath);
 
-      // If the manifest declares CLI entries, also create shims
+      // If the manifest declares CLI entries, the bin shims still go through
+      // the host (binDir is per-host).
       const cliEntries = extractAllCliInfo(manifest);
       for (const entry of cliEntries) {
-        const binLinkPath = join(paths.binDir, entry.binName);
+        const binLinkPath = join(host.paths.binDir, entry.binName);
         await linkTracked(installDir, binLinkPath);
       }
       if (cliEntries.length) {
@@ -163,15 +168,19 @@ export async function createArtifactSymlinks(opts: {
     }
 
     case "tool": {
-      // Tools: symlink repo root to binDir for each CLI entry
+      // Tools: symlink repo root to the host's binDir for each CLI entry.
+      const binDir = hostPathFor(host, "tool");
+      if (!binDir) {
+        throw new Error(`Host ${host.id} does not support tool artifacts`);
+      }
       const cliEntries = extractAllCliInfo(manifest);
       for (const entry of cliEntries) {
-        const binLinkPath = join(paths.binDir, entry.binName);
+        const binLinkPath = join(binDir, entry.binName);
         await linkTracked(installDir, binLinkPath);
       }
       if (!cliEntries.length) {
         // Fallback: symlink under manifest name if no CLI declared
-        await linkTracked(installDir, join(paths.binDir, manifest.name));
+        await linkTracked(installDir, join(binDir, manifest.name));
       }
 
       // Create PATH-accessible shims for all CLI entries
@@ -180,45 +189,56 @@ export async function createArtifactSymlinks(opts: {
     }
 
     case "agent": {
-      // Agents: symlink the .md file directly into agentsDir for Claude auto-discovery
+      // Agents: symlink the .md file directly into agentsDir for auto-discovery.
+      const agentsDir = hostPathFor(host, "agent");
+      if (!agentsDir) {
+        throw new Error(`Host ${host.id} does not support agent artifacts`);
+      }
       const agentSourceDir = join(installDir, "agent");
       const sourceDir = existsSync(agentSourceDir) ? agentSourceDir : installDir;
       const mdFile = `${manifest.name}.md`;
       const sourcePath = join(sourceDir, mdFile);
-      const linkPath = join(paths.agentsDir, mdFile);
+      const linkPath = join(agentsDir, mdFile);
 
       if (existsSync(sourcePath)) {
         await linkTracked(sourcePath, linkPath);
       } else {
         // Fallback: symlink directory if .md file not found by convention name
-        await linkTracked(sourceDir, join(paths.agentsDir, manifest.name));
+        await linkTracked(sourceDir, join(agentsDir, manifest.name));
       }
       break;
     }
 
     case "prompt": {
-      // Prompts: symlink the .md file directly into promptsDir for Claude auto-discovery
+      // Prompts: symlink the .md file directly into promptsDir for auto-discovery.
+      const promptsDir = hostPathFor(host, "prompt");
+      if (!promptsDir) {
+        throw new Error(`Host ${host.id} does not support prompt artifacts`);
+      }
       const promptSourceDir = join(installDir, "prompt");
       const sourceDir = existsSync(promptSourceDir) ? promptSourceDir : installDir;
       const mdFile = `${manifest.name}.md`;
       const sourcePath = join(sourceDir, mdFile);
-      const linkPath = join(paths.promptsDir, mdFile);
+      const linkPath = join(promptsDir, mdFile);
 
       if (existsSync(sourcePath)) {
         await linkTracked(sourcePath, linkPath);
       } else {
         // Fallback: symlink directory if .md file not found by convention name
-        await linkTracked(sourceDir, join(paths.promptsDir, manifest.name));
+        await linkTracked(sourceDir, join(promptsDir, manifest.name));
       }
       break;
     }
 
     case "skill":
-    case "system":
-    default: {
-      // Skills: symlink skill/ subdirectory (or root) to skillsDir
+    case "system": {
+      // Skills: symlink skill/ subdirectory (or root) to the host's skillsDir.
+      const skillsDir = hostPathFor(host, type);
+      if (!skillsDir) {
+        throw new Error(`Host ${host.id} does not support skill artifacts`);
+      }
       const skillSourceDir = join(installDir, "skill");
-      const skillLinkPath = join(paths.skillsDir, manifest.name);
+      const skillLinkPath = join(skillsDir, manifest.name);
 
       if (existsSync(skillSourceDir)) {
         await linkTracked(skillSourceDir, skillLinkPath);
@@ -226,16 +246,33 @@ export async function createArtifactSymlinks(opts: {
         await linkTracked(installDir, skillLinkPath);
       }
 
-      // Create bin symlinks and shims for all CLI entries (skills with CLI)
+      // CLI symlinks + shims only when the skill declares CLI entries.
+      // The binDir lookup must stay inside this guard so a future adapter
+      // that supports skills but exposes no bin directory still installs
+      // pure-content skills cleanly.
       const cliEntries = extractAllCliInfo(manifest);
-      for (const entry of cliEntries) {
-        const binLinkPath = join(paths.binDir, entry.binName);
-        await linkTracked(installDir, binLinkPath);
-      }
       if (cliEntries.length) {
+        const binDir = hostPathFor(host, "tool");
+        if (!binDir) {
+          throw new Error(
+            `Host ${host.id} does not expose a bin directory for skill CLIs`,
+          );
+        }
+        for (const entry of cliEntries) {
+          const binLinkPath = join(binDir, entry.binName);
+          await linkTracked(installDir, binLinkPath);
+        }
         await shimTracked();
       }
       break;
+    }
+
+    default: {
+      // Library is unwound at install.ts:181 before reaching this dispatch;
+      // any other value is a programming bug, not a user-facing error.
+      throw new Error(
+        `Unsupported artifact type "${type as string}" in createArtifactSymlinks`,
+      );
     }
   }
 
