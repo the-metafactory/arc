@@ -1,7 +1,8 @@
 import { join, dirname } from "path";
 import { homedir } from "os";
 import { existsSync, renameSync } from "fs";
-import type { PaiPaths } from "../types.js";
+import type { ArcPaths, HostAdapter, PaiPaths } from "../types.js";
+import { createClaudeCodeHost } from "./hosts/claude-code.js";
 
 // TODO: Remove migration logic after 2026-Q3. Only 2 users (founders) on arc currently,
 // so this migration path can be dropped once both have upgraded.
@@ -25,62 +26,86 @@ export function migrateConfigIfNeeded(oldPath: string, newPath: string): void {
 }
 
 /**
- * Create PaiPaths with default production paths.
- * Override any field for testing.
+ * Resolve the config root from override → env var → default. Triggers the
+ * one-time ~/.config/arc/ → ~/.config/metafactory/ migration when no override
+ * or env var is in play.
  */
-export function createPaths(overrides?: Partial<PaiPaths>): PaiPaths {
+function resolveConfigRoot(override?: string): string {
   const home = homedir();
-  const claudeRoot = overrides?.claudeRoot ?? join(home, ".claude");
-
   const usingEnvVar = !!process.env.ARC_CONFIG_ROOT;
-  const usingOverride = !!overrides?.configRoot;
+  const usingOverride = !!override;
   const defaultConfigRoot = join(home, ".config", "metafactory");
 
   const configRoot =
-    overrides?.configRoot ??
+    override ??
     (usingEnvVar
       ? process.env.ARC_CONFIG_ROOT!.replace(/^~/, home)
       : defaultConfigRoot);
 
-  // Migrate from old path only when using default paths
   if (!usingEnvVar && !usingOverride) {
     const oldConfigRoot = join(home, ".config", "arc");
     migrateConfigIfNeeded(oldConfigRoot, configRoot);
   }
 
+  return configRoot;
+}
+
+/**
+ * Create ArcPaths — arc's host-independent state directories. Override any
+ * field for testing.
+ */
+export function createArcPaths(overrides?: Partial<ArcPaths>): ArcPaths {
+  const home = homedir();
+  const configRoot = resolveConfigRoot(overrides?.configRoot);
+
   return {
-    claudeRoot,
-    skillsDir: overrides?.skillsDir ?? join(claudeRoot, "skills"),
-    agentsDir: overrides?.agentsDir ?? join(claudeRoot, "agents"),
-    promptsDir: overrides?.promptsDir ?? join(claudeRoot, "commands"),
-    binDir: overrides?.binDir ?? join(claudeRoot, "bin"),
-    reposDir: overrides?.reposDir ?? join(configRoot, "pkg", "repos"),
-    dbPath: overrides?.dbPath ?? join(configRoot, "packages.db"),
     configRoot,
+    reposDir: overrides?.reposDir ?? join(configRoot, "pkg", "repos"),
+    cachePath: overrides?.cachePath ?? join(configRoot, "pkg", "cache"),
+    dbPath: overrides?.dbPath ?? join(configRoot, "packages.db"),
+    sourcesPath: overrides?.sourcesPath ?? join(configRoot, "sources.yaml"),
     secretsDir: overrides?.secretsDir ?? join(configRoot, "secrets"),
     runtimeDir: overrides?.runtimeDir ?? join(configRoot, "skills"),
+    pipelinesDir: overrides?.pipelinesDir ?? join(configRoot, "pipelines"),
+    actionsDir: overrides?.actionsDir ?? join(configRoot, "actions"),
     shimDir: overrides?.shimDir ?? join(home, "bin"),
     catalogPath:
-      overrides?.catalogPath ??
-      join(import.meta.dir, "..", "..", "catalog.yaml"),
+      overrides?.catalogPath ?? join(import.meta.dir, "..", "..", "catalog.yaml"),
     registryPath:
-      overrides?.registryPath ??
-      join(import.meta.dir, "..", "..", "registry.yaml"),
-    sourcesPath:
-      overrides?.sourcesPath ??
-      join(configRoot, "sources.yaml"),
-    cachePath:
-      overrides?.cachePath ??
-      join(configRoot, "pkg", "cache"),
-    pipelinesDir:
-      overrides?.pipelinesDir ??
-      join(configRoot, "pipelines"),
-    actionsDir:
-      overrides?.actionsDir ??
-      join(configRoot, "actions"),
-    settingsPath:
-      overrides?.settingsPath ??
-      join(claudeRoot, "settings.json"),
+      overrides?.registryPath ?? join(import.meta.dir, "..", "..", "registry.yaml"),
+  };
+}
+
+/**
+ * Return the default host adapter. Phase 1: always Claude Code. Phase 2 of
+ * #117 adds detection-based selection across multiple backends.
+ */
+export function getDefaultHost(opts?: { root?: string }): HostAdapter {
+  return createClaudeCodeHost(opts);
+}
+
+/**
+ * Create PaiPaths with default production paths. Override any field for testing.
+ *
+ * @deprecated Use createArcPaths() + getDefaultHost() instead. Kept for
+ *   backward compatibility during the multi-backend migration (#117). Will be
+ *   removed in Phase 3.
+ */
+export function createPaths(overrides?: Partial<PaiPaths>): PaiPaths {
+  const home = homedir();
+  const claudeRoot = overrides?.claudeRoot ?? join(home, ".claude");
+
+  const arc = createArcPaths(overrides);
+  const host = createClaudeCodeHost({ root: claudeRoot });
+
+  return {
+    ...arc,
+    claudeRoot,
+    skillsDir: overrides?.skillsDir ?? host.paths.skillsDir,
+    agentsDir: overrides?.agentsDir ?? host.paths.agentsDir,
+    promptsDir: overrides?.promptsDir ?? host.paths.promptsDir,
+    binDir: overrides?.binDir ?? host.paths.binDir,
+    settingsPath: overrides?.settingsPath ?? host.paths.settingsPath,
   };
 }
 

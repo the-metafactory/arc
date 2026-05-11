@@ -1,5 +1,10 @@
 import { describe, test, expect } from "bun:test";
-import { createPaths, migrateConfigIfNeeded } from "../../src/lib/paths.js";
+import {
+  createPaths,
+  createArcPaths,
+  getDefaultHost,
+  migrateConfigIfNeeded,
+} from "../../src/lib/paths.js";
 import { homedir } from "os";
 import { join } from "path";
 import { mkdirSync, existsSync, writeFileSync, readFileSync, rmSync } from "fs";
@@ -65,6 +70,89 @@ describe("createPaths", () => {
     expect(paths.skillsDir).toBe("/custom/skills");
     // binDir should derive from claudeRoot
     expect(paths.binDir).toBe("/tmp/test/.claude/bin");
+  });
+});
+
+describe("createArcPaths", () => {
+  test("returns host-independent state paths from homedir", () => {
+    const paths = createArcPaths();
+    const home = homedir();
+
+    expect(paths.configRoot).toBe(join(home, ".config", "metafactory"));
+    expect(paths.dbPath).toBe(join(home, ".config", "metafactory", "packages.db"));
+    expect(paths.reposDir).toBe(join(home, ".config", "metafactory", "pkg", "repos"));
+    expect(paths.cachePath).toBe(join(home, ".config", "metafactory", "pkg", "cache"));
+    expect(paths.shimDir).toBe(join(home, "bin"));
+  });
+
+  test("does not expose host-specific paths", () => {
+    const paths = createArcPaths();
+    // ArcPaths must not carry host fields — those live on HostAdapter.paths
+    expect(paths).not.toHaveProperty("skillsDir");
+    expect(paths).not.toHaveProperty("agentsDir");
+    expect(paths).not.toHaveProperty("promptsDir");
+    expect(paths).not.toHaveProperty("binDir");
+    expect(paths).not.toHaveProperty("settingsPath");
+    expect(paths).not.toHaveProperty("claudeRoot");
+  });
+
+  test("accepts configRoot override", () => {
+    const paths = createArcPaths({ configRoot: "/tmp/test/.config/mf" });
+    expect(paths.configRoot).toBe("/tmp/test/.config/mf");
+    expect(paths.dbPath).toBe("/tmp/test/.config/mf/packages.db");
+    expect(paths.reposDir).toBe("/tmp/test/.config/mf/pkg/repos");
+  });
+
+  test("specific overrides take precedence over derived paths", () => {
+    const paths = createArcPaths({
+      configRoot: "/tmp/test/.config/mf",
+      dbPath: "/custom/packages.db",
+    });
+    expect(paths.dbPath).toBe("/custom/packages.db");
+    // reposDir still derived from configRoot
+    expect(paths.reposDir).toBe("/tmp/test/.config/mf/pkg/repos");
+  });
+});
+
+describe("getDefaultHost", () => {
+  test("returns a Claude-Code host adapter", () => {
+    const host = getDefaultHost();
+    expect(host.id).toBe("claude-code");
+    expect(host.paths.root).toBe(join(homedir(), ".claude"));
+    expect(host.paths.skillsDir).toBe(join(homedir(), ".claude", "skills"));
+    expect(host.paths.agentsDir).toBe(join(homedir(), ".claude", "agents"));
+    expect(host.paths.promptsDir).toBe(join(homedir(), ".claude", "commands"));
+    expect(host.paths.binDir).toBe(join(homedir(), ".claude", "bin"));
+    expect(host.paths.settingsPath).toBe(join(homedir(), ".claude", "settings.json"));
+  });
+
+  test("accepts a custom root for test isolation", () => {
+    const host = getDefaultHost({ root: "/tmp/test/.claude" });
+    expect(host.paths.root).toBe("/tmp/test/.claude");
+    expect(host.paths.skillsDir).toBe("/tmp/test/.claude/skills");
+  });
+
+  test("supports all current artifact types for skills/agents/prompts/tools/components", () => {
+    const host = getDefaultHost();
+    expect(host.supports("skill")).toBe(true);
+    expect(host.supports("agent")).toBe(true);
+    expect(host.supports("prompt")).toBe(true);
+    expect(host.supports("tool")).toBe(true);
+    expect(host.supports("component")).toBe(true);
+    expect(host.supports("rules")).toBe(true);
+    expect(host.supports("library")).toBe(true);
+  });
+
+  test("does not claim support for arc-state artifact types", () => {
+    const host = getDefaultHost();
+    // pipelines and actions live in arc state, not in any host directory
+    expect(host.supports("pipeline")).toBe(false);
+    expect(host.supports("action")).toBe(false);
+  });
+
+  test("detect() returns boolean", () => {
+    const host = getDefaultHost({ root: "/tmp/definitely-does-not-exist-xyz" });
+    expect(host.detect()).toBe(false);
   });
 });
 
