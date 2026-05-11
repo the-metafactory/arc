@@ -1,6 +1,7 @@
 import { join } from "path";
 import { existsSync } from "fs";
-import type { PaiPaths, ArcManifest, ArtifactType, PackageTier } from "../types.js";
+import type { PaiPaths, ArcManifest, ArtifactType, HostAdapter, PackageTier } from "../types.js";
+import { getDefaultHost } from "../lib/paths.js";
 import type { Database } from "bun:sqlite";
 import { readManifest, readLibraryArtifacts, assessRisk, formatCapabilities } from "../lib/manifest.js";
 import { recordInstall, getSkill } from "../lib/db.js";
@@ -22,6 +23,13 @@ import { extractRepoName } from "../lib/repo-name.js";
 
 export interface InstallOptions {
   paths: PaiPaths;
+  /**
+   * Target host adapter. Defaults to the Claude-Code adapter when omitted —
+   * Phase 2 of #117 keeps every existing caller working unchanged. Callers
+   * that want to install into a specific backend (Codex, Cursor, …) pass
+   * their adapter explicitly once Phase 2's host detection lands.
+   */
+  host?: HostAdapter;
   db: Database;
   repoUrl: string;
   /** Skip capability display confirmation (for non-interactive / test use) */
@@ -69,6 +77,8 @@ export interface InstallResult {
  */
 export async function install(opts: InstallOptions): Promise<InstallResult> {
   const { paths, db, repoUrl } = opts;
+  // Resolve target host: caller-supplied or default (Claude Code).
+  const host = opts.host ?? getDefaultHost({ root: paths.claudeRoot });
 
   // 1. Clone repo (or use pre-extracted path for registry installs)
   const repoName = opts.preExtractedPath
@@ -264,6 +274,7 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
     type: manifest.type,
     manifest,
     paths,
+    host,
     installDir: installPath,
     consumerDir: opts.consumerDir,
     quiet: opts.yes,
@@ -507,6 +518,7 @@ export async function installSingleArtifact(
   libraryName: string,
 ): Promise<InstallResult> {
   const { paths, db, repoUrl } = opts;
+  const host = opts.host ?? getDefaultHost({ root: paths.claudeRoot });
 
   // Display capabilities per-artifact
   const risk = assessRisk(manifest);
@@ -546,6 +558,7 @@ export async function installSingleArtifact(
     type: artifactType,
     manifest,
     paths,
+    host,
     installDir: artifactDir,
     consumerDir: opts.consumerDir,
     quiet: opts.yes,
