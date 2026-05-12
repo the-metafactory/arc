@@ -56,22 +56,22 @@ function registrySource(): SourcesConfig {
 
 describe("login - source finding", () => {
   test("returns error when no metafactory source configured", async () => {
-    await saveSources(env.paths.sourcesPath, registrySource());
-    const result = await login({ paths: env.paths });
+    await saveSources(env.arc.sourcesPath, registrySource());
+    const result = await login({ paths: env.arc });
     expect(result.success).toBe(false);
     expect(result.error).toContain("No metafactory source configured");
   });
 
   test("returns error when --source name not found", async () => {
-    await saveSources(env.paths.sourcesPath, metafactorySource());
-    const result = await login({ paths: env.paths, sourceName: "nonexistent" });
+    await saveSources(env.arc.sourcesPath, metafactorySource());
+    const result = await login({ paths: env.arc, sourceName: "nonexistent" });
     expect(result.success).toBe(false);
     expect(result.error).toContain('"nonexistent" not found');
   });
 
   test("returns error when source is type registry", async () => {
-    await saveSources(env.paths.sourcesPath, registrySource());
-    const result = await login({ paths: env.paths, sourceName: "my-registry" });
+    await saveSources(env.arc.sourcesPath, registrySource());
+    const result = await login({ paths: env.arc, sourceName: "my-registry" });
     expect(result.success).toBe(false);
     expect(result.error).toContain("registry");
     expect(result.error).toContain("not \"metafactory\"");
@@ -84,26 +84,26 @@ describe("login - source finding", () => {
         { name: "mf", url: "https://meta-factory.ai", tier: "official", enabled: true, type: "metafactory" },
       ],
     };
-    await saveSources(env.paths.sourcesPath, config);
+    await saveSources(env.arc.sourcesPath, config);
     // Mocked device-auth returns a failed poll — proves it found the right source
     // and reached the auth flow (not "no source" error)
-    const result = await login({ paths: env.paths });
+    const result = await login({ paths: env.arc });
     expect(result.error).not.toContain("No metafactory source configured");
   });
 });
 
 describe("login - already logged in", () => {
   test("returns error when token exists and no --force", async () => {
-    await saveSources(env.paths.sourcesPath, metafactorySource("existing-token"));
-    const result = await login({ paths: env.paths });
+    await saveSources(env.arc.sourcesPath, metafactorySource("existing-token"));
+    const result = await login({ paths: env.arc });
     expect(result.success).toBe(false);
     expect(result.error).toContain("Already logged in");
   });
 
   test("proceeds when token exists and --force", async () => {
-    await saveSources(env.paths.sourcesPath, metafactorySource("existing-token"));
+    await saveSources(env.arc.sourcesPath, metafactorySource("existing-token"));
     // Mocked device-auth returns a failed poll — proves it bypassed "already logged in"
-    const result = await login({ paths: env.paths, force: true });
+    const result = await login({ paths: env.arc, force: true });
     expect(result.error).not.toContain("Already logged in");
   });
 });

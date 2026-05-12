@@ -69,9 +69,9 @@ afterEach(async () => {
 
 describe("loadCatalog", () => {
   test("loads valid catalog.yaml", async () => {
-    await saveCatalog(env.paths.catalogPath, sampleCatalog());
+    await saveCatalog(env.arc.catalogPath, sampleCatalog());
 
-    const config = await loadCatalog(env.paths.catalogPath);
+    const config = await loadCatalog(env.arc.catalogPath);
     expect(config).not.toBeNull();
     expect(config!.catalog.skills).toHaveLength(3);
     expect(config!.catalog.agents).toHaveLength(1);
@@ -80,20 +80,20 @@ describe("loadCatalog", () => {
   });
 
   test("returns null for missing file", async () => {
-    const config = await loadCatalog(env.paths.catalogPath);
+    const config = await loadCatalog(env.arc.catalogPath);
     expect(config).toBeNull();
   });
 
   test("throws for invalid catalog (missing sections)", async () => {
-    await Bun.write(env.paths.catalogPath, "foo: bar\n");
-    await expect(loadCatalog(env.paths.catalogPath)).rejects.toThrow(
+    await Bun.write(env.arc.catalogPath, "foo: bar\n");
+    await expect(loadCatalog(env.arc.catalogPath)).rejects.toThrow(
       "missing required sections"
     );
   });
 
   test("handles catalog with null arrays gracefully", async () => {
     await Bun.write(
-      env.paths.catalogPath,
+      env.arc.catalogPath,
       `defaults:
   skills_dir: ~/.claude/skills/
   agents_dir: ~/.claude/agents/
@@ -106,7 +106,7 @@ catalog:
   tools: null
 `
     );
-    const config = await loadCatalog(env.paths.catalogPath);
+    const config = await loadCatalog(env.arc.catalogPath);
     expect(config).not.toBeNull();
     expect(config!.catalog.skills).toEqual([]);
     expect(config!.catalog.agents).toEqual([]);
@@ -118,9 +118,9 @@ catalog:
 describe("saveCatalog", () => {
   test("round-trips catalog through YAML", async () => {
     const original = sampleCatalog();
-    await saveCatalog(env.paths.catalogPath, original);
+    await saveCatalog(env.arc.catalogPath, original);
 
-    const loaded = await loadCatalog(env.paths.catalogPath);
+    const loaded = await loadCatalog(env.arc.catalogPath);
     expect(loaded!.catalog.skills).toHaveLength(3);
     expect(loaded!.catalog.skills[0].name).toBe("Research");
     expect(loaded!.catalog.skills[2].requires).toEqual(["skill:Thinking"]);

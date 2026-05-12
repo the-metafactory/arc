@@ -1,9 +1,9 @@
 import { resolve } from "path";
 import { createBundle } from "../lib/bundle.js";
-import type { PaiPaths } from "../types.js";
+import type { ArcPaths } from "../types.js";
 
 export interface BundleOptions {
-  paths: PaiPaths;
+  paths: ArcPaths;
   packageDir: string;
   outputPath?: string;
 }

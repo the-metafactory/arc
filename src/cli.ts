@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 
 import { Command } from "commander";
-import { createPaths, ensureDirectories, getDefaultHost } from "./lib/paths.js";
+import { createArcPaths, ensureDirectories, getDefaultHost } from "./lib/paths.js";
 import { openDatabase } from "./lib/db.js";
 import { install, parseNameVersion } from "./commands/install.js";
 import { list, formatList, formatListJson } from "./commands/list.js";
@@ -110,10 +110,10 @@ program
       process.exit(1);
     }
 
-    const paths = createPaths();
-    await ensureDirectories(paths);
+    const paths = createArcPaths();
+    const host = getDefaultHost();
+    await ensureDirectories(paths, host);
     const db = openDatabase(paths.dbPath);
-    const host = getDefaultHost({ root: paths.claudeRoot });
 
     // Check if input is a registry package ref (@scope/name[@version])
     const pkgRef = parsePackageRef(nameOrUrl);
@@ -352,7 +352,7 @@ program
       console.error(`\n❌ Unknown type "${opts.type}". Valid types: ${validTypes.join(", ")}`);
       process.exit(1);
     }
-    const paths = createPaths();
+    const paths = createArcPaths();
     const db = openDatabase(paths.dbPath);
     const result = list(db, { type: opts.type as ArtifactType | undefined, library: opts.library });
     console.log(opts.json ? formatListJson(result) : formatList(result));
@@ -364,7 +364,7 @@ program
   .description("Show details about a package (installed or from registry)")
   .option("--json", "Output as JSON")
   .action(async (name: string, opts: { json?: boolean }) => {
-    const paths = createPaths();
+    const paths = createArcPaths();
     const db = openDatabase(paths.dbPath);
     const result = await info(db, name, paths);
     console.log(opts.json ? formatInfoJson(result) : formatInfo(result));
@@ -376,7 +376,7 @@ program
   .description("Audit total capability surface of installed skills")
   .option("--verbose", "Show all pairwise capability warnings")
   .action((opts: { verbose?: boolean }) => {
-    const paths = createPaths();
+    const paths = createArcPaths();
     const db = openDatabase(paths.dbPath);
     const result = audit(db);
     console.log(formatAudit(result, opts.verbose));
@@ -387,9 +387,9 @@ program
   .command("disable <name>")
   .description("Disable an installed skill (preserves repo)")
   .action(async (name: string) => {
-    const paths = createPaths();
+    const paths = createArcPaths();
     const db = openDatabase(paths.dbPath);
-    const host = getDefaultHost({ root: paths.claudeRoot });
+    const host = getDefaultHost();
     const result = await disable(db, paths, host, name);
 
     if (result.success) {
@@ -406,9 +406,9 @@ program
   .command("enable <name>")
   .description("Re-enable a disabled skill")
   .action(async (name: string) => {
-    const paths = createPaths();
+    const paths = createArcPaths();
     const db = openDatabase(paths.dbPath);
-    const host = getDefaultHost({ root: paths.claudeRoot });
+    const host = getDefaultHost();
     const result = await enable(db, paths, host, name);
 
     if (result.success) {
@@ -426,9 +426,9 @@ program
   .description("Completely uninstall a skill (supports library:artifact syntax)")
   .option("--library <name>", "Remove all artifacts from a library")
   .action(async (name: string, opts: { library?: string }) => {
-    const paths = createPaths();
+    const paths = createArcPaths();
     const db = openDatabase(paths.dbPath);
-    const host = getDefaultHost({ root: paths.claudeRoot });
+    const host = getDefaultHost();
 
     if (opts.library) {
       // Remove all artifacts from a library
@@ -473,8 +473,8 @@ program
   .command("verify <name>")
   .description("Verify integrity of an installed skill")
   .action(async (name: string) => {
-    const paths = createPaths();
-    const host = getDefaultHost({ root: paths.claudeRoot });
+    const paths = createArcPaths();
+    const host = getDefaultHost();
     const db = openDatabase(paths.dbPath);
     const result = await verify(db, paths, host, name);
     console.log(formatVerify(result));
@@ -487,9 +487,9 @@ program
   .option("--check", "Only check for available upgrades, don't install")
   .option("--force", "Re-run upgrade pipeline even if already at latest version")
   .action(async (name: string | undefined, opts: { check?: boolean; force?: boolean }) => {
-    const paths = createPaths();
-    const host = getDefaultHost({ root: paths.claudeRoot });
-    await ensureDirectories(paths);
+    const paths = createArcPaths();
+    const host = getDefaultHost();
+    await ensureDirectories(paths, host);
     const db = openDatabase(paths.dbPath);
 
     if (opts.check || (!name && !opts.force)) {
@@ -639,7 +639,7 @@ program
       }
     ) => {
       const home = homedir();
-      const paths = createPaths();
+      const paths = createArcPaths();
       const db = openDatabase(paths.dbPath);
 
       const result = await upgradeCore(
@@ -680,7 +680,7 @@ program
   .option("--type <type>", "Filter by artifact type (skill, tool, agent, prompt, component, pipeline, action)")
   .option("--tier <tier>", "Filter by source tier (official, community, custom)")
   .action(async (keyword: string | undefined, opts: { json?: boolean; type?: string; tier?: string }) => {
-    const paths = createPaths();
+    const paths = createArcPaths();
     const sources = await loadSources(paths.sourcesPath);
 
     // Validate filters
@@ -728,7 +728,7 @@ source
   .command("list")
   .description("List configured registry sources")
   .action(async () => {
-    const paths = createPaths();
+    const paths = createArcPaths();
     const config = await loadSources(paths.sourcesPath);
     console.log(formatSourceList(config));
   });
@@ -739,7 +739,7 @@ source
   .option("-t, --tier <tier>", "Trust tier (official|community|custom)", "community")
   .option("--type <type>", "Source type (registry|metafactory)", "registry")
   .action(async (name: string, url: string, opts: { tier: string; type: string }) => {
-    const paths = createPaths();
+    const paths = createArcPaths();
     const config = await loadSources(paths.sourcesPath);
 
     const newSource: RegistrySource = {
@@ -770,7 +770,7 @@ source
   .command("update")
   .description("Refresh cached package indexes from all sources (like apt update)")
   .action(async () => {
-    const paths = createPaths();
+    const paths = createArcPaths();
     const sources = await loadSources(paths.sourcesPath);
     const results = await updateAllSources(sources, paths.cachePath);
 
@@ -787,7 +787,7 @@ source
   .command("remove <name>")
   .description("Remove a registry source")
   .action(async (name: string) => {
-    const paths = createPaths();
+    const paths = createArcPaths();
     const config = await loadSources(paths.sourcesPath);
 
     try {
@@ -808,7 +808,7 @@ program
   .option("-s, --source <name>", "Target source name (default: first metafactory source)")
   .option("-f, --force", "Re-authenticate even if already logged in")
   .action(async (opts: { source?: string; force?: boolean }) => {
-    const paths = createPaths();
+    const paths = createArcPaths();
     const result = await login({ paths, sourceName: opts.source, force: opts.force });
 
     if (result.success) {
@@ -826,7 +826,7 @@ program
   .description("Remove authentication from metafactory source (only affects publishing)")
   .option("-s, --source <name>", "Target source name (default: first metafactory source)")
   .action(async (opts: { source?: string }) => {
-    const paths = createPaths();
+    const paths = createArcPaths();
     const result = await logout({ paths, sourceName: opts.source });
 
     if (result.success) {
@@ -844,7 +844,7 @@ program
   .description("Create a distributable tarball from a package directory. For monorepos, pass a subdirectory (e.g. `arc bundle packages/my-pkg`) or use the library pattern at the repo root.")
   .option("-o, --output <path>", "Output path for the tarball")
   .action(async (path: string | undefined, opts: { output?: string }) => {
-    const paths = createPaths();
+    const paths = createArcPaths();
     const result = await bundle({
       paths,
       packageDir: path ?? process.cwd(),
@@ -863,7 +863,7 @@ program
   .option("-s, --source <name>", "Use a specific metafactory source")
   .option("--scope <namespace>", "Override publish scope/namespace")
   .action(async (path: string | undefined, opts: { tarball?: string; dryRun?: boolean; source?: string; scope?: string }) => {
-    const paths = createPaths();
+    const paths = createArcPaths();
     const result = await publish({
       paths,
       packageDir: path ?? process.cwd(),
@@ -891,7 +891,7 @@ review
   .option("--per-page <number>", "Items per page (max 100)", "20")
   .option("--json", "Output raw JSON")
   .action(async (opts: { source?: string; page: string; perPage: string; json?: boolean }) => {
-    const paths = createPaths();
+    const paths = createArcPaths();
     const result = await reviewList({
       paths,
       sourceName: opts.source,
@@ -909,7 +909,7 @@ review
   .option("-s, --source <name>", "Use a specific metafactory source")
   .option("--json", "Output raw JSON")
   .action(async (id: string, opts: { source?: string; json?: boolean }) => {
-    const paths = createPaths();
+    const paths = createArcPaths();
     const result = await reviewShow({ paths, sourceName: opts.source, id, json: opts.json });
     console.log(formatReviewShow(result));
     if (!result.success) process.exit(1);
@@ -921,7 +921,7 @@ review
   .option("-s, --source <name>", "Use a specific metafactory source")
   .option("--json", "Output raw JSON")
   .action(async (id: string, opts: { source?: string; json?: boolean }) => {
-    const paths = createPaths();
+    const paths = createArcPaths();
     const result = await reviewApprove({ paths, sourceName: opts.source, id, json: opts.json });
     console.log(formatReviewAction(result));
     if (!result.success) process.exit(1);
@@ -934,7 +934,7 @@ review
   .option("-s, --source <name>", "Use a specific metafactory source")
   .option("--json", "Output raw JSON")
   .action(async (id: string, opts: { source?: string; reason: string; json?: boolean }) => {
-    const paths = createPaths();
+    const paths = createArcPaths();
     const result = await reviewReject({
       paths,
       sourceName: opts.source,
@@ -953,7 +953,7 @@ review
   .option("-s, --source <name>", "Use a specific metafactory source")
   .option("--json", "Output raw JSON")
   .action(async (id: string, opts: { source?: string; message: string; json?: boolean }) => {
-    const paths = createPaths();
+    const paths = createArcPaths();
     const result = await reviewRequestChanges({
       paths,
       sourceName: opts.source,
@@ -975,8 +975,8 @@ catalog
   .command("list")
   .description("List catalog entries with install status")
   .action(async () => {
-    const paths = createPaths();
-    const host = getDefaultHost({ root: paths.claudeRoot });
+    const paths = createArcPaths();
+    const host = getDefaultHost();
     const db = openDatabase(paths.dbPath);
     const result = await catalogList(paths, host, db);
     console.log(formatCatalogList(result));
@@ -987,8 +987,8 @@ catalog
   .command("search [keyword]")
   .description("Search catalog (omit keyword to list all)")
   .action(async (keyword?: string) => {
-    const paths = createPaths();
-    const host = getDefaultHost({ root: paths.claudeRoot });
+    const paths = createArcPaths();
+    const host = getDefaultHost();
     const result = await catalogSearch(paths, host, keyword ?? "");
     console.log(formatCatalogSearch(result));
   });
@@ -1016,8 +1016,8 @@ catalog
         bundle?: boolean;
       }
     ) => {
-      const paths = createPaths();
-      const host = getDefaultHost({ root: paths.claudeRoot });
+      const paths = createArcPaths();
+      const host = getDefaultHost();
 
       if (opts.fromRegistry) {
         // Search all configured sources for the named package
@@ -1100,8 +1100,8 @@ catalog
   .command("remove <name>")
   .description("Remove an entry from the catalog")
   .action(async (name: string) => {
-    const paths = createPaths();
-    const host = getDefaultHost({ root: paths.claudeRoot });
+    const paths = createArcPaths();
+    const host = getDefaultHost();
     const result = await catalogRemove(paths, host, name);
     if (result.success) {
       console.log(`Removed ${result.name} from catalog`);
@@ -1115,9 +1115,9 @@ catalog
   .command("use <name>")
   .description("Install a catalog entry (resolves dependencies)")
   .action(async (name: string) => {
-    const paths = createPaths();
-    const host = getDefaultHost({ root: paths.claudeRoot });
-    await ensureDirectories(paths);
+    const paths = createArcPaths();
+    const host = getDefaultHost();
+    await ensureDirectories(paths, host);
     const db = openDatabase(paths.dbPath);
     const result = await catalogUse(paths, host, db, name);
 
@@ -1137,9 +1137,9 @@ catalog
   .command("sync")
   .description("Re-pull all installed catalog entries from source")
   .action(async () => {
-    const paths = createPaths();
-    const host = getDefaultHost({ root: paths.claudeRoot });
-    await ensureDirectories(paths);
+    const paths = createArcPaths();
+    const host = getDefaultHost();
+    await ensureDirectories(paths, host);
     const db = openDatabase(paths.dbPath);
     const result = await catalogSync(paths, host, db);
 
@@ -1164,8 +1164,8 @@ catalog
   .command("push <name>")
   .description("Push local changes to a catalog entry back to its source")
   .action(async (name: string) => {
-    const paths = createPaths();
-    const host = getDefaultHost({ root: paths.claudeRoot });
+    const paths = createArcPaths();
+    const host = getDefaultHost();
     const result = await catalogPush(paths, host, name);
     if (result.success) {
       console.log(`Pushed ${result.name} back to source`);
@@ -1179,8 +1179,8 @@ catalog
   .command("push-catalog")
   .description("Commit and push catalog.yaml to git remote")
   .action(async () => {
-    const paths = createPaths();
-    const host = getDefaultHost({ root: paths.claudeRoot });
+    const paths = createArcPaths();
+    const host = getDefaultHost();
     const result = await catalogPushCatalog(paths, host);
     if (result.success) {
       console.log("Catalog pushed to remote.");

@@ -25,7 +25,7 @@ afterEach(async () => {
 
 describe("loadSources", () => {
   test("creates default sources.yaml if missing", async () => {
-    const config = await loadSources(env.paths.sourcesPath);
+    const config = await loadSources(env.arc.sourcesPath);
     expect(config.sources).toHaveLength(2);
     // Primary: metafactory API source
     expect(config.sources[0].name).toBe("metafactory");
@@ -45,26 +45,26 @@ describe("loadSources", () => {
         { name: "hub-b", url: "https://example.com/b.yaml", tier: "community", enabled: false },
       ],
     };
-    await Bun.write(env.paths.sourcesPath, YAML.stringify(custom));
+    await Bun.write(env.arc.sourcesPath, YAML.stringify(custom));
 
-    const config = await loadSources(env.paths.sourcesPath);
+    const config = await loadSources(env.arc.sourcesPath);
     expect(config.sources).toHaveLength(2);
     expect(config.sources[0].name).toBe("hub-a");
     expect(config.sources[1].enabled).toBe(false);
   });
 
   test("returns defaults for invalid yaml (no sources array)", async () => {
-    await Bun.write(env.paths.sourcesPath, "foo: bar\n");
+    await Bun.write(env.arc.sourcesPath, "foo: bar\n");
 
-    const config = await loadSources(env.paths.sourcesPath);
+    const config = await loadSources(env.arc.sourcesPath);
     expect(config.sources).toHaveLength(2);
     expect(config.sources[0].name).toBe("metafactory");
   });
 
   test("returns defaults for empty file", async () => {
-    await Bun.write(env.paths.sourcesPath, "");
+    await Bun.write(env.arc.sourcesPath, "");
 
-    const config = await loadSources(env.paths.sourcesPath);
+    const config = await loadSources(env.arc.sourcesPath);
     expect(config.sources).toHaveLength(2);
   });
 });
@@ -76,9 +76,9 @@ describe("saveSources", () => {
         { name: "test", url: "https://example.com/reg.yaml", tier: "custom", enabled: true },
       ],
     };
-    await saveSources(env.paths.sourcesPath, config);
+    await saveSources(env.arc.sourcesPath, config);
 
-    const reloaded = await loadSources(env.paths.sourcesPath);
+    const reloaded = await loadSources(env.arc.sourcesPath);
     expect(reloaded.sources).toHaveLength(1);
     expect(reloaded.sources[0].name).toBe("test");
   });
@@ -287,9 +287,9 @@ describe("backward compatibility", () => {
     tier: community
     enabled: true
 `;
-    await Bun.write(env.paths.sourcesPath, legacy);
+    await Bun.write(env.arc.sourcesPath, legacy);
 
-    const config = await loadSources(env.paths.sourcesPath);
+    const config = await loadSources(env.arc.sourcesPath);
     expect(config.sources).toHaveLength(1);
     expect(config.sources[0].type).toBeUndefined();
     expect(getSourceType(config.sources[0])).toBe("registry");
@@ -307,9 +307,9 @@ describe("forward compatibility", () => {
     future_field: some_value
     another_unknown: 123
 `;
-    await Bun.write(env.paths.sourcesPath, futureConfig);
+    await Bun.write(env.arc.sourcesPath, futureConfig);
 
-    const config = await loadSources(env.paths.sourcesPath);
+    const config = await loadSources(env.arc.sourcesPath);
     expect(config.sources).toHaveLength(1);
     expect(config.sources[0].name).toBe("future-source");
   });
@@ -324,9 +324,9 @@ describe("token handling", () => {
         token: "secret-token-123",
       }],
     };
-    await Bun.write(env.paths.sourcesPath, YAML.stringify(config));
+    await Bun.write(env.arc.sourcesPath, YAML.stringify(config));
 
-    const loaded = await loadSources(env.paths.sourcesPath);
+    const loaded = await loadSources(env.arc.sourcesPath);
     expect(loaded.sources[0].token).toBe("secret-token-123");
   });
 
@@ -338,9 +338,9 @@ describe("token handling", () => {
         token: "",
       }],
     };
-    await Bun.write(env.paths.sourcesPath, YAML.stringify(config));
+    await Bun.write(env.arc.sourcesPath, YAML.stringify(config));
 
-    const loaded = await loadSources(env.paths.sourcesPath);
+    const loaded = await loadSources(env.arc.sourcesPath);
     expect(loaded.sources[0].token || undefined).toBeUndefined();
   });
 });

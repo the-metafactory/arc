@@ -51,13 +51,13 @@ describe("fetchRemoteRegistry", () => {
     };
 
     // Pre-populate cache
-    await mkdir(env.paths.cachePath, { recursive: true });
+    await mkdir(env.arc.cachePath, { recursive: true });
     await writeFile(
-      join(env.paths.cachePath, "test-hub.yaml"),
+      join(env.arc.cachePath, "test-hub.yaml"),
       YAML.stringify(sampleRemoteRegistry())
     );
 
-    const result = await fetchRemoteRegistry(source, env.paths.cachePath);
+    const result = await fetchRemoteRegistry(source, env.arc.cachePath);
     expect(result).not.toBeNull();
     expect(result!.registry.skills[0].name).toBe("RemoteSkill");
   });
@@ -74,7 +74,7 @@ describe("fetchRemoteRegistry", () => {
     const originalWrite = process.stderr.write;
     process.stderr.write = (() => true) as any;
     try {
-      const result = await fetchRemoteRegistry(source, env.paths.cachePath);
+      const result = await fetchRemoteRegistry(source, env.arc.cachePath);
       expect(result).toBeNull();
     } finally {
       process.stderr.write = originalWrite;
@@ -94,7 +94,7 @@ describe("fetchRemoteRegistry", () => {
     process.stderr.write = ((chunk: any) => { stderrChunks.push(String(chunk)); return true; }) as any;
 
     try {
-      const result = await fetchRemoteRegistry(source, env.paths.cachePath);
+      const result = await fetchRemoteRegistry(source, env.arc.cachePath);
       expect(result).toBeNull();
       const output = stderrChunks.join("");
       expect(output).toContain("missing-local");
@@ -122,7 +122,7 @@ describe("fetchRemoteRegistry", () => {
     };
 
     try {
-      const result = await fetchRemoteRegistry(source, env.paths.cachePath, true);
+      const result = await fetchRemoteRegistry(source, env.arc.cachePath, true);
       expect(result).toBeNull();
       const output = stderrChunks.join("");
       expect(output).toContain("broken-hub");
@@ -151,7 +151,7 @@ describe("fetchRemoteRegistry", () => {
     };
 
     try {
-      const result = await fetchRemoteRegistry(source, env.paths.cachePath, true);
+      const result = await fetchRemoteRegistry(source, env.arc.cachePath, true);
       expect(result).toBeNull();
       const output = stderrChunks.join("");
       expect(output).toContain("private-hub");
@@ -172,9 +172,9 @@ describe("fetchRemoteRegistry", () => {
     };
 
     // Pre-populate stale cache
-    await mkdir(env.paths.cachePath, { recursive: true });
+    await mkdir(env.arc.cachePath, { recursive: true });
     await writeFile(
-      join(env.paths.cachePath, "flaky-hub.yaml"),
+      join(env.arc.cachePath, "flaky-hub.yaml"),
       YAML.stringify(sampleRemoteRegistry()),
     );
 
@@ -189,7 +189,7 @@ describe("fetchRemoteRegistry", () => {
     process.stderr.write = ((chunk: any) => { stderrChunks.push(String(chunk)); return true; }) as any;
 
     try {
-      const result = await fetchRemoteRegistry(source, env.paths.cachePath, true);
+      const result = await fetchRemoteRegistry(source, env.arc.cachePath, true);
       // Should fall back to stale cache
       expect(result).not.toBeNull();
       expect(result!.registry.skills[0].name).toBe("RemoteSkill");
@@ -224,7 +224,7 @@ describe("searchAllSources", () => {
       const results = await searchAllSources(
         sources,
         "anything",
-        env.paths.cachePath
+        env.arc.cachePath
       );
       expect(results).toHaveLength(0);
     } finally {
@@ -234,7 +234,7 @@ describe("searchAllSources", () => {
 
   test("aggregates from cached sources", async () => {
     // Pre-populate cache for two sources
-    await mkdir(env.paths.cachePath, { recursive: true });
+    await mkdir(env.arc.cachePath, { recursive: true });
 
     const reg1 = sampleRemoteRegistry();
     const reg2: RegistryConfig = {
@@ -255,8 +255,8 @@ describe("searchAllSources", () => {
       },
     };
 
-    await writeFile(join(env.paths.cachePath, "hub-a.yaml"), YAML.stringify(reg1));
-    await writeFile(join(env.paths.cachePath, "hub-b.yaml"), YAML.stringify(reg2));
+    await writeFile(join(env.arc.cachePath, "hub-a.yaml"), YAML.stringify(reg1));
+    await writeFile(join(env.arc.cachePath, "hub-b.yaml"), YAML.stringify(reg2));
 
     const sources: SourcesConfig = {
       sources: [
@@ -268,7 +268,7 @@ describe("searchAllSources", () => {
     const results = await searchAllSources(
       sources,
       "skill",
-      env.paths.cachePath
+      env.arc.cachePath
     );
 
     expect(results.length).toBe(2);
@@ -287,9 +287,9 @@ describe("searchAllSources", () => {
   });
 
   test("skips disabled sources", async () => {
-    await mkdir(env.paths.cachePath, { recursive: true });
+    await mkdir(env.arc.cachePath, { recursive: true });
     await writeFile(
-      join(env.paths.cachePath, "disabled-hub.yaml"),
+      join(env.arc.cachePath, "disabled-hub.yaml"),
       YAML.stringify(sampleRemoteRegistry())
     );
 
@@ -302,7 +302,7 @@ describe("searchAllSources", () => {
     const results = await searchAllSources(
       sources,
       "remote",
-      env.paths.cachePath
+      env.arc.cachePath
     );
 
     // Should not find anything (disabled source skipped, no local fallback since no registry)

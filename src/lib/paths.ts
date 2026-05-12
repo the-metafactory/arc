@@ -1,7 +1,7 @@
 import { join, dirname } from "path";
 import { homedir } from "os";
 import { existsSync, renameSync } from "fs";
-import type { ArcPaths, HostAdapter, PaiPaths } from "../types.js";
+import type { ArcPaths, HostAdapter } from "../types.js";
 import { createClaudeCodeHost } from "./hosts/claude-code.js";
 
 // TODO: Remove migration logic after 2026-Q3. Only 2 users (founders) on arc currently,
@@ -85,45 +85,23 @@ export function getDefaultHost(opts?: { root?: string }): HostAdapter {
 }
 
 /**
- * Create PaiPaths with default production paths. Override any field for testing.
- *
- * @deprecated Use createArcPaths() + getDefaultHost() instead. Kept for
- *   backward compatibility during the multi-backend migration (#117). Will be
- *   removed in Phase 3.
+ * Ensure all required directories exist — arc state + host-managed dirs.
  */
-export function createPaths(overrides?: Partial<PaiPaths>): PaiPaths {
-  const home = homedir();
-  const claudeRoot = overrides?.claudeRoot ?? join(home, ".claude");
-
-  const arc = createArcPaths(overrides);
-  const host = createClaudeCodeHost({ root: claudeRoot });
-
-  return {
-    ...arc,
-    claudeRoot,
-    skillsDir: overrides?.skillsDir ?? host.paths.skillsDir,
-    agentsDir: overrides?.agentsDir ?? host.paths.agentsDir,
-    promptsDir: overrides?.promptsDir ?? host.paths.promptsDir,
-    binDir: overrides?.binDir ?? host.paths.binDir,
-    settingsPath: overrides?.settingsPath ?? host.paths.settingsPath,
-  };
-}
-
-/**
- * Ensure all required directories exist.
- */
-export async function ensureDirectories(paths: PaiPaths): Promise<void> {
+export async function ensureDirectories(
+  arc: ArcPaths,
+  host: HostAdapter,
+): Promise<void> {
   const dirs = [
-    paths.skillsDir,
-    paths.agentsDir,
-    paths.promptsDir,
-    paths.binDir,
-    paths.reposDir,
-    paths.configRoot,
-    paths.secretsDir,
-    paths.runtimeDir,
-    paths.pipelinesDir,
-    paths.actionsDir,
+    arc.reposDir,
+    arc.configRoot,
+    arc.secretsDir,
+    arc.runtimeDir,
+    arc.pipelinesDir,
+    arc.actionsDir,
+    host.paths.skillsDir,
+    host.paths.agentsDir,
+    host.paths.promptsDir,
+    host.paths.binDir,
   ];
 
   for (const dir of dirs) {

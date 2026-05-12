@@ -43,7 +43,7 @@ describe("library install", () => {
     expect(installed.skills[0].library_name).toBe("test-lib");
 
     // Verify symlink exists
-    expect(existsSync(join(env.paths.skillsDir, "alpha"))).toBe(true);
+    expect(existsSync(join(env.host.paths.skillsDir, "alpha"))).toBe(true);
   });
 
   test("installs all artifacts from a library", async () => {

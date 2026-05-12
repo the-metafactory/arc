@@ -10,10 +10,10 @@ import {
 } from "../lib/publish.js";
 import { loadSources, findMetafactorySource } from "../lib/sources.js";
 import { readManifest } from "../lib/manifest.js";
-import type { PaiPaths } from "../types.js";
+import type { ArcPaths } from "../types.js";
 
 export interface PublishOptions {
-  paths: PaiPaths;
+  paths: ArcPaths;
   packageDir: string;
   tarballPath?: string;
   dryRun?: boolean;

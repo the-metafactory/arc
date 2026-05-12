@@ -88,11 +88,11 @@ afterEach(async () => {
 describe("loadRegistry", () => {
   test("loads valid registry.yaml", async () => {
     await Bun.write(
-      env.paths.registryPath,
+      env.arc.registryPath,
       YAML.stringify(sampleRegistry())
     );
 
-    const config = await loadRegistry(env.paths.registryPath);
+    const config = await loadRegistry(env.arc.registryPath);
     expect(config).not.toBeNull();
     expect(config!.registry.skills).toHaveLength(3);
     expect(config!.registry.agents).toHaveLength(1);
@@ -100,13 +100,13 @@ describe("loadRegistry", () => {
   });
 
   test("returns null for missing file", async () => {
-    const config = await loadRegistry(env.paths.registryPath);
+    const config = await loadRegistry(env.arc.registryPath);
     expect(config).toBeNull();
   });
 
   test("throws for invalid registry (missing section)", async () => {
-    await Bun.write(env.paths.registryPath, "foo: bar\n");
-    await expect(loadRegistry(env.paths.registryPath)).rejects.toThrow(
+    await Bun.write(env.arc.registryPath, "foo: bar\n");
+    await expect(loadRegistry(env.arc.registryPath)).rejects.toThrow(
       "missing 'registry' section"
     );
   });

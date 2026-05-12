@@ -29,7 +29,7 @@ describe("arc bundle command", () => {
       capabilities: { filesystem: { read: [], write: [] }, network: [], bash: { allowed: false }, secrets: [] },
     });
 
-    const result = await bundle({ paths: env.paths, packageDir: pkgDir });
+    const result = await bundle({ paths: env.arc, packageDir: pkgDir });
 
     expect(result.success).toBe(true);
     expect(result.name).toBe("my-skill");
@@ -53,7 +53,7 @@ describe("arc bundle command", () => {
     });
 
     const outputPath = join(testDir, "custom.tar.gz");
-    const result = await bundle({ paths: env.paths, packageDir: pkgDir, outputPath });
+    const result = await bundle({ paths: env.arc, packageDir: pkgDir, outputPath });
 
     expect(result.success).toBe(true);
     expect(result.tarballPath).toBe(outputPath);
@@ -66,7 +66,7 @@ describe("arc bundle command", () => {
     const emptyDir = join(testDir, "empty");
     await mkdir(emptyDir, { recursive: true });
 
-    const result = await bundle({ paths: env.paths, packageDir: emptyDir });
+    const result = await bundle({ paths: env.arc, packageDir: emptyDir });
     expect(result.success).toBe(false);
     expect(result.error).toContain("arc-manifest.yaml");
   });
@@ -79,7 +79,7 @@ describe("arc bundle command", () => {
       capabilities: { filesystem: { read: [], write: [] }, network: [], bash: { allowed: false }, secrets: [] },
     });
 
-    const result = await bundle({ paths: env.paths, packageDir: pkgDir });
+    const result = await bundle({ paths: env.arc, packageDir: pkgDir });
     expect(result.success).toBe(false);
     expect(result.error).toContain("validation failed");
   });

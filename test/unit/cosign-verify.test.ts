@@ -39,7 +39,7 @@ describe("downloadSigstoreBundle", () => {
         status: 200,
       }),
     );
-    const result = await downloadSigstoreBundle("https://reg.test/bundle", env.paths.reposDir);
+    const result = await downloadSigstoreBundle("https://reg.test/bundle", env.arc.reposDir);
     expect(result.path).toBeDefined();
     expect(result.error).toBeUndefined();
   });
@@ -47,7 +47,7 @@ describe("downloadSigstoreBundle", () => {
   test("returns error on 404", async () => {
     env = await createTestEnv();
     globalThis.fetch = mockFetch(async () => new Response("not found", { status: 404 }));
-    const result = await downloadSigstoreBundle("https://reg.test/bundle", env.paths.reposDir);
+    const result = await downloadSigstoreBundle("https://reg.test/bundle", env.arc.reposDir);
     expect(result.error).toMatch(/not found/i);
     expect(result.path).toBeUndefined();
   });
@@ -57,7 +57,7 @@ describe("downloadSigstoreBundle", () => {
     globalThis.fetch = mockFetch(async () => {
       throw new Error("boom");
     });
-    const result = await downloadSigstoreBundle("https://reg.test/bundle", env.paths.reposDir);
+    const result = await downloadSigstoreBundle("https://reg.test/bundle", env.arc.reposDir);
     expect(result.error).toBeDefined();
     expect(result.path).toBeUndefined();
   });
@@ -69,7 +69,7 @@ describe("downloadSigstoreBundle", () => {
       authSeen = new Headers(init?.headers).get("Authorization");
       return new Response("{}", { status: 200 });
     });
-    await downloadSigstoreBundle("https://reg.test/bundle", env.paths.reposDir);
+    await downloadSigstoreBundle("https://reg.test/bundle", env.arc.reposDir);
     expect(authSeen).toBeNull();
   });
 });
@@ -86,7 +86,7 @@ describe("verifyPackageSigstore", () => {
       sha256: "abc",
       signing: { signature_bundle_key: null, signer_identity: null },
       artifactPath: "/tmp/fake.tgz",
-      tempDir: env.paths.reposDir,
+      tempDir: env.arc.reposDir,
     });
     expect(result.verified).toBeNull();
     expect(result.reason).toMatch(/not sigstore-signed/i);
@@ -99,7 +99,7 @@ describe("verifyPackageSigstore", () => {
       sha256: "abc",
       signing: { signature_bundle_key: "packages/abc.bundle", signer_identity: null },
       artifactPath: "/tmp/fake.tgz",
-      tempDir: env.paths.reposDir,
+      tempDir: env.arc.reposDir,
     });
     expect(result.verified).toBe(false);
     expect(result.reason).toMatch(/signer_identity/i);
@@ -116,7 +116,7 @@ describe("verifyPackageSigstore", () => {
         signer_identity: "https://github.com/owner/repo/.github/workflows/publish.yml@refs/heads/main",
       },
       artifactPath: "/tmp/fake.tgz",
-      tempDir: env.paths.reposDir,
+      tempDir: env.arc.reposDir,
     });
     expect(result.verified).toBe(false);
     expect(result.reason).toMatch(/bundle/i);
@@ -128,7 +128,7 @@ describe("verifyPackageSigstore", () => {
     globalThis.fetch = mockFetch(async () => new Response(bundleBody, { status: 200 }));
 
     // Create a real artifact file so verifier receives a valid path
-    const artifactPath = join(env.paths.reposDir, "artifact.tgz");
+    const artifactPath = join(env.arc.reposDir, "artifact.tgz");
     await writeFile(artifactPath, "fake-contents");
 
     const result = await verifyPackageSigstore({
@@ -139,7 +139,7 @@ describe("verifyPackageSigstore", () => {
         signer_identity: "https://github.com/owner/repo/.github/workflows/publish.yml@refs/heads/main",
       },
       artifactPath,
-      tempDir: env.paths.reposDir,
+      tempDir: env.arc.reposDir,
       verifier: async (artifact: string, bundle: string, identity: string, issuer: string) => {
         expect(artifact).toBe(artifactPath);
         expect(bundle).toMatch(/\.bundle$/);
@@ -156,7 +156,7 @@ describe("verifyPackageSigstore", () => {
     globalThis.fetch = mockFetch(async () =>
       new Response('{"mediaType":"application/vnd.dev.sigstore.bundle+json"}', { status: 200 }),
     );
-    const artifactPath = join(env.paths.reposDir, "artifact.tgz");
+    const artifactPath = join(env.arc.reposDir, "artifact.tgz");
     await writeFile(artifactPath, "fake");
 
     const result = await verifyPackageSigstore({
@@ -167,7 +167,7 @@ describe("verifyPackageSigstore", () => {
         signer_identity: "https://github.com/owner/repo/.github/workflows/publish.yml@refs/heads/main",
       },
       artifactPath,
-      tempDir: env.paths.reposDir,
+      tempDir: env.arc.reposDir,
       verifier: async () => ({ valid: false, error: "signature mismatch" }),
     });
     expect(result.verified).toBe(false);

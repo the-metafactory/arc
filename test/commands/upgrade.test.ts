@@ -63,7 +63,7 @@ describe("checkUpgrades", () => {
         { name: "test", url: `file://${regPath}`, tier: "community", enabled: true },
       ],
     };
-    await saveSources(env.paths.sourcesPath, sources);
+    await saveSources(env.arc.sourcesPath, sources);
 
     const results = await checkUpgrades(env.db, env.arc, env.host);
     expect(results).toHaveLength(1);
@@ -101,7 +101,7 @@ describe("checkUpgrades", () => {
 
     const regPath = join(env.root, "test-registry.yaml");
     await writeFile(regPath, YAML.stringify(registry));
-    await saveSources(env.paths.sourcesPath, {
+    await saveSources(env.arc.sourcesPath, {
       sources: [{ name: "test", url: `file://${regPath}`, tier: "community", enabled: true }],
     });
 

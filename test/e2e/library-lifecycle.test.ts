@@ -45,8 +45,8 @@ describe("Library lifecycle: install → list → upgrade → remove", () => {
     expect(installResult.artifacts).toHaveLength(2);
 
     // Verify symlinks exist
-    expect(existsSync(join(env.paths.skillsDir, "review"))).toBe(true);
-    expect(existsSync(join(env.paths.skillsDir, "deploy"))).toBe(true);
+    expect(existsSync(join(env.host.paths.skillsDir, "review"))).toBe(true);
+    expect(existsSync(join(env.host.paths.skillsDir, "deploy"))).toBe(true);
 
     // --- LIST ---
     const allList = list(env.db);
@@ -95,9 +95,9 @@ describe("Library lifecycle: install → list → upgrade → remove", () => {
     expect(remaining.skills[0].library_name).toBe("my-lib");
 
     // Symlink removed for review
-    expect(existsSync(join(env.paths.skillsDir, "review"))).toBe(false);
+    expect(existsSync(join(env.host.paths.skillsDir, "review"))).toBe(false);
     // Symlink still exists for deploy
-    expect(existsSync(join(env.paths.skillsDir, "deploy"))).toBe(true);
+    expect(existsSync(join(env.host.paths.skillsDir, "deploy"))).toBe(true);
 
     // Library artifacts query returns only deploy
     const libArtifacts = listByLibrary(env.db, "my-lib");

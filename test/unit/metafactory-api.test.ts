@@ -125,7 +125,7 @@ describe("fetchMetafactoryRegistry", () => {
     globalThis.fetch = mockFetch(async () => mockFetchResponse([sampleApiPackage()]));
 
     try {
-      const result = await fetchMetafactoryRegistry(metafactorySource(), env.paths.cachePath);
+      const result = await fetchMetafactoryRegistry(metafactorySource(), env.arc.cachePath);
       expect(result).not.toBeNull();
       expect(result!.registry.skills.length).toBe(1);
       expect(result!.registry.skills[0].name).toBe("@mellanon/research");
@@ -143,7 +143,7 @@ describe("fetchMetafactoryRegistry", () => {
     });
 
     try {
-      await fetchMetafactoryRegistry(metafactorySource("my-secret-token"), env.paths.cachePath, true);
+      await fetchMetafactoryRegistry(metafactorySource("my-secret-token"), env.arc.cachePath, true);
       expect(capturedHeaders?.get("Authorization")).toBeNull();
     } finally {
       globalThis.fetch = originalFetch;
@@ -155,7 +155,7 @@ describe("fetchMetafactoryRegistry", () => {
     globalThis.fetch = mockFetch(async () => new Response("Internal Server Error", { status: 500 }));
 
     try {
-      const result = await fetchMetafactoryRegistry(metafactorySource(), env.paths.cachePath, true);
+      const result = await fetchMetafactoryRegistry(metafactorySource(), env.arc.cachePath, true);
       expect(result).toBeNull();
     } finally {
       globalThis.fetch = originalFetch;
@@ -167,7 +167,7 @@ describe("fetchMetafactoryRegistry", () => {
     globalThis.fetch = mockFetch(async () => { throw new Error("ECONNREFUSED"); });
 
     try {
-      const result = await fetchMetafactoryRegistry(metafactorySource(), env.paths.cachePath, true);
+      const result = await fetchMetafactoryRegistry(metafactorySource(), env.arc.cachePath, true);
       expect(result).toBeNull();
     } finally {
       globalThis.fetch = originalFetch;
@@ -184,12 +184,12 @@ describe("fetchMetafactoryRegistry", () => {
 
     try {
       // First call fetches
-      const result1 = await fetchMetafactoryRegistry(metafactorySource(), env.paths.cachePath, true);
+      const result1 = await fetchMetafactoryRegistry(metafactorySource(), env.arc.cachePath, true);
       expect(result1).not.toBeNull();
       expect(fetchCount).toBe(1);
 
       // Second call uses cache (not forceRefresh)
-      const result2 = await fetchMetafactoryRegistry(metafactorySource(), env.paths.cachePath);
+      const result2 = await fetchMetafactoryRegistry(metafactorySource(), env.arc.cachePath);
       expect(result2).not.toBeNull();
       expect(fetchCount).toBe(1); // no additional fetch
     } finally {
@@ -202,7 +202,7 @@ describe("fetchMetafactoryRegistry", () => {
     globalThis.fetch = mockFetch(async () => mockFetchResponse([sampleApiPackage({ type: "tool" })]));
 
     try {
-      const result = await fetchMetafactoryRegistry(metafactorySource(), env.paths.cachePath, true);
+      const result = await fetchMetafactoryRegistry(metafactorySource(), env.arc.cachePath, true);
       expect(result!.registry.tools.length).toBe(1);
       expect(result!.registry.skills.length).toBe(0);
     } finally {
@@ -215,7 +215,7 @@ describe("fetchMetafactoryRegistry", () => {
     globalThis.fetch = mockFetch(async () => new Response("Unauthorized", { status: 401 }));
 
     try {
-      const result = await fetchMetafactoryRegistry(metafactorySource("expired-token"), env.paths.cachePath, true);
+      const result = await fetchMetafactoryRegistry(metafactorySource("expired-token"), env.arc.cachePath, true);
       // Returns null (or stale cache) -- not a crash
       expect(result).toBeNull();
     } finally {
@@ -228,7 +228,7 @@ describe("fetchMetafactoryRegistry", () => {
     globalThis.fetch = mockFetch(async () => new Response("Too Many Requests", { status: 429 }));
 
     try {
-      const result = await fetchMetafactoryRegistry(metafactorySource(), env.paths.cachePath, true);
+      const result = await fetchMetafactoryRegistry(metafactorySource(), env.arc.cachePath, true);
       expect(result).toBeNull();
     } finally {
       globalThis.fetch = originalFetch;
@@ -240,7 +240,7 @@ describe("fetchMetafactoryRegistry", () => {
     globalThis.fetch = mockFetch(async () => new Response("<html>not json</html>", { status: 200 }));
 
     try {
-      const result = await fetchMetafactoryRegistry(metafactorySource(), env.paths.cachePath, true);
+      const result = await fetchMetafactoryRegistry(metafactorySource(), env.arc.cachePath, true);
       expect(result).toBeNull();
     } finally {
       globalThis.fetch = originalFetch;

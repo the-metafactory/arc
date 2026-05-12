@@ -26,7 +26,7 @@ afterEach(async () => {
 
 // Helper: create a REGISTRY.yaml file and return file:// URL
 async function createLocalRegistry(content: object): Promise<string> {
-  const path = join(env.paths.reposDir, `reg-${Math.random()}.yaml`);
+  const path = join(env.arc.reposDir, `reg-${Math.random()}.yaml`);
   await writeFile(path, YAML.stringify(content));
   return `file://${path}`;
 }
@@ -73,7 +73,7 @@ describe("parsePackageTier", () => {
 describe("searchAcrossSources", () => {
   test("returns empty result with zero sources when none configured", async () => {
     const config: SourcesConfig = { sources: [] };
-    const result = await searchAcrossSources(config, env.paths.cachePath);
+    const result = await searchAcrossSources(config, env.arc.cachePath);
     expect(result.results).toEqual([]);
     expect(result.totalSources).toBe(0);
     expect(result.successfulSources).toBe(0);
@@ -96,9 +96,9 @@ describe("searchAcrossSources", () => {
     const config: SourcesConfig = {
       sources: [{ name: "local", url, tier: "community", enabled: true }],
     };
-    await saveSources(env.paths.sourcesPath, config);
+    await saveSources(env.arc.sourcesPath, config);
 
-    const result = await searchAcrossSources(config, env.paths.cachePath);
+    const result = await searchAcrossSources(config, env.arc.cachePath);
     expect(result.results.length).toBe(2);
     expect(result.successfulSources).toBe(1);
     expect(result.totalSources).toBe(1);
@@ -119,7 +119,7 @@ describe("searchAcrossSources", () => {
       sources: [{ name: "local", url, tier: "community", enabled: true }],
     };
 
-    const result = await searchAcrossSources(config, env.paths.cachePath, { keyword: "research" });
+    const result = await searchAcrossSources(config, env.arc.cachePath, { keyword: "research" });
     expect(result.results.length).toBe(1);
     expect(result.results[0].entry.name).toBe("research");
   });
@@ -137,11 +137,11 @@ describe("searchAcrossSources", () => {
       sources: [{ name: "local", url, tier: "community", enabled: true }],
     };
 
-    const skillsOnly = await searchAcrossSources(config, env.paths.cachePath, { type: "skill" });
+    const skillsOnly = await searchAcrossSources(config, env.arc.cachePath, { type: "skill" });
     expect(skillsOnly.results.length).toBe(1);
     expect(skillsOnly.results[0].artifactType).toBe("skill");
 
-    const toolsOnly = await searchAcrossSources(config, env.paths.cachePath, { type: "tool" });
+    const toolsOnly = await searchAcrossSources(config, env.arc.cachePath, { type: "tool" });
     expect(toolsOnly.results.length).toBe(1);
     expect(toolsOnly.results[0].artifactType).toBe("tool");
   });
@@ -167,7 +167,7 @@ describe("searchAcrossSources", () => {
       ],
     };
 
-    const officialOnly = await searchAcrossSources(config, env.paths.cachePath, { tier: "official" });
+    const officialOnly = await searchAcrossSources(config, env.arc.cachePath, { tier: "official" });
     expect(officialOnly.results.length).toBe(1);
     expect(officialOnly.results[0].sourceTier).toBe("official");
   });
@@ -184,12 +184,12 @@ describe("searchAcrossSources", () => {
       sources: [{ name: "local", url, tier: "official", enabled: true }],
     };
 
-    const result = await searchAcrossSources(config, env.paths.cachePath, { type: "skill", tier: "official" });
+    const result = await searchAcrossSources(config, env.arc.cachePath, { type: "skill", tier: "official" });
     expect(result.results.length).toBe(1);
     expect(result.results[0].artifactType).toBe("skill");
     expect(result.results[0].sourceTier).toBe("official");
 
-    const emptyResult = await searchAcrossSources(config, env.paths.cachePath, { type: "skill", tier: "community" });
+    const emptyResult = await searchAcrossSources(config, env.arc.cachePath, { type: "skill", tier: "community" });
     expect(emptyResult.results.length).toBe(0);
   });
 
@@ -203,7 +203,7 @@ describe("searchAcrossSources", () => {
     const originalWrite = process.stderr.write;
     process.stderr.write = (() => true) as any;
     try {
-      const result = await searchAcrossSources(config, env.paths.cachePath);
+      const result = await searchAcrossSources(config, env.arc.cachePath);
       expect(result.warnings.length).toBe(1);
       expect(result.warnings[0].sourceName).toBe("missing");
       expect(result.warnings[0].reason).toBe("unreachable");
@@ -231,7 +231,7 @@ describe("searchAcrossSources", () => {
     const originalWrite = process.stderr.write;
     process.stderr.write = (() => true) as any;
     try {
-      const result = await searchAcrossSources(config, env.paths.cachePath);
+      const result = await searchAcrossSources(config, env.arc.cachePath);
       expect(result.results.length).toBe(1);
       expect(result.successfulSources).toBe(1);
       expect(result.warnings.length).toBe(1);
@@ -251,7 +251,7 @@ describe("searchAcrossSources", () => {
       sources: [{ name: "local", url, tier: "community", enabled: false }],
     };
 
-    const result = await searchAcrossSources(config, env.paths.cachePath);
+    const result = await searchAcrossSources(config, env.arc.cachePath);
     expect(result.totalSources).toBe(0);
     expect(result.results.length).toBe(0);
   });
