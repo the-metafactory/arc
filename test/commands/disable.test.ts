@@ -28,7 +28,7 @@ describe("disable command", () => {
     });
 
     await install({
-      paths: env.paths,
+      arc: env.arc, host: env.host,
       db: env.db,
       repoUrl: repo.url,
       yes: true,
@@ -47,7 +47,7 @@ describe("disable command", () => {
     });
 
     await install({
-      paths: env.paths,
+      arc: env.arc, host: env.host,
       db: env.db,
       repoUrl: repo.url,
       yes: true,
@@ -65,7 +65,7 @@ describe("disable command", () => {
     });
 
     await install({
-      paths: env.paths,
+      arc: env.arc, host: env.host,
       db: env.db,
       repoUrl: repo.url,
       yes: true,
@@ -91,7 +91,7 @@ describe("enable command", () => {
     });
 
     await install({
-      paths: env.paths,
+      arc: env.arc, host: env.host,
       db: env.db,
       repoUrl: repo.url,
       yes: true,
@@ -110,7 +110,7 @@ describe("enable command", () => {
     });
 
     await install({
-      paths: env.paths,
+      arc: env.arc, host: env.host,
       db: env.db,
       repoUrl: repo.url,
       yes: true,
@@ -129,7 +129,7 @@ describe("enable command", () => {
     });
 
     await install({
-      paths: env.paths,
+      arc: env.arc, host: env.host,
       db: env.db,
       repoUrl: repo.url,
       yes: true,

@@ -34,7 +34,7 @@ describe("install lifecycle hooks", () => {
     });
 
     const result = await install({
-      paths: env.paths,
+      arc: env.arc, host: env.host,
       db: env.db,
       repoUrl: repo.url,
       yes: true,
@@ -59,7 +59,7 @@ describe("install lifecycle hooks", () => {
     });
 
     const result = await install({
-      paths: env.paths,
+      arc: env.arc, host: env.host,
       db: env.db,
       repoUrl: repo.url,
       yes: true,
@@ -86,7 +86,7 @@ describe("install lifecycle hooks", () => {
     });
 
     await install({
-      paths: env.paths,
+      arc: env.arc, host: env.host,
       db: env.db,
       repoUrl: repo.url,
       yes: true,
@@ -109,7 +109,7 @@ describe("install lifecycle hooks", () => {
     });
 
     const result = await install({
-      paths: env.paths,
+      arc: env.arc, host: env.host,
       db: env.db,
       repoUrl: repo.url,
       yes: true,
@@ -132,7 +132,7 @@ describe("install lifecycle hooks", () => {
     });
 
     await install({
-      paths: env.paths,
+      arc: env.arc, host: env.host,
       db: env.db,
       repoUrl: repo.url,
       yes: true,
@@ -154,7 +154,7 @@ describe("upgrade lifecycle hooks", () => {
     });
 
     await install({
-      paths: env.paths,
+      arc: env.arc, host: env.host,
       db: env.db,
       repoUrl: repo.url,
       yes: true,
@@ -204,7 +204,7 @@ describe("upgrade lifecycle hooks", () => {
     });
 
     await install({
-      paths: env.paths,
+      arc: env.arc, host: env.host,
       db: env.db,
       repoUrl: repo.url,
       yes: true,
@@ -246,7 +246,7 @@ describe("upgrade lifecycle hooks", () => {
     });
 
     await install({
-      paths: env.paths,
+      arc: env.arc, host: env.host,
       db: env.db,
       repoUrl: repo.url,
       yes: true,
@@ -286,7 +286,7 @@ describe("upgrade lifecycle hooks", () => {
     });
 
     await install({
-      paths: env.paths,
+      arc: env.arc, host: env.host,
       db: env.db,
       repoUrl: repo.url,
       yes: true,

@@ -26,7 +26,7 @@ describe("list command", () => {
     });
 
     await install({
-      paths: env.paths,
+      arc: env.arc, host: env.host,
       db: env.db,
       repoUrl: repo.url,
       yes: true,
@@ -45,7 +45,7 @@ describe("list command", () => {
     });
 
     await install({
-      paths: env.paths,
+      arc: env.arc, host: env.host,
       db: env.db,
       repoUrl: repo.url,
       yes: true,
@@ -67,7 +67,7 @@ describe("list command", () => {
     });
 
     await install({
-      paths: env.paths,
+      arc: env.arc, host: env.host,
       db: env.db,
       repoUrl: repo.url,
       yes: true,
@@ -95,8 +95,8 @@ describe("list command", () => {
       type: "pipeline",
     });
 
-    await install({ paths: env.paths, db: env.db, repoUrl: skillRepo.url, yes: true });
-    await install({ paths: env.paths, db: env.db, repoUrl: pipelineRepo.url, yes: true });
+    await install({ arc: env.arc, host: env.host, db: env.db, repoUrl: skillRepo.url, yes: true });
+    await install({ arc: env.arc, host: env.host, db: env.db, repoUrl: pipelineRepo.url, yes: true });
 
     const all = list(env.db);
     expect(all.skills).toHaveLength(2);

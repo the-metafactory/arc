@@ -32,7 +32,7 @@ describe("checkUpgrades", () => {
       name: "TestSkill",
       version: "1.0.0",
     });
-    await install({ paths: env.paths, db: env.db, repoUrl: repo.url, yes: true });
+    await install({ arc: env.arc, host: env.host, db: env.db, repoUrl: repo.url, yes: true });
 
     // Set up a source with registry advertising v1.1.0
     const registry: RegistryConfig = {
@@ -78,7 +78,7 @@ describe("checkUpgrades", () => {
       name: "UpToDate",
       version: "2.0.0",
     });
-    await install({ paths: env.paths, db: env.db, repoUrl: repo.url, yes: true });
+    await install({ arc: env.arc, host: env.host, db: env.db, repoUrl: repo.url, yes: true });
 
     const registry: RegistryConfig = {
       registry: {
@@ -116,7 +116,7 @@ describe("upgradePackage", () => {
       name: "Upgradeable",
       version: "1.0.0",
     });
-    await install({ paths: env.paths, db: env.db, repoUrl: repo.url, yes: true });
+    await install({ arc: env.arc, host: env.host, db: env.db, repoUrl: repo.url, yes: true });
 
     // Simulate a new version: update manifest in source repo and commit
     const manifestPath = join(repo.path, "arc-manifest.yaml");
@@ -146,7 +146,7 @@ describe("upgradePackage", () => {
       name: "Current",
       version: "1.0.0",
     });
-    await install({ paths: env.paths, db: env.db, repoUrl: repo.url, yes: true });
+    await install({ arc: env.arc, host: env.host, db: env.db, repoUrl: repo.url, yes: true });
 
     const result = await upgradePackage(env.db, env.arc, env.host, "Current");
     expect(result.success).toBe(true);
@@ -165,7 +165,7 @@ describe("upgradePackage", () => {
       name: "ForceUpgrade",
       version: "1.0.0",
     });
-    await install({ paths: env.paths, db: env.db, repoUrl: repo.url, yes: true });
+    await install({ arc: env.arc, host: env.host, db: env.db, repoUrl: repo.url, yes: true });
 
     // Without force: returns success with same version (short-circuit)
     const normalResult = await upgradePackage(env.db, env.arc, env.host, "ForceUpgrade");
@@ -263,7 +263,7 @@ describe("upgradeAll", () => {
       name: "ForceAll",
       version: "1.0.0",
     });
-    await install({ paths: env.paths, db: env.db, repoUrl: repo.url, yes: true });
+    await install({ arc: env.arc, host: env.host, db: env.db, repoUrl: repo.url, yes: true });
 
     // Without force, upgradeAll would return empty (nothing upgradable)
     const normalResults = await upgradeAll(env.db, env.arc, env.host);
@@ -284,7 +284,7 @@ describe("upgradeLibrary", () => {
       name: "LibArtifact",
       version: "1.0.0",
     });
-    await install({ paths: env.paths, db: env.db, repoUrl: repo.url, yes: true });
+    await install({ arc: env.arc, host: env.host, db: env.db, repoUrl: repo.url, yes: true });
 
     // Set a library_name so upgradeLibrary can find it
     env.db.prepare("UPDATE skills SET library_name = ? WHERE name = ?").run("my-lib", "LibArtifact");

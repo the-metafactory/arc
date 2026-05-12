@@ -17,7 +17,7 @@ describe("info — installed packages", () => {
     env = await createTestEnv();
     const repo = await createMockSkillRepo(env.root, { name: "test-skill" });
 
-    await install({ paths: env.paths, db: env.db, repoUrl: repo.url, yes: true });
+    await install({ arc: env.arc, host: env.host, db: env.db, repoUrl: repo.url, yes: true });
 
     const result = await info(env.db, "test-skill");
     expect(result.skill).not.toBeNull();
@@ -36,7 +36,7 @@ describe("info — installed packages", () => {
       ],
     });
 
-    await install({ paths: env.paths, db: env.db, repoUrl: lib.url, yes: true });
+    await install({ arc: env.arc, host: env.host, db: env.db, repoUrl: lib.url, yes: true });
 
     const result = await info(env.db, "test-lib");
     expect(result.skill).toBeNull();
@@ -55,7 +55,7 @@ describe("info — installed packages", () => {
       ],
     });
 
-    await install({ paths: env.paths, db: env.db, repoUrl: lib.url, yes: true });
+    await install({ arc: env.arc, host: env.host, db: env.db, repoUrl: lib.url, yes: true });
 
     const result = await info(env.db, "test-lib:alpha");
     expect(result.skill).not.toBeNull();
@@ -72,7 +72,7 @@ describe("info — installed packages", () => {
       ],
     });
 
-    await install({ paths: env.paths, db: env.db, repoUrl: lib.url, yes: true });
+    await install({ arc: env.arc, host: env.host, db: env.db, repoUrl: lib.url, yes: true });
 
     const result = await info(env.db, "test-lib:nope");
     expect(result.error).toContain("not found in library");
@@ -316,7 +316,7 @@ describe("formatInfoJson", () => {
   test("outputs JSON for installed package", async () => {
     env = await createTestEnv();
     const repo = await createMockSkillRepo(env.root, { name: "json-test" });
-    await install({ paths: env.paths, db: env.db, repoUrl: repo.url, yes: true });
+    await install({ arc: env.arc, host: env.host, db: env.db, repoUrl: repo.url, yes: true });
 
     const result = await info(env.db, "json-test");
     const json = JSON.parse(formatInfoJson(result));

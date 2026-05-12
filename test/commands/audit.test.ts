@@ -33,7 +33,7 @@ describe("audit command", () => {
     });
 
     await install({
-      paths: env.paths,
+      arc: env.arc, host: env.host,
       db: env.db,
       repoUrl: repo.url,
       yes: true,
@@ -67,13 +67,13 @@ describe("audit command", () => {
     });
 
     await install({
-      paths: env.paths,
+      arc: env.arc, host: env.host,
       db: env.db,
       repoUrl: repoA.url,
       yes: true,
     });
     await install({
-      paths: env.paths,
+      arc: env.arc, host: env.host,
       db: env.db,
       repoUrl: repoB.url,
       yes: true,
@@ -98,7 +98,7 @@ describe("audit command", () => {
     });
 
     await install({
-      paths: env.paths,
+      arc: env.arc, host: env.host,
       db: env.db,
       repoUrl: repo.url,
       yes: true,
@@ -124,8 +124,8 @@ describe("audit command", () => {
       },
     });
 
-    await install({ paths: env.paths, db: env.db, repoUrl: repoA.url, yes: true });
-    await install({ paths: env.paths, db: env.db, repoUrl: repoB.url, yes: true });
+    await install({ arc: env.arc, host: env.host, db: env.db, repoUrl: repoA.url, yes: true });
+    await install({ arc: env.arc, host: env.host, db: env.db, repoUrl: repoB.url, yes: true });
 
     const result = audit(env.db);
     expect(result.warnings.length).toBeGreaterThan(0);

@@ -447,18 +447,7 @@ export async function upgradeLibrary(
         const artifactDir = join(gitRoot, entry.path);
         const installResult = await installSingleArtifact(
           {
-            // installSingleArtifact still takes PaiPaths today — recombine
-            // arc + host into the legacy shape until install.ts migrates
-            // in a later Phase 3b slice.
-            paths: {
-              ...arc,
-              claudeRoot: host.paths.root,
-              skillsDir: host.paths.skillsDir,
-              agentsDir: host.paths.agentsDir,
-              promptsDir: host.paths.promptsDir,
-              binDir: host.paths.binDir,
-              settingsPath: host.paths.settingsPath,
-            },
+            arc,
             host,
             db,
             repoUrl: artifacts[0].repo_url,

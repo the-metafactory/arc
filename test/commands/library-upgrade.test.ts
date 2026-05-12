@@ -22,7 +22,7 @@ describe("library upgrade", () => {
       ],
     });
 
-    await install({ paths: env.paths, db: env.db, repoUrl: lib.url, yes: true });
+    await install({ arc: env.arc, host: env.host, db: env.db, repoUrl: lib.url, yes: true });
 
     // Bump only alpha's version in the source repo
     const alphaManifest = join(lib.path, "skills/alpha/arc-manifest.yaml");
@@ -59,7 +59,7 @@ describe("library upgrade", () => {
       ],
     });
 
-    await install({ paths: env.paths, db: env.db, repoUrl: lib.url, yes: true });
+    await install({ arc: env.arc, host: env.host, db: env.db, repoUrl: lib.url, yes: true });
 
     // Bump alpha's version
     const alphaManifest = join(lib.path, "skills/alpha/arc-manifest.yaml");
@@ -93,7 +93,7 @@ describe("library upgrade", () => {
       ],
     });
 
-    await install({ paths: env.paths, db: env.db, repoUrl: lib.url, yes: true });
+    await install({ arc: env.arc, host: env.host, db: env.db, repoUrl: lib.url, yes: true });
 
     // Bump both versions
     for (const artifact of ["skills/alpha", "skills/beta"]) {
@@ -137,7 +137,7 @@ describe("library upgrade", () => {
       ],
     });
 
-    await install({ paths: env.paths, db: env.db, repoUrl: lib.url, yes: true });
+    await install({ arc: env.arc, host: env.host, db: env.db, repoUrl: lib.url, yes: true });
 
     // No changes in source repo
     const results = await upgradeLibrary(env.db, env.arc, env.host, "test-lib");
@@ -158,7 +158,7 @@ describe("library upgrade", () => {
     });
 
     // Install library with 2 artifacts
-    await install({ paths: env.paths, db: env.db, repoUrl: lib.url, yes: true });
+    await install({ arc: env.arc, host: env.host, db: env.db, repoUrl: lib.url, yes: true });
 
     // Verify only alpha and beta are installed
     const beforeSkills = env.db

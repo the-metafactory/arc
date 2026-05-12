@@ -35,7 +35,7 @@ describe("Library lifecycle: install → list → upgrade → remove", () => {
     });
 
     const installResult = await install({
-      paths: env.paths,
+      arc: env.arc, host: env.host,
       db: env.db,
       repoUrl: lib.url,
       yes: true,

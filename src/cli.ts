@@ -113,6 +113,7 @@ program
     const paths = createPaths();
     await ensureDirectories(paths);
     const db = openDatabase(paths.dbPath);
+    const host = getDefaultHost({ root: paths.claudeRoot });
 
     // Check if input is a registry package ref (@scope/name[@version])
     const pkgRef = parsePackageRef(nameOrUrl);
@@ -270,7 +271,8 @@ program
       // Continue with standard install flow (manifest, symlinks, hooks, DB).
       // Use preExtractedPath so install() skips git clone.
       const result = await install({
-        paths,
+        arc: paths,
+        host,
         db,
         repoUrl: formatPackageRef({ scope: resolved.scope, name: resolved.name, version: resolved.version }),
         yes: opts.yes,
@@ -286,7 +288,7 @@ program
       }
     } else if (isUrl) {
       // Direct git install
-      const result = await install({ paths, db, repoUrl: nameOrUrl, yes: opts.yes, artifactName, pinnedVersion });
+      const result = await install({ arc: paths, host, db, repoUrl: nameOrUrl, yes: opts.yes, artifactName, pinnedVersion });
       if (result.success) {
         if (result.artifacts?.length) {
           console.log(`\n✅ Installed ${result.artifacts.filter(a => a.success).length} artifact(s) from ${result.name}`);
@@ -312,7 +314,8 @@ program
 
       // Install directly from the source URL
       const result = await install({
-        paths,
+        arc: paths,
+        host,
         db,
         repoUrl: found.entry.source,
         yes: opts.yes,

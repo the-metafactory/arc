@@ -28,7 +28,7 @@ describe("remove command", () => {
     });
 
     await install({
-      paths: env.paths,
+      arc: env.arc, host: env.host,
       db: env.db,
       repoUrl: repo.url,
       yes: true,
@@ -47,7 +47,7 @@ describe("remove command", () => {
     });
 
     await install({
-      paths: env.paths,
+      arc: env.arc, host: env.host,
       db: env.db,
       repoUrl: repo.url,
       yes: true,
@@ -63,7 +63,7 @@ describe("remove command", () => {
     });
 
     await install({
-      paths: env.paths,
+      arc: env.arc, host: env.host,
       db: env.db,
       repoUrl: repo.url,
       yes: true,
@@ -93,7 +93,7 @@ describe("removeLibrary", () => {
     });
 
     await install({
-      paths: env.paths,
+      arc: env.arc, host: env.host,
       db: env.db,
       repoUrl: lib.url,
       yes: true,
@@ -120,7 +120,7 @@ describe("removeLibrary", () => {
     });
 
     await install({
-      paths: env.paths,
+      arc: env.arc, host: env.host,
       db: env.db,
       repoUrl: lib.url,
       yes: true,
@@ -146,7 +146,7 @@ describe("removeLibrary", () => {
     });
 
     await install({
-      paths: env.paths,
+      arc: env.arc, host: env.host,
       db: env.db,
       repoUrl: lib.url,
       yes: true,

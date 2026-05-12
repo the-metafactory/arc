@@ -56,7 +56,7 @@ describe("Full lifecycle: install → list → info → audit → disable → en
 
     // --- INSTALL ---
     const installResult = await install({
-      paths: env.paths,
+      arc: env.arc, host: env.host,
       db: env.db,
       repoUrl: repo.url,
       yes: true,
@@ -164,7 +164,7 @@ describe("Full lifecycle: install → list → info → audit → disable → en
 
     // --- INSTALL ---
     const installResult = await install({
-      paths: env.paths,
+      arc: env.arc, host: env.host,
       db: env.db,
       repoUrl: repo.url,
       yes: true,
@@ -215,7 +215,7 @@ describe("Full lifecycle: install → list → info → audit → disable → en
 
     // --- INSTALL ---
     const installResult = await install({
-      paths: env.paths,
+      arc: env.arc, host: env.host,
       db: env.db,
       repoUrl: repo.url,
       yes: true,
@@ -281,7 +281,7 @@ describe("Full lifecycle: install → list → info → audit → disable → en
 
     // --- INSTALL ---
     const installResult = await install({
-      paths: env.paths,
+      arc: env.arc, host: env.host,
       db: env.db,
       repoUrl: repo.url,
       yes: true,
@@ -347,13 +347,13 @@ describe("Full lifecycle: install → list → info → audit → disable → en
     });
 
     await install({
-      paths: env.paths,
+      arc: env.arc, host: env.host,
       db: env.db,
       repoUrl: networkRepo.url,
       yes: true,
     });
     await install({
-      paths: env.paths,
+      arc: env.arc, host: env.host,
       db: env.db,
       repoUrl: fileRepo.url,
       yes: true,
@@ -479,7 +479,7 @@ describe("Full lifecycle: install → list → info → audit → disable → en
     );
 
     const result = await install({
-      paths: env.paths,
+      arc: env.arc, host: env.host,
       db: env.db,
       repoUrl: repo.url,
       yes: true,
