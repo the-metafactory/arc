@@ -311,6 +311,9 @@ describe("reissueBot — server-side revocation of OLD pubkey", () => {
     // failed revoke. Original creds file is untouched.
     expect(existsSync(`${CUSTOM_OUT}.bak`)).toBe(false);
     expect(existsSync(CUSTOM_OUT)).toBe(true);
+    // Per Holly review: also pin the exit code so this test fails loudly
+    // if a future regression replaces `process.exit(1)` with `(0)`.
+    expect(exitSpy).toHaveBeenCalledWith(1);
   });
 });
 
