@@ -9,6 +9,12 @@ import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync, chmodSy
 import { join, dirname } from "node:path";
 import { homedir } from "node:os";
 import { generateIdentity } from "./identity.js";
+import {
+  ArcNatsCommandError,
+  type ArcNatsErrorCode,
+  type SetupOperatorBotResult,
+  classifyError,
+} from "../lib/json-response.js";
 
 const DEFAULT_CREDS_DIR = join(homedir(), ".config", "nats");
 const NAMING_RE = /^[a-z](?:[a-z0-9]|-(?=[a-z0-9]))*$/;
@@ -98,16 +104,28 @@ function assertTestModeForSeam(seamName: string): void {
   }
 }
 
-export function ensureNscInstalled(): void {
+export function ensureNscInstalled(json = false): void {
   if (!nscInstallCheck()) {
+    if (json) {
+      throw new ArcNatsCommandError(
+        "NSC_NOT_INSTALLED",
+        "nsc not found on PATH. Install: brew install nats-io/nats-tools/nsc",
+      );
+    }
     console.error("Error: nsc not found on PATH.");
     console.error("Install: brew install nats-io/nats-tools/nsc");
     process.exit(1);
   }
 }
 
-function validateBotName(name: string): void {
+function validateBotName(name: string, json = false): void {
   if (!NAMING_RE.test(name)) {
+    if (json) {
+      throw new ArcNatsCommandError(
+        "VALIDATION_ERROR",
+        `bot name "${name}" must be lowercase alphanumeric + hyphens.`,
+      );
+    }
     console.error(`Error: bot name "${name}" must be lowercase alphanumeric + hyphens.`);
     process.exit(1);
   }
@@ -135,11 +153,30 @@ export function detectAccount(): string {
   const output = nscWithStderr(["env"]);
   const match = output.match(/Current Account\s+\|[^|]*\|\s+(\S+)/);
   if (match) return match[1];
-  throw new Error("Cannot detect NSC account. Run: nsc env -a <account>");
+  throw new ArcNatsCommandError(
+    "ACCOUNT_NOT_FOUND",
+    "Cannot detect NSC account. Run: nsc env -a <account>",
+  );
 }
 
 function defaultCredsPath(name: string): string {
   return join(DEFAULT_CREDS_DIR, `${name}.creds`);
+}
+
+/**
+ * Extracts the JWT body from an `nsc generate creds` output. The output is a
+ * two-block PEM-ish file with `-----BEGIN NATS USER JWT-----` ... `-----END NATS USER JWT-----`
+ * followed by an `-----BEGIN USER NKEY SEED-----` block. We return the JWT
+ * body (between the BEGIN/END markers, whitespace-stripped).
+ *
+ * Returns empty string if the JWT block is not present — caller should treat
+ * that as a soft failure (the creds file is still written, but the JSON
+ * envelope's `jwt` field will be empty).
+ */
+function extractJwt(credsContent: string): string {
+  const match = credsContent.match(/-----BEGIN NATS USER JWT-----\s*([\s\S]*?)\s*-----END NATS USER JWT-----/);
+  if (!match) return "";
+  return match[1].replace(/\s+/g, "");
 }
 
 function userExists(account: string, name: string): boolean {
@@ -162,11 +199,17 @@ function getUserPubKey(account: string, name: string): string {
   try {
     parsed = JSON.parse(json);
   } catch (err) {
-    throw new Error(`Failed to parse nsc describe user JSON for "${name}": ${err instanceof Error ? err.message : String(err)}`);
+    throw new ArcNatsCommandError(
+      "INVALID_USER_KEY",
+      `Failed to parse nsc describe user JSON for "${name}": ${err instanceof Error ? err.message : String(err)}`,
+    );
   }
   const sub = (parsed as { sub?: unknown }).sub;
   if (typeof sub !== "string" || !sub.startsWith("U")) {
-    throw new Error(`Could not extract user public key for "${name}" (expected U-prefixed NKey in 'sub' claim).`);
+    throw new ArcNatsCommandError(
+      "INVALID_USER_KEY",
+      `Could not extract user public key for "${name}" (expected U-prefixed NKey in 'sub' claim).`,
+    );
   }
   return sub;
 }
@@ -180,16 +223,17 @@ function getUserPubKey(account: string, name: string): string {
  * the user locally if this throws, because a half-done revoke leaves the
  * JWT valid on the bus and the operator unaware.
  */
-function revokeAndPushUser(account: string, name: string): void {
+function revokeAndPushUser(account: string, name: string): string {
   const pubKey = getUserPubKey(account, name);
 
   // Add to revocation map (keyed by pubkey so it survives local user delete).
   try {
     nsc(["revocations", "add-user", "-a", account, "-u", pubKey]);
   } catch (err) {
-    throw new Error(
+    throw new ArcNatsCommandError(
+      "REVOKE_FAILED",
       `Failed to add revocation for user "${name}" (${pubKey}): ${err instanceof Error ? err.message : String(err)}. ` +
-      `The user JWT is STILL VALID on the bus.`
+      `The user JWT is STILL VALID on the bus.`,
     );
   }
 
@@ -199,11 +243,14 @@ function revokeAndPushUser(account: string, name: string): void {
     nsc(["push", "-a", account]);
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
-    throw new Error(
+    throw new ArcNatsCommandError(
+      "PUSH_FAILED",
       `Server-side revoke failed: ${reason}. The user JWT is STILL VALID on the bus. ` +
-      `Resolve connectivity and retry.`
+      `Resolve connectivity and retry.`,
     );
   }
+
+  return pubKey;
 }
 
 function ensureDefaultCredsDir(): void {
@@ -229,32 +276,56 @@ export interface AddBotOptions {
   output?: string;
   force?: boolean;
   withIdentity?: boolean;
+  /** When true: suppress human-readable stdout; throw ArcNatsCommandError on failure. */
+  json?: boolean;
 }
 
-export async function addBot(name: string, opts: AddBotOptions): Promise<void> {
-  ensureNscInstalled();
+export interface AddBotResult {
+  bot: string;
+  account: string;
+  credsPath: string;
+  jwt: string;
+  pubKey: string;
+}
 
-  validateBotName(name);
+export async function addBot(name: string, opts: AddBotOptions): Promise<AddBotResult> {
+  const json = opts.json === true;
+  ensureNscInstalled(json);
+
+  validateBotName(name, json);
 
   const account = opts.account ?? detectAccount();
   const outPath = opts.output ?? defaultCredsPath(name);
 
   if (existsSync(outPath) && !opts.force) {
+    if (json) {
+      throw new ArcNatsCommandError(
+        "ALREADY_EXISTS",
+        `credentials exist at ${outPath}. Use --force to overwrite.`,
+      );
+    }
     console.error(`Error: credentials exist at ${outPath}. Use --force to overwrite.`);
     process.exit(1);
   }
 
   if (userExists(account, name)) {
     if (!opts.force) {
+      if (json) {
+        throw new ArcNatsCommandError(
+          "ALREADY_EXISTS",
+          `user "${name}" exists under "${account}". Use --force to re-create.`,
+        );
+      }
       console.error(`Error: user "${name}" exists under "${account}". Use --force to re-create.`);
       process.exit(1);
     }
     nsc(["delete", "user", "-a", account, "-n", name]);
-    console.log(`Removed existing user: ${name}`);
+    if (!json) console.log(`Removed existing user: ${name}`);
   }
 
   nsc(["add", "user", "-a", account, "-n", name]);
 
+  let credsContent = "";
   try {
     if (opts.pub) {
       for (const subj of opts.pub.split(",").map((s) => s.trim())) {
@@ -270,35 +341,79 @@ export async function addBot(name: string, opts: AddBotOptions): Promise<void> {
       }
     }
 
-    const creds = nsc(["generate", "creds", "-a", account, "-n", name]);
-    writeCredsFile(outPath, creds);
+    credsContent = nsc(["generate", "creds", "-a", account, "-n", name]);
+    writeCredsFile(outPath, credsContent);
   } catch (err) {
     try { nsc(["delete", "user", "-a", account, "-n", name]); } catch { /* best effort */ }
-    throw new Error(`Failed to configure user "${name}" — rolled back. Cause: ${err instanceof Error ? err.message : String(err)}`);
+    const cause = err instanceof ArcNatsCommandError ? err.message : (err instanceof Error ? err.message : String(err));
+    const code: ArcNatsErrorCode = err instanceof ArcNatsCommandError ? err.code : "ROLLBACK_FAILED";
+    if (json) {
+      throw new ArcNatsCommandError(code, `Failed to configure user "${name}" — rolled back. Cause: ${cause}`);
+    }
+    throw new Error(`Failed to configure user "${name}" — rolled back. Cause: ${cause}`);
   }
 
-  console.log(`Created NATS user: ${name} (account: ${account})`);
-  if (opts.pub) console.log(`  publish: ${opts.pub}`);
-  if (opts.sub) console.log(`  subscribe: ${opts.sub}`);
-  console.log(`  credentials: ${outPath} (mode 600)`);
+  // Surface the durable pubkey (matches what cortex receives in JSON mode and
+  // what the revoke flow will key on later).
+  const pubKey = getUserPubKey(account, name);
+  const jwt = extractJwt(credsContent);
+
+  if (!json) {
+    console.log(`Created NATS user: ${name} (account: ${account})`);
+    if (opts.pub) console.log(`  publish: ${opts.pub}`);
+    if (opts.sub) console.log(`  subscribe: ${opts.sub}`);
+    console.log(`  credentials: ${outPath} (mode 600)`);
+  }
 
   if (opts.withIdentity) {
-    await generateIdentity(name, account, { force: opts.force });
+    // generateIdentity prints; in json mode we want it silenced. Cheapest path
+    // is to suppress console.log for the duration of the call. (No tests rely
+    // on this output being visible during json runs.)
+    if (json) {
+      const origLog = console.log;
+      console.log = () => undefined;
+      try {
+        await generateIdentity(name, account, { force: opts.force });
+      } finally {
+        console.log = origLog;
+      }
+    } else {
+      await generateIdentity(name, account, { force: opts.force });
+    }
   }
+
+  return { bot: name, account, credsPath: outPath, jwt, pubKey };
 }
 
 export interface ReissueBotOptions {
   account?: string;
   output?: string;
+  /** When true: suppress human-readable stdout; throw ArcNatsCommandError on failure. */
+  json?: boolean;
 }
 
-export function reissueBot(name: string, opts: ReissueBotOptions): void {
-  ensureNscInstalled();
-  validateBotName(name);
+export interface ReissueBotResult {
+  bot: string;
+  account: string;
+  credsPath: string;
+  newPubKey: string;
+  revokedPubKey: string;
+}
+
+export function reissueBot(name: string, opts: ReissueBotOptions): ReissueBotResult {
+  const json = opts.json === true;
+  ensureNscInstalled(json);
+  validateBotName(name, json);
   const account = opts.account ?? detectAccount();
   const outPath = opts.output ?? defaultCredsPath(name);
 
   if (!userExists(account, name)) {
+    if (json) {
+      throw new ArcNatsCommandError(
+        "USER_NOT_FOUND",
+        `user "${name}" not found under "${account}".`,
+      );
+    }
     console.error(`Error: user "${name}" not found under "${account}".`);
     process.exit(1);
   }
@@ -307,9 +422,16 @@ export function reissueBot(name: string, opts: ReissueBotOptions): void {
   // this fails we abort cleanly: no local delete, and — critically — no .bak
   // on disk holding the still-valid old creds (writing the backup before the
   // revoke would re-create the exact leaked-backup threat #130 was filed for).
+  let revokedPubKey = "";
   try {
-    revokeAndPushUser(account, name);
+    revokedPubKey = revokeAndPushUser(account, name);
   } catch (err) {
+    if (json) {
+      // Re-throw as-is — revokeAndPushUser already throws ArcNatsCommandError
+      // with the right code (REVOKE_FAILED / PUSH_FAILED).
+      if (err instanceof ArcNatsCommandError) throw err;
+      throw new ArcNatsCommandError("PUSH_FAILED", err instanceof Error ? err.message : String(err));
+    }
     console.error(err instanceof Error ? err.message : String(err));
     process.exit(1);
   }
@@ -321,7 +443,7 @@ export function reissueBot(name: string, opts: ReissueBotOptions): void {
     const backup = `${outPath}.bak`;
     writeFileSync(backup, readFileSync(outPath));
     chmodSync(backup, 0o600);
-    console.log(`  backup: ${backup}`);
+    if (!json) console.log(`  backup: ${backup}`);
   }
 
   nsc(["delete", "user", "-a", account, "-n", name]);
@@ -331,13 +453,22 @@ export function reissueBot(name: string, opts: ReissueBotOptions): void {
     const creds = nsc(["generate", "creds", "-a", account, "-n", name]);
     writeCredsFile(outPath, creds);
   } catch (err) {
+    if (json) {
+      throw new ArcNatsCommandError(
+        "ROLLBACK_FAILED",
+        `CRITICAL: failed to re-create user "${name}" after delete. ` +
+        `Old creds revoked server-side; backup at ${outPath}.bak captures the old JWT for forensics only. ` +
+        `Manual recovery: nsc add user -a ${account} -n ${name}. ` +
+        `Cause: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
     console.error(`CRITICAL: failed to re-create user "${name}" after delete.`);
     if (existsSync(`${outPath}.bak`)) {
       console.error(`Old credentials backed up at: ${outPath}.bak`);
       console.error(
         `Note: old creds invalidated via revocations push above; the backup ` +
         `captures the old JWT for forensics only (it's revoked server-side ` +
-        `and will be rejected by NATS).`
+        `and will be rejected by NATS).`,
       );
     }
     console.error(`Manual recovery: nsc add user -a ${account} -n ${name}`);
@@ -348,9 +479,15 @@ export function reissueBot(name: string, opts: ReissueBotOptions): void {
   // Clean up backup on success
   try { unlinkSync(`${outPath}.bak`); } catch { /* ok if no backup */ }
 
-  console.log(`Re-issued credentials for ${name}`);
-  console.log(`  credentials: ${outPath} (mode 600)`);
-  console.log(`  Note: old credentials revoked server-side and pushed to NATS.`);
+  const newPubKey = getUserPubKey(account, name);
+
+  if (!json) {
+    console.log(`Re-issued credentials for ${name}`);
+    console.log(`  credentials: ${outPath} (mode 600)`);
+    console.log(`  Note: old credentials revoked server-side and pushed to NATS.`);
+  }
+
+  return { bot: name, account, credsPath: outPath, newPubKey, revokedPubKey };
 }
 
 export function listBots(account?: string): void {
@@ -363,51 +500,105 @@ export interface RemoveBotOptions {
   account?: string;
   deleteCreds?: boolean;
   output?: string;
+  /** When true: suppress human-readable stdout; throw ArcNatsCommandError on failure. */
+  json?: boolean;
+}
+
+export interface RemoveBotResult {
+  bot: string;
+  account: string;
+  revokedPubKey: string;
+  credsFileDeleted: boolean;
 }
 
 export interface SetupOperatorOptions {
   force?: boolean;
+  /** When true: suppress human-readable stdout; throw ArcNatsCommandError on failure. */
+  json?: boolean;
 }
 
-export async function setupOperator(account: string, botNames: string[], opts: SetupOperatorOptions): Promise<void> {
-  ensureNscInstalled();
+export interface SetupOperatorResult {
+  account: string;
+  bots: SetupOperatorBotResult[];
+  summary: { total: number; ok: number; failed: number };
+}
 
-  console.log(`Setting up ${botNames.length} bot(s) for operator ${account}...\n`);
+export async function setupOperator(
+  account: string,
+  botNames: string[],
+  opts: SetupOperatorOptions,
+): Promise<SetupOperatorResult> {
+  const json = opts.json === true;
+  ensureNscInstalled(json);
 
-  const results: { name: string; ok: boolean; error?: string }[] = [];
+  if (!json) console.log(`Setting up ${botNames.length} bot(s) for operator ${account}...\n`);
+
+  const bots: SetupOperatorBotResult[] = [];
 
   for (const name of botNames) {
+    if (!json) console.log(`── ${name} ──`);
     try {
-      console.log(`── ${name} ──`);
-      await addBot(name, { account, withIdentity: true, force: opts.force });
-      console.log();
-      results.push({ name, ok: true });
+      // Note: per-bot addBot inherits the parent json flag so its output is
+      // suppressed in JSON mode (cortex consumes only the final envelope).
+      const result = await addBot(name, {
+        account,
+        withIdentity: true,
+        force: opts.force,
+        json,
+      });
+      if (!json) console.log();
+      bots.push({
+        bot: name,
+        ok: true,
+        credsPath: result.credsPath,
+        pubKey: result.pubKey,
+      });
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.error(`  FAILED: ${msg}\n`);
-      results.push({ name, ok: false, error: msg });
+      const classified = classifyError(err);
+      if (!json) console.error(`  FAILED: ${classified.message}\n`);
+      bots.push({
+        bot: name,
+        ok: false,
+        error: classified,
+      });
     }
   }
 
-  console.log(`\n── Summary ──`);
-  const ok = results.filter(r => r.ok);
-  const failed = results.filter(r => !r.ok);
-  console.log(`  ${ok.length}/${botNames.length} bots provisioned`);
-  if (failed.length > 0) {
-    console.log(`  Failed: ${failed.map(r => r.name).join(", ")}`);
+  const okCount = bots.filter((b) => b.ok).length;
+  const failedCount = bots.length - okCount;
+
+  if (!json) {
+    console.log(`\n── Summary ──`);
+    console.log(`  ${okCount}/${botNames.length} bots provisioned`);
+    if (failedCount > 0) {
+      console.log(`  Failed: ${bots.filter((b) => !b.ok).map((b) => b.bot).join(", ")}`);
+    }
+    console.log(`\nNext steps:`);
+    console.log(`  1. arc identity export > ${account.toLowerCase()}-principals.json`);
+    console.log(`  2. Send the file to other operators`);
+    console.log(`  3. arc identity import <other-operator>-principals.json`);
   }
-  console.log(`\nNext steps:`);
-  console.log(`  1. arc identity export > ${account.toLowerCase()}-principals.json`);
-  console.log(`  2. Send the file to other operators`);
-  console.log(`  3. arc identity import <other-operator>-principals.json`);
+
+  return {
+    account,
+    bots,
+    summary: { total: botNames.length, ok: okCount, failed: failedCount },
+  };
 }
 
-export function removeBot(name: string, opts: RemoveBotOptions): void {
-  ensureNscInstalled();
-  validateBotName(name);
+export function removeBot(name: string, opts: RemoveBotOptions): RemoveBotResult {
+  const json = opts.json === true;
+  ensureNscInstalled(json);
+  validateBotName(name, json);
   const account = opts.account ?? detectAccount();
 
   if (!userExists(account, name)) {
+    if (json) {
+      throw new ArcNatsCommandError(
+        "USER_NOT_FOUND",
+        `user "${name}" not found under "${account}".`,
+      );
+    }
     console.error(`Error: user "${name}" not found under "${account}".`);
     process.exit(1);
   }
@@ -416,23 +607,32 @@ export function removeBot(name: string, opts: RemoveBotOptions): void {
   // map and push the updated account JWT. If this fails we abort BEFORE
   // deleting locally — a half-done revoke leaves a still-valid JWT on the
   // bus and the operator unaware.
+  let revokedPubKey = "";
   try {
-    revokeAndPushUser(account, name);
+    revokedPubKey = revokeAndPushUser(account, name);
   } catch (err) {
+    if (json) {
+      if (err instanceof ArcNatsCommandError) throw err;
+      throw new ArcNatsCommandError("PUSH_FAILED", err instanceof Error ? err.message : String(err));
+    }
     console.error(err instanceof Error ? err.message : String(err));
     process.exit(1);
   }
 
   nsc(["delete", "user", "-a", account, "-n", name]);
-  console.log(`Revoked and removed user: ${name} (account: ${account})`);
+  if (!json) console.log(`Revoked and removed user: ${name} (account: ${account})`);
 
+  let credsFileDeleted = false;
   if (opts.deleteCreds) {
     const path = opts.output ?? defaultCredsPath(name);
     if (existsSync(path)) {
       unlinkSync(path);
-      console.log(`Deleted credentials: ${path}`);
+      credsFileDeleted = true;
+      if (!json) console.log(`Deleted credentials: ${path}`);
     } else {
-      console.log(`Warning: no credentials file at ${path} (custom -o path used at creation?)`);
+      if (!json) console.log(`Warning: no credentials file at ${path} (custom -o path used at creation?)`);
     }
   }
+
+  return { bot: name, account, revokedPubKey, credsFileDeleted };
 }
