@@ -69,7 +69,7 @@ describe("Library lifecycle: install → list → upgrade → remove", () => {
       { cwd: lib.path, stdout: "pipe", stderr: "pipe" }
     );
 
-    const upgradeResults = await upgradeLibrary(env.db, env.paths, "my-lib");
+    const upgradeResults = await upgradeLibrary(env.db, env.arc, env.host, "my-lib");
     expect(upgradeResults).toHaveLength(2);
 
     const reviewUpgrade = upgradeResults.find((r) => r.name === "review")!;

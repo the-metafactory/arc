@@ -35,7 +35,7 @@ describe("library upgrade", () => {
       { cwd: lib.path, stdout: "pipe", stderr: "pipe" }
     );
 
-    const results = await upgradeLibrary(env.db, env.paths, "test-lib");
+    const results = await upgradeLibrary(env.db, env.arc, env.host, "test-lib");
     expect(results).toHaveLength(2);
 
     const alpha = results.find((r) => r.name === "alpha")!;
@@ -73,7 +73,7 @@ describe("library upgrade", () => {
     );
 
     // Upgrade just alpha via upgradePackage (simulates arc upgrade library:alpha)
-    const result = await upgradePackage(env.db, env.paths, "alpha");
+    const result = await upgradePackage(env.db, env.arc, env.host, "alpha");
     expect(result.success).toBe(true);
     expect(result.oldVersion).toBe("1.0.0");
     expect(result.newVersion).toBe("1.1.0");
@@ -108,7 +108,7 @@ describe("library upgrade", () => {
       { cwd: lib.path, stdout: "pipe", stderr: "pipe" }
     );
 
-    const results = await upgradeLibrary(env.db, env.paths, "test-lib");
+    const results = await upgradeLibrary(env.db, env.arc, env.host, "test-lib");
     expect(results).toHaveLength(2);
     expect(results.every((r) => r.success)).toBe(true);
     expect(results.every((r) => r.newVersion === "2.0.0")).toBe(true);
@@ -122,7 +122,7 @@ describe("library upgrade", () => {
 
   test("upgradeLibrary errors when no artifacts installed", async () => {
     env = await createTestEnv();
-    const results = await upgradeLibrary(env.db, env.paths, "nonexistent-lib");
+    const results = await upgradeLibrary(env.db, env.arc, env.host, "nonexistent-lib");
     expect(results).toHaveLength(1);
     expect(results[0].success).toBe(false);
     expect(results[0].error).toContain("No artifacts installed");
@@ -140,7 +140,7 @@ describe("library upgrade", () => {
     await install({ paths: env.paths, db: env.db, repoUrl: lib.url, yes: true });
 
     // No changes in source repo
-    const results = await upgradeLibrary(env.db, env.paths, "test-lib");
+    const results = await upgradeLibrary(env.db, env.arc, env.host, "test-lib");
     expect(results).toHaveLength(1);
     expect(results[0].success).toBe(true);
     expect(results[0].oldVersion).toBe("1.0.0");
@@ -229,7 +229,7 @@ describe("library upgrade", () => {
     );
 
     // Run upgrade
-    const results = await upgradeLibrary(env.db, env.paths, "test-lib");
+    const results = await upgradeLibrary(env.db, env.arc, env.host, "test-lib");
 
     // Should include results for alpha, beta, AND gamma
     expect(results.length).toBeGreaterThanOrEqual(3);

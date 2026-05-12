@@ -65,7 +65,7 @@ describe("checkUpgrades", () => {
     };
     await saveSources(env.paths.sourcesPath, sources);
 
-    const results = await checkUpgrades(env.db, env.paths);
+    const results = await checkUpgrades(env.db, env.arc, env.host);
     expect(results).toHaveLength(1);
     expect(results[0].name).toBe("TestSkill");
     expect(results[0].installedVersion).toBe("1.0.0");
@@ -105,7 +105,7 @@ describe("checkUpgrades", () => {
       sources: [{ name: "test", url: `file://${regPath}`, tier: "community", enabled: true }],
     });
 
-    const results = await checkUpgrades(env.db, env.paths);
+    const results = await checkUpgrades(env.db, env.arc, env.host);
     expect(results[0].upgradable).toBe(false);
   });
 });
@@ -129,7 +129,7 @@ describe("upgradePackage", () => {
       { cwd: repo.path, stdout: "pipe", stderr: "pipe" }
     );
 
-    const result = await upgradePackage(env.db, env.paths, "Upgradeable");
+    const result = await upgradePackage(env.db, env.arc, env.host, "Upgradeable");
     expect(result.success).toBe(true);
     expect(result.oldVersion).toBe("1.0.0");
     expect(result.newVersion).toBe("1.1.0");
@@ -148,14 +148,14 @@ describe("upgradePackage", () => {
     });
     await install({ paths: env.paths, db: env.db, repoUrl: repo.url, yes: true });
 
-    const result = await upgradePackage(env.db, env.paths, "Current");
+    const result = await upgradePackage(env.db, env.arc, env.host, "Current");
     expect(result.success).toBe(true);
     expect(result.oldVersion).toBe("1.0.0");
     expect(result.newVersion).toBe("1.0.0");
   });
 
   test("returns error for unknown package", async () => {
-    const result = await upgradePackage(env.db, env.paths, "NotInstalled");
+    const result = await upgradePackage(env.db, env.arc, env.host, "NotInstalled");
     expect(result.success).toBe(false);
     expect(result.error).toContain("not installed");
   });
@@ -168,7 +168,7 @@ describe("upgradePackage", () => {
     await install({ paths: env.paths, db: env.db, repoUrl: repo.url, yes: true });
 
     // Without force: returns success with same version (short-circuit)
-    const normalResult = await upgradePackage(env.db, env.paths, "ForceUpgrade");
+    const normalResult = await upgradePackage(env.db, env.arc, env.host, "ForceUpgrade");
     expect(normalResult.success).toBe(true);
     expect(normalResult.oldVersion).toBe("1.0.0");
     expect(normalResult.newVersion).toBe("1.0.0");
@@ -183,7 +183,7 @@ describe("upgradePackage", () => {
     expect(before.version).toBe("0.9.0");
 
     // With force: runs the full upgrade pipeline, updates DB back to manifest version
-    const forceResult = await upgradePackage(env.db, env.paths, "ForceUpgrade", { force: true });
+    const forceResult = await upgradePackage(env.db, env.arc, env.host, "ForceUpgrade", { force: true });
     expect(forceResult.success).toBe(true);
     expect(forceResult.oldVersion).toBe("0.9.0");
     expect(forceResult.newVersion).toBe("1.0.0");
@@ -266,11 +266,11 @@ describe("upgradeAll", () => {
     await install({ paths: env.paths, db: env.db, repoUrl: repo.url, yes: true });
 
     // Without force, upgradeAll would return empty (nothing upgradable)
-    const normalResults = await upgradeAll(env.db, env.paths);
+    const normalResults = await upgradeAll(env.db, env.arc, env.host);
     expect(normalResults).toHaveLength(0);
 
     // With force, upgradeAll should include all active packages
-    const forceResults = await upgradeAll(env.db, env.paths, { force: true });
+    const forceResults = await upgradeAll(env.db, env.arc, env.host, { force: true });
     expect(forceResults).toHaveLength(1);
     expect(forceResults[0].name).toBe("ForceAll");
     expect(forceResults[0].success).toBe(true);
@@ -290,14 +290,14 @@ describe("upgradeLibrary", () => {
     env.db.prepare("UPDATE skills SET library_name = ? WHERE name = ?").run("my-lib", "LibArtifact");
 
     // upgradeLibrary with force should process the artifact without error
-    const results = await upgradeLibrary(env.db, env.paths, "my-lib", { force: true });
+    const results = await upgradeLibrary(env.db, env.arc, env.host, "my-lib", { force: true });
     expect(results).toHaveLength(1);
     expect(results[0].name).toBe("LibArtifact");
     expect(results[0].success).toBe(true);
   });
 
   test("returns error for unknown library", async () => {
-    const results = await upgradeLibrary(env.db, env.paths, "nonexistent-lib");
+    const results = await upgradeLibrary(env.db, env.arc, env.host, "nonexistent-lib");
     expect(results).toHaveLength(1);
     expect(results[0].success).toBe(false);
     expect(results[0].error).toContain("No artifacts installed");

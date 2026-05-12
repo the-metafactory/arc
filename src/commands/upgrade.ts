@@ -2,7 +2,7 @@ import { existsSync, readdirSync } from "fs";
 import { join, dirname } from "path";
 import { mkdir } from "fs/promises";
 import { homedir } from "os";
-import type { PaiPaths, InstalledSkill, SourcesConfig, RulesTemplate } from "../types.js";
+import type { ArcPaths, HostAdapter, InstalledSkill, SourcesConfig, RulesTemplate } from "../types.js";
 import type { Database } from "bun:sqlite";
 import { listSkills, getSkill, listByLibrary } from "../lib/db.js";
 import { readManifest, readLibraryArtifacts } from "../lib/manifest.js";
@@ -50,13 +50,19 @@ function compareSemver(a: string, b: string): number {
 
 /**
  * Check which installed packages have newer versions available.
+ *
+ * @param host Unused today; threaded for signature consistency with
+ *   upgradePackage / upgradeAll / upgradeLibrary. Will be consumed when
+ *   check needs host-specific upgrade-path detection (e.g. an adapter
+ *   that resolves upgrades through a host-side registry).
  */
 export async function checkUpgrades(
   db: Database,
-  paths: PaiPaths
+  arc: ArcPaths,
+  host: HostAdapter,
 ): Promise<UpgradeCheckResult[]> {
   const installed = listSkills(db).filter((s) => s.status === "active");
-  const sources = await loadSources(paths.sourcesPath);
+  const sources = await loadSources(arc.sourcesPath);
   const results: UpgradeCheckResult[] = [];
 
   for (const skill of installed) {
@@ -69,7 +75,7 @@ export async function checkUpgrades(
     };
 
     // Check registry for advertised version
-    const found = await findInAllSources(sources, skill.name, paths.cachePath);
+    const found = await findInAllSources(sources, skill.name, arc.cachePath);
     if (found?.entry.version) {
       result.registryVersion = found.entry.version;
     }
@@ -138,7 +144,7 @@ function findConsumerRepos(templates: RulesTemplate[]): string[] {
  */
 export async function upgradePackage(
   db: Database,
-  paths: PaiPaths,
+  arc: ArcPaths, host: HostAdapter,
   name: string,
   opts?: { force?: boolean }
 ): Promise<UpgradeResult> {
@@ -225,15 +231,15 @@ export async function upgradePackage(
   }
 
   // Re-register hooks (remove old, add new) — no consent prompt on upgrade.
-  // paths.claudeRoot is threaded as $PAI_DIR expansion target — see install.ts.
+  // host.paths.root is threaded as $PAI_DIR expansion target — see install.ts.
   const resolvedHooks = resolveHooksFromManifest(
     manifest.provides?.hooks,
     installPath,
     name,
-    paths.claudeRoot,
+    host.paths.root,
   );
   if (resolvedHooks?.length) {
-    const settingsPath = paths.settingsPath;
+    const settingsPath = host.paths.settingsPath;
     await removeHooks(name, settingsPath);
     await registerHooks(name, resolvedHooks, settingsPath);
   }
@@ -249,7 +255,7 @@ export async function upgradePackage(
 
   // Re-wire extensions (if declared)
   if (manifest.extensions) {
-    const wired = await wireExtensions(manifest, installPath, paths.claudeRoot);
+    const wired = await wireExtensions(manifest, installPath, host.paths.root);
     for (const ext of wired) {
       console.log(`  \u2713 Extension wired: ${ext}`);
     }
@@ -311,7 +317,7 @@ export async function upgradePackage(
  */
 export async function upgradeAll(
   db: Database,
-  paths: PaiPaths,
+  arc: ArcPaths, host: HostAdapter,
   opts?: { force?: boolean }
 ): Promise<UpgradeResult[]> {
   const results: UpgradeResult[] = [];
@@ -320,14 +326,14 @@ export async function upgradeAll(
     // Skip checkUpgrades entirely — just get all active packages from DB
     const active = listSkills(db).filter((s) => s.status === "active");
     for (const pkg of active) {
-      const result = await upgradePackage(db, paths, pkg.name, opts);
+      const result = await upgradePackage(db, arc, host, pkg.name, opts);
       results.push(result);
     }
   } else {
-    const checks = await checkUpgrades(db, paths);
+    const checks = await checkUpgrades(db, arc, host);
     const upgradable = checks.filter((c) => c.upgradable);
     for (const check of upgradable) {
-      const result = await upgradePackage(db, paths, check.name);
+      const result = await upgradePackage(db, arc, host, check.name);
       results.push(result);
     }
   }
@@ -390,7 +396,7 @@ export function formatUpgradeResults(results: UpgradeResult[], opts?: { force?: 
  */
 export async function upgradeLibrary(
   db: Database,
-  paths: PaiPaths,
+  arc: ArcPaths, host: HostAdapter,
   libraryName: string,
   opts?: { force?: boolean }
 ): Promise<UpgradeResult[]> {
@@ -416,7 +422,7 @@ export async function upgradeLibrary(
   // This ensures per-artifact scripts, hooks, capabilities, and symlinks are all handled.
   const results: UpgradeResult[] = [];
   for (const artifact of artifacts) {
-    const result = await upgradePackage(db, paths, artifact.name, opts);
+    const result = await upgradePackage(db, arc, host, artifact.name, opts);
     results.push(result);
   }
 
@@ -441,7 +447,19 @@ export async function upgradeLibrary(
         const artifactDir = join(gitRoot, entry.path);
         const installResult = await installSingleArtifact(
           {
-            paths,
+            // installSingleArtifact still takes PaiPaths today — recombine
+            // arc + host into the legacy shape until install.ts migrates
+            // in a later Phase 3b slice.
+            paths: {
+              ...arc,
+              claudeRoot: host.paths.root,
+              skillsDir: host.paths.skillsDir,
+              agentsDir: host.paths.agentsDir,
+              promptsDir: host.paths.promptsDir,
+              binDir: host.paths.binDir,
+              settingsPath: host.paths.settingsPath,
+            },
+            host,
             db,
             repoUrl: artifacts[0].repo_url,
             yes: true,

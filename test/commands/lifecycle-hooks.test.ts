@@ -186,7 +186,7 @@ describe("upgrade lifecycle hooks", () => {
       { cwd: repo.path, stdout: "pipe", stderr: "pipe" }
     );
 
-    const result = await upgradePackage(env.db, env.paths, "UpgradeHooked");
+    const result = await upgradePackage(env.db, env.arc, env.host, "UpgradeHooked");
     expect(result.success).toBe(true);
     expect(result.newVersion).toBe("1.1.0");
 
@@ -230,7 +230,7 @@ describe("upgrade lifecycle hooks", () => {
       { cwd: repo.path, stdout: "pipe", stderr: "pipe" }
     );
 
-    const result = await upgradePackage(env.db, env.paths, "FallbackHook");
+    const result = await upgradePackage(env.db, env.arc, env.host, "FallbackHook");
     expect(result.success).toBe(true);
 
     const log = await Bun.file(logPath).text();
@@ -272,7 +272,7 @@ describe("upgrade lifecycle hooks", () => {
       { cwd: repo.path, stdout: "pipe", stderr: "pipe" }
     );
 
-    const result = await upgradePackage(env.db, env.paths, "VersionEnv");
+    const result = await upgradePackage(env.db, env.arc, env.host, "VersionEnv");
     expect(result.success).toBe(true);
 
     const content = await Bun.file(markerPath).text();
@@ -309,7 +309,7 @@ describe("upgrade lifecycle hooks", () => {
       { cwd: repo.path, stdout: "pipe", stderr: "pipe" }
     );
 
-    const result = await upgradePackage(env.db, env.paths, "FailUpgrade");
+    const result = await upgradePackage(env.db, env.arc, env.host, "FailUpgrade");
     expect(result.success).toBe(false);
     expect(result.error).toContain("Preupgrade script failed");
   });
