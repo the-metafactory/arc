@@ -120,7 +120,7 @@ afterEach(async () => {
 
 describe("catalogList", () => {
   test("returns error when no catalog exists", async () => {
-    const result = await catalogList(env.paths, env.db);
+    const result = await catalogList(env.arc, env.host, env.db);
     expect(result.success).toBe(false);
     expect(result.error).toContain("No catalog.yaml");
   });
@@ -128,7 +128,7 @@ describe("catalogList", () => {
   test("lists all entries with install status", async () => {
     await saveCatalog(env.paths.catalogPath, sampleCatalog(env.root));
 
-    const result = await catalogList(env.paths, env.db);
+    const result = await catalogList(env.arc, env.host, env.db);
     expect(result.success).toBe(true);
     expect(result.items).toHaveLength(4); // 3 skills + 1 agent
     expect(result.items!.every((i) => !i.installed)).toBe(true);
@@ -137,7 +137,7 @@ describe("catalogList", () => {
   test("formatCatalogList shows entries", async () => {
     await saveCatalog(env.paths.catalogPath, sampleCatalog(env.root));
 
-    const result = await catalogList(env.paths, env.db);
+    const result = await catalogList(env.arc, env.host, env.db);
     const output = formatCatalogList(result);
     expect(output).toContain("Research");
     expect(output).toContain("Architect");
@@ -150,7 +150,7 @@ describe("catalogSearch", () => {
   test("finds entries by name", async () => {
     await saveCatalog(env.paths.catalogPath, sampleCatalog(env.root));
 
-    const result = await catalogSearch(env.paths, "research");
+    const result = await catalogSearch(env.arc, env.host, "research");
     expect(result.success).toBe(true);
     expect(result.results).toHaveLength(1);
     expect(result.results![0].entry.name).toBe("Research");
@@ -159,7 +159,7 @@ describe("catalogSearch", () => {
   test("finds entries by description", async () => {
     await saveCatalog(env.paths.catalogPath, sampleCatalog(env.root));
 
-    const result = await catalogSearch(env.paths, "debate");
+    const result = await catalogSearch(env.arc, env.host, "debate");
     expect(result.success).toBe(true);
     expect(result.results).toHaveLength(1);
     expect(result.results![0].entry.name).toBe("Council");
@@ -168,7 +168,7 @@ describe("catalogSearch", () => {
   test("returns empty for no match", async () => {
     await saveCatalog(env.paths.catalogPath, sampleCatalog(env.root));
 
-    const result = await catalogSearch(env.paths, "zzzznotfound");
+    const result = await catalogSearch(env.arc, env.host, "zzzznotfound");
     expect(result.success).toBe(true);
     expect(result.results).toHaveLength(0);
   });
@@ -176,7 +176,7 @@ describe("catalogSearch", () => {
   test("formatCatalogSearch shows results", async () => {
     await saveCatalog(env.paths.catalogPath, sampleCatalog(env.root));
 
-    const result = await catalogSearch(env.paths, "design");
+    const result = await catalogSearch(env.arc, env.host, "design");
     const output = formatCatalogSearch(result);
     expect(output).toContain("Architect");
     expect(output).toContain("source:");
@@ -195,12 +195,12 @@ describe("catalogAdd", () => {
       has_cli: true,
     };
 
-    const result = await catalogAdd(env.paths, entry, "skill");
+    const result = await catalogAdd(env.arc, env.host, entry, "skill");
     expect(result.success).toBe(true);
     expect(result.name).toBe("SpecFlow");
 
     // Verify persisted
-    const listResult = await catalogList(env.paths, env.db);
+    const listResult = await catalogList(env.arc, env.host, env.db);
     expect(listResult.items!.some((i) => i.entry.name === "SpecFlow")).toBe(true);
   });
 
@@ -214,7 +214,7 @@ describe("catalogAdd", () => {
       type: "custom",
     };
 
-    const result = await catalogAdd(env.paths, entry, "skill");
+    const result = await catalogAdd(env.arc, env.host, entry, "skill");
     expect(result.success).toBe(false);
     expect(result.error).toContain("already exists");
   });
@@ -224,10 +224,10 @@ describe("catalogRemove", () => {
   test("removes entry from catalog", async () => {
     await saveCatalog(env.paths.catalogPath, sampleCatalog(env.root));
 
-    const result = await catalogRemove(env.paths, "Research");
+    const result = await catalogRemove(env.arc, env.host, "Research");
     expect(result.success).toBe(true);
 
-    const listResult = await catalogList(env.paths, env.db);
+    const listResult = await catalogList(env.arc, env.host, env.db);
     expect(listResult.items!.some((i) => i.entry.name === "Research")).toBe(
       false
     );
@@ -236,7 +236,7 @@ describe("catalogRemove", () => {
   test("returns error for non-existent entry", async () => {
     await saveCatalog(env.paths.catalogPath, sampleCatalog(env.root));
 
-    const result = await catalogRemove(env.paths, "NonExistent");
+    const result = await catalogRemove(env.arc, env.host, "NonExistent");
     expect(result.success).toBe(false);
     expect(result.error).toContain("not found");
   });
@@ -247,7 +247,7 @@ describe("catalogUse", () => {
     await createMockSkillDir(env.root, "mock-skills/Research", { name: "Research" });
     await saveCatalog(env.paths.catalogPath, sampleCatalog(env.root));
 
-    const result = await catalogUse(env.paths, env.db, "Research");
+    const result = await catalogUse(env.arc, env.host, env.db, "Research");
     expect(result.success).toBe(true);
     expect(result.installed).toHaveLength(1);
     expect(result.installed![0].name).toBe("Research");
@@ -269,7 +269,7 @@ describe("catalogUse", () => {
     await createMockAgentFile(env.root, "mock-agents", "Architect");
     await saveCatalog(env.paths.catalogPath, sampleCatalog(env.root));
 
-    const result = await catalogUse(env.paths, env.db, "Architect");
+    const result = await catalogUse(env.arc, env.host, env.db, "Architect");
     expect(result.success).toBe(true);
     expect(result.installed).toHaveLength(1);
     expect(result.installed![0].artifactType).toBe("agent");
@@ -284,7 +284,7 @@ describe("catalogUse", () => {
     await createMockSkillDir(env.root, "mock-skills/Thinking/Council", { name: "Council" });
     await saveCatalog(env.paths.catalogPath, sampleCatalog(env.root));
 
-    const result = await catalogUse(env.paths, env.db, "Council");
+    const result = await catalogUse(env.arc, env.host, env.db, "Council");
     expect(result.success).toBe(true);
     expect(result.installed).toHaveLength(2);
     // Thinking (dep) installed first, then Council
@@ -299,9 +299,9 @@ describe("catalogUse", () => {
     await createMockSkillDir(env.root, "mock-skills/Research", { name: "Research" });
     await saveCatalog(env.paths.catalogPath, sampleCatalog(env.root));
 
-    await catalogUse(env.paths, env.db, "Research");
+    await catalogUse(env.arc, env.host, env.db, "Research");
 
-    const listResult = await catalogList(env.paths, env.db);
+    const listResult = await catalogList(env.arc, env.host, env.db);
     const researchItem = listResult.items!.find(
       (i) => i.entry.name === "Research"
     );
@@ -314,13 +314,13 @@ describe("catalogUse", () => {
     await saveCatalog(env.paths.catalogPath, sampleCatalog(env.root));
 
     // Install first time
-    await catalogUse(env.paths, env.db, "Research");
+    await catalogUse(env.arc, env.host, env.db, "Research");
     expect(existsSync(join(env.paths.skillsDir, "Research", "SKILL.md"))).toBe(
       true
     );
 
     // Install again (refresh)
-    const result = await catalogUse(env.paths, env.db, "Research");
+    const result = await catalogUse(env.arc, env.host, env.db, "Research");
     expect(result.success).toBe(true);
     expect(existsSync(join(env.paths.skillsDir, "Research", "SKILL.md"))).toBe(
       true
@@ -330,7 +330,7 @@ describe("catalogUse", () => {
   test("returns error for unknown entry", async () => {
     await saveCatalog(env.paths.catalogPath, sampleCatalog(env.root));
 
-    const result = await catalogUse(env.paths, env.db, "NonExistent");
+    const result = await catalogUse(env.arc, env.host, env.db, "NonExistent");
     expect(result.success).toBe(false);
     expect(result.error).toContain("not found");
   });
@@ -340,7 +340,7 @@ describe("catalogSync", () => {
   test("returns empty when nothing installed", async () => {
     await saveCatalog(env.paths.catalogPath, sampleCatalog(env.root));
 
-    const result = await catalogSync(env.paths, env.db);
+    const result = await catalogSync(env.arc, env.host, env.db);
     expect(result.success).toBe(true);
     expect(result.synced).toHaveLength(0);
   });

@@ -3,7 +3,7 @@ import { existsSync } from "fs";
 import { mkdir, cp, rm } from "fs/promises";
 import { homedir } from "os";
 import type { Database } from "bun:sqlite";
-import type { PaiPaths, CatalogEntry, ArtifactType } from "../types.js";
+import type { ArcPaths, HostAdapter, CatalogEntry, ArtifactType } from "../types.js";
 import { MANIFEST_FILENAMES } from "../lib/manifest.js";
 import {
   loadCatalog,
@@ -68,11 +68,16 @@ export interface CatalogSyncResult {
 
 // ── Commands ──────────────────────────────────────────────────
 
+/**
+ * @param host Unused today; threaded for #117 signature consistency. catalogList only
+ *   reads the catalog file (arc state) and per-skill install status from db.
+ */
 export async function catalogList(
-  paths: PaiPaths,
+  arc: ArcPaths,
+  host: HostAdapter,
   db: Database
 ): Promise<CatalogListResult> {
-  const config = await loadCatalog(paths.catalogPath);
+  const config = await loadCatalog(arc.catalogPath);
   if (!config) {
     return { success: false, error: "No catalog.yaml found" };
   }
@@ -81,11 +86,16 @@ export async function catalogList(
   return { success: true, items };
 }
 
+/**
+ * @param host Unused today; threaded for #117 signature consistency. catalogSearch
+ *   reads the catalog file (arc state) only.
+ */
 export async function catalogSearch(
-  paths: PaiPaths,
+  arc: ArcPaths,
+  host: HostAdapter,
   keyword: string
 ): Promise<CatalogSearchResult> {
-  const config = await loadCatalog(paths.catalogPath);
+  const config = await loadCatalog(arc.catalogPath);
   if (!config) {
     return { success: false, error: "No catalog.yaml found" };
   }
@@ -94,30 +104,40 @@ export async function catalogSearch(
   return { success: true, results };
 }
 
+/**
+ * @param host Unused today; threaded for #117 signature consistency. catalogAdd
+ *   only mutates the catalog file (arc state).
+ */
 export async function catalogAdd(
-  paths: PaiPaths,
+  arc: ArcPaths,
+  host: HostAdapter,
   entry: CatalogEntry,
   artifactType: ArtifactType
 ): Promise<CatalogAddResult> {
-  const config = await loadCatalog(paths.catalogPath);
+  const config = await loadCatalog(arc.catalogPath);
   if (!config) {
     return { success: false, error: "No catalog.yaml found" };
   }
 
   try {
     addEntry(config, entry, artifactType);
-    await saveCatalog(paths.catalogPath, config);
+    await saveCatalog(arc.catalogPath, config);
     return { success: true, name: entry.name, artifactType };
   } catch (err: any) {
     return { success: false, error: err.message };
   }
 }
 
+/**
+ * @param host Unused today; threaded for #117 signature consistency. catalogRemove
+ *   only mutates the catalog file (arc state).
+ */
 export async function catalogRemove(
-  paths: PaiPaths,
+  arc: ArcPaths,
+  host: HostAdapter,
   name: string
 ): Promise<CatalogRemoveResult> {
-  const config = await loadCatalog(paths.catalogPath);
+  const config = await loadCatalog(arc.catalogPath);
   if (!config) {
     return { success: false, error: "No catalog.yaml found" };
   }
@@ -127,7 +147,7 @@ export async function catalogRemove(
     return { success: false, error: `Entry "${name}" not found in catalog` };
   }
 
-  await saveCatalog(paths.catalogPath, config);
+  await saveCatalog(arc.catalogPath, config);
   return { success: true, name };
 }
 
@@ -139,11 +159,12 @@ export async function catalogRemove(
  * For prompts: copies .md file to prompts dir.
  */
 export async function catalogUse(
-  paths: PaiPaths,
+  arc: ArcPaths,
+  host: HostAdapter,
   db: Database,
   name: string
 ): Promise<CatalogUseResult> {
-  const config = await loadCatalog(paths.catalogPath);
+  const config = await loadCatalog(arc.catalogPath);
   if (!config) {
     return { success: false, error: "No catalog.yaml found" };
   }
@@ -159,7 +180,7 @@ export async function catalogUse(
   const installed: Array<{ name: string; artifactType: ArtifactType }> = [];
 
   for (const { entry, artifactType } of ordered) {
-    const result = await installEntry(paths, db, entry, artifactType, config);
+    const result = await installEntry(arc, host, db, entry, artifactType, config);
     if (!result.success) {
       return {
         success: false,
@@ -177,10 +198,11 @@ export async function catalogUse(
  * Re-pull all installed catalog entries from source.
  */
 export async function catalogSync(
-  paths: PaiPaths,
+  arc: ArcPaths,
+  host: HostAdapter,
   db: Database
 ): Promise<CatalogSyncResult> {
-  const config = await loadCatalog(paths.catalogPath);
+  const config = await loadCatalog(arc.catalogPath);
   if (!config) {
     return { success: false, error: "No catalog.yaml found" };
   }
@@ -196,7 +218,8 @@ export async function catalogSync(
 
   for (const item of installedItems) {
     const result = await installEntry(
-      paths,
+      arc,
+      host,
       db,
       item.entry,
       item.artifactType,
@@ -217,10 +240,11 @@ export async function catalogSync(
  * Local sources: copy back. GitHub sources: clone, overlay, commit, push.
  */
 export async function catalogPush(
-  paths: PaiPaths,
+  arc: ArcPaths,
+  host: HostAdapter,
   name: string
 ): Promise<CatalogPushResult> {
-  const config = await loadCatalog(paths.catalogPath);
+  const config = await loadCatalog(arc.catalogPath);
   if (!config) {
     return { success: false, error: "No catalog.yaml found" };
   }
@@ -236,7 +260,7 @@ export async function catalogPush(
   // Determine local installed path
   const localPath =
     artifactType === "skill"
-      ? join(paths.skillsDir, entry.name)
+      ? join(host.paths.skillsDir, entry.name)
       : artifactType === "agent"
         ? join(
             config.defaults.agents_dir.replace(/^~/, homedir()),
@@ -264,7 +288,7 @@ export async function catalogPush(
   }
 
   // GitHub source: clone, overlay, commit, push
-  const tmpDir = join(paths.reposDir, `_push_${name}_${Date.now()}`);
+  const tmpDir = join(arc.reposDir, `_push_${name}_${Date.now()}`);
   try {
     let cloneResult = Bun.spawnSync(
       ["git", "clone", "--depth", "1", "--branch", resolved.branch!, resolved.cloneUrl, tmpDir],
@@ -353,11 +377,15 @@ export async function catalogPush(
 
 /**
  * Commit and push catalog.yaml to git remote.
+ *
+ * @param host Unused today; threaded for #117 signature consistency. catalogPushCatalog
+ *   only invokes git against the catalog file (arc state).
  */
 export async function catalogPushCatalog(
-  paths: PaiPaths
+  arc: ArcPaths,
+  host: HostAdapter
 ): Promise<{ success: boolean; error?: string }> {
-  const catalogDir = join(paths.catalogPath, "..");
+  const catalogDir = join(arc.catalogPath, "..");
 
   const statusResult = Bun.spawnSync(
     ["git", "status", "--porcelain", "catalog.yaml"],
@@ -448,37 +476,39 @@ interface EntryInstallResult {
 }
 
 async function installEntry(
-  paths: PaiPaths,
+  arc: ArcPaths,
+  host: HostAdapter,
   db: Database,
   entry: CatalogEntry,
   artifactType: ArtifactType,
   config: { defaults: { skills_dir: string; agents_dir: string; prompts_dir: string } }
 ): Promise<EntryInstallResult> {
   if (artifactType === "skill") {
-    return installSkillEntry(paths, db, entry);
+    return installSkillEntry(arc, host, db, entry);
   }
 
   if (artifactType === "agent") {
-    return installAgentEntry(paths, entry, config.defaults.agents_dir);
+    return installAgentEntry(arc, host, entry, config.defaults.agents_dir);
   }
 
   if (artifactType === "prompt") {
-    return installPromptEntry(paths, entry, config.defaults.prompts_dir);
+    return installPromptEntry(arc, host, entry, config.defaults.prompts_dir);
   }
 
   return { success: false, error: `Unknown artifact type: ${artifactType}` };
 }
 
 async function installSkillEntry(
-  paths: PaiPaths,
+  arc: ArcPaths,
+  host: HostAdapter,
   db: Database,
   entry: CatalogEntry
 ): Promise<EntryInstallResult> {
   const resolved = resolveSource(entry.source);
   const isCli = entry.has_cli || entry.bundle;
-  const baseDir = isCli ? paths.reposDir : paths.skillsDir;
+  const baseDir = isCli ? arc.reposDir : host.paths.skillsDir;
   const installDir = join(baseDir, entry.name);
-  const skillLinkDir = join(paths.skillsDir, entry.name);
+  const skillLinkDir = join(host.paths.skillsDir, entry.name);
 
   // Path traversal guard — ensure installDir stays inside the target directory
   if (!join(installDir).startsWith(join(baseDir) + "/")) {
@@ -498,11 +528,11 @@ async function installSkillEntry(
     if (existsSync(installDir)) {
       await rm(installDir, { recursive: true, force: true });
     }
-    await mkdir(isCli ? paths.reposDir : paths.skillsDir, { recursive: true });
+    await mkdir(isCli ? arc.reposDir : host.paths.skillsDir, { recursive: true });
     await cp(sourceDir, installDir, { recursive: true });
   } else {
     // GitHub source: clone to temp, extract
-    const tmpDir = join(paths.reposDir, `_tmp_${entry.name}_${Date.now()}`);
+    const tmpDir = join(arc.reposDir, `_tmp_${entry.name}_${Date.now()}`);
     try {
       let cloneResult = Bun.spawnSync(
         ["git", "clone", "--depth", "1", "--branch", resolved.branch!, resolved.cloneUrl, tmpDir],
@@ -534,7 +564,7 @@ async function installSkillEntry(
       if (existsSync(installDir)) {
         await rm(installDir, { recursive: true, force: true });
       }
-      await mkdir(isCli ? paths.reposDir : paths.skillsDir, { recursive: true });
+      await mkdir(isCli ? arc.reposDir : host.paths.skillsDir, { recursive: true });
       await cp(sourceDir, installDir, { recursive: true });
     } finally {
       if (existsSync(tmpDir)) {
@@ -570,7 +600,7 @@ async function installSkillEntry(
       });
     }
     if (manifest) {
-      await createCliShim(paths.shimDir, paths.binDir, manifest);
+      await createCliShim(arc.shimDir, host.paths.binDir, manifest);
     }
   }
 
@@ -630,8 +660,14 @@ function findRepoRoot(startDir: string): string {
   return startDir;
 }
 
+/**
+ * @param host Unused today; threaded for #117 signature consistency. installAgentEntry
+ *   writes to `agentsDir` passed by the caller (catalogUse), which already resolved
+ *   it from config defaults — not from host.paths.agentsDir.
+ */
 async function installAgentEntry(
-  paths: PaiPaths,
+  arc: ArcPaths,
+  host: HostAdapter,
   entry: CatalogEntry,
   agentsDir: string
 ): Promise<EntryInstallResult> {
@@ -647,7 +683,7 @@ async function installAgentEntry(
   }
 
   // GitHub: clone, extract the single file
-  const tmpDir = join(paths.reposDir, `_tmp_${entry.name}_${Date.now()}`);
+  const tmpDir = join(arc.reposDir, `_tmp_${entry.name}_${Date.now()}`);
   try {
     let cloneResult = Bun.spawnSync(
       ["git", "clone", "--depth", "1", "--branch", resolved.branch!, resolved.cloneUrl, tmpDir],
@@ -684,11 +720,16 @@ async function installAgentEntry(
   }
 }
 
+/**
+ * @param host Unused today; threaded for #117 signature consistency.
+ *   Forwarded as-is to installAgentEntry, which also doesn't read it.
+ */
 async function installPromptEntry(
-  paths: PaiPaths,
+  arc: ArcPaths,
+  host: HostAdapter,
   entry: CatalogEntry,
   promptsDir: string
 ): Promise<EntryInstallResult> {
   // Same logic as agent — single file copy
-  return installAgentEntry(paths, entry, promptsDir);
+  return installAgentEntry(arc, host, entry, promptsDir);
 }

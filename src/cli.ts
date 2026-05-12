@@ -976,8 +976,9 @@ catalog
   .description("List catalog entries with install status")
   .action(async () => {
     const paths = createPaths();
+    const host = getDefaultHost({ root: paths.claudeRoot });
     const db = openDatabase(paths.dbPath);
-    const result = await catalogList(paths, db);
+    const result = await catalogList(paths, host, db);
     console.log(formatCatalogList(result));
     db.close();
   });
@@ -987,7 +988,8 @@ catalog
   .description("Search catalog (omit keyword to list all)")
   .action(async (keyword?: string) => {
     const paths = createPaths();
-    const result = await catalogSearch(paths, keyword ?? "");
+    const host = getDefaultHost({ root: paths.claudeRoot });
+    const result = await catalogSearch(paths, host, keyword ?? "");
     console.log(formatCatalogSearch(result));
   });
 
@@ -1015,6 +1017,7 @@ catalog
       }
     ) => {
       const paths = createPaths();
+      const host = getDefaultHost({ root: paths.claudeRoot });
 
       if (opts.fromRegistry) {
         // Search all configured sources for the named package
@@ -1079,6 +1082,7 @@ catalog
         };
         const result = await catalogAdd(
           paths,
+          host,
           entry,
           opts.artifact as ArtifactType
         );
@@ -1097,7 +1101,8 @@ catalog
   .description("Remove an entry from the catalog")
   .action(async (name: string) => {
     const paths = createPaths();
-    const result = await catalogRemove(paths, name);
+    const host = getDefaultHost({ root: paths.claudeRoot });
+    const result = await catalogRemove(paths, host, name);
     if (result.success) {
       console.log(`Removed ${result.name} from catalog`);
     } else {
@@ -1111,9 +1116,10 @@ catalog
   .description("Install a catalog entry (resolves dependencies)")
   .action(async (name: string) => {
     const paths = createPaths();
+    const host = getDefaultHost({ root: paths.claudeRoot });
     await ensureDirectories(paths);
     const db = openDatabase(paths.dbPath);
-    const result = await catalogUse(paths, db, name);
+    const result = await catalogUse(paths, host, db, name);
 
     if (result.success) {
       for (const item of result.installed!) {
@@ -1132,9 +1138,10 @@ catalog
   .description("Re-pull all installed catalog entries from source")
   .action(async () => {
     const paths = createPaths();
+    const host = getDefaultHost({ root: paths.claudeRoot });
     await ensureDirectories(paths);
     const db = openDatabase(paths.dbPath);
-    const result = await catalogSync(paths, db);
+    const result = await catalogSync(paths, host, db);
 
     if (result.success) {
       if (!result.synced?.length) {
@@ -1158,7 +1165,8 @@ catalog
   .description("Push local changes to a catalog entry back to its source")
   .action(async (name: string) => {
     const paths = createPaths();
-    const result = await catalogPush(paths, name);
+    const host = getDefaultHost({ root: paths.claudeRoot });
+    const result = await catalogPush(paths, host, name);
     if (result.success) {
       console.log(`Pushed ${result.name} back to source`);
     } else {
@@ -1172,7 +1180,8 @@ catalog
   .description("Commit and push catalog.yaml to git remote")
   .action(async () => {
     const paths = createPaths();
-    const result = await catalogPushCatalog(paths);
+    const host = getDefaultHost({ root: paths.claudeRoot });
+    const result = await catalogPushCatalog(paths, host);
     if (result.success) {
       console.log("Catalog pushed to remote.");
     } else {
