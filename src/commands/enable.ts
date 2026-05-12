@@ -1,7 +1,7 @@
 import { join } from "path";
 import { existsSync } from "fs";
 import type { Database } from "bun:sqlite";
-import type { PaiPaths } from "../types.js";
+import type { ArcPaths, HostAdapter } from "../types.js";
 import { getSkill, updateSkillStatus } from "../lib/db.js";
 import { readManifest } from "../lib/manifest.js";
 import { createSymlink, createCliShim, extractAllCliInfo } from "../lib/symlinks.js";
@@ -19,7 +19,8 @@ export interface EnableResult {
  */
 export async function enable(
   db: Database,
-  paths: PaiPaths,
+  arc: ArcPaths,
+  host: HostAdapter,
   name: string
 ): Promise<EnableResult> {
   const skill = getSkill(db, name);
@@ -40,18 +41,18 @@ export async function enable(
     // Pipelines: re-create pipeline symlink
     const pipelineSourceDir = join(skill.install_path, "pipeline");
     const sourceDir = existsSync(pipelineSourceDir) ? pipelineSourceDir : skill.install_path;
-    await createSymlink(sourceDir, join(paths.pipelinesDir, name));
+    await createSymlink(sourceDir, join(arc.pipelinesDir, name));
   } else if (isTool) {
     // Tools: re-create bin symlinks for all CLI entries
     if (manifest) {
       const cliEntries = extractAllCliInfo(manifest);
       for (const entry of cliEntries) {
-        await createSymlink(skill.install_path, join(paths.binDir, entry.binName));
+        await createSymlink(skill.install_path, join(host.paths.binDir, entry.binName));
       }
       if (!cliEntries.length) {
-        await createSymlink(skill.install_path, join(paths.binDir, name));
+        await createSymlink(skill.install_path, join(host.paths.binDir, name));
       }
-      await createCliShim(paths.shimDir, paths.binDir, manifest);
+      await createCliShim(arc.shimDir, host.paths.binDir, manifest);
     }
   } else if (isAgent) {
     // Agents: re-create .md file symlink for Claude auto-discovery
@@ -59,12 +60,12 @@ export async function enable(
     const sourceDir = existsSync(agentSourceDir) ? agentSourceDir : skill.install_path;
     const mdFile = `${name}.md`;
     const sourcePath = join(sourceDir, mdFile);
-    const linkPath = join(paths.agentsDir, mdFile);
+    const linkPath = join(host.paths.agentsDir, mdFile);
 
     if (existsSync(sourcePath)) {
       await createSymlink(sourcePath, linkPath);
     } else {
-      await createSymlink(sourceDir, join(paths.agentsDir, name));
+      await createSymlink(sourceDir, join(host.paths.agentsDir, name));
     }
   } else if (isPrompt) {
     // Prompts: re-create .md file symlink for Claude auto-discovery
@@ -72,17 +73,17 @@ export async function enable(
     const sourceDir = existsSync(promptSourceDir) ? promptSourceDir : skill.install_path;
     const mdFile = `${name}.md`;
     const sourcePath = join(sourceDir, mdFile);
-    const linkPath = join(paths.promptsDir, mdFile);
+    const linkPath = join(host.paths.promptsDir, mdFile);
 
     if (existsSync(sourcePath)) {
       await createSymlink(sourcePath, linkPath);
     } else {
-      await createSymlink(sourceDir, join(paths.promptsDir, name));
+      await createSymlink(sourceDir, join(host.paths.promptsDir, name));
     }
   } else {
     // Skills: re-create skill symlink
     const skillSourceDir = join(skill.install_path, "skill");
-    const skillLinkPath = join(paths.skillsDir, name);
+    const skillLinkPath = join(host.paths.skillsDir, name);
 
     if (existsSync(skillSourceDir)) {
       await createSymlink(skillSourceDir, skillLinkPath);
@@ -94,24 +95,24 @@ export async function enable(
     if (manifest) {
       const cliEntries = extractAllCliInfo(manifest);
       for (const entry of cliEntries) {
-        await createSymlink(skill.install_path, join(paths.binDir, entry.binName));
+        await createSymlink(skill.install_path, join(host.paths.binDir, entry.binName));
       }
       if (cliEntries.length) {
-        await createCliShim(paths.shimDir, paths.binDir, manifest);
+        await createCliShim(arc.shimDir, host.paths.binDir, manifest);
       }
     }
   }
 
   // Re-register hooks when enabling (consent was given at install time).
-  // paths.claudeRoot is threaded as $PAI_DIR expansion target — see install.ts.
+  // host.paths.root is threaded as $PAI_DIR expansion target — see install.ts.
   const resolvedHooks = resolveHooksFromManifest(
     manifest?.provides?.hooks,
     skill.install_path,
     name,
-    paths.claudeRoot,
+    host.paths.root,
   );
   if (resolvedHooks?.length) {
-    const settingsPath = paths.settingsPath;
+    const settingsPath = host.paths.settingsPath;
     await registerHooks(name, resolvedHooks, settingsPath);
   }
 
