@@ -98,7 +98,7 @@ describe("enable command", () => {
     });
 
     await disable(env.db, env.paths, "TestSkill");
-    await enable(env.db, env.paths, "TestSkill");
+    await enable(env.db, env.arc, env.host, "TestSkill");
 
     const skillLink = join(env.paths.skillsDir, "TestSkill");
     expect(existsSync(skillLink)).toBe(true);
@@ -117,7 +117,7 @@ describe("enable command", () => {
     });
 
     await disable(env.db, env.paths, "TestSkill");
-    await enable(env.db, env.paths, "TestSkill");
+    await enable(env.db, env.arc, env.host, "TestSkill");
 
     const skill = getSkill(env.db, "TestSkill");
     expect(skill!.status).toBe("active");
@@ -135,7 +135,7 @@ describe("enable command", () => {
       yes: true,
     });
 
-    const result = await enable(env.db, env.paths, "TestSkill");
+    const result = await enable(env.db, env.arc, env.host, "TestSkill");
     expect(result.success).toBe(false);
     expect(result.error).toContain("already active");
   });

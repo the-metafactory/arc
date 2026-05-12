@@ -126,7 +126,7 @@ describe("Full lifecycle: install → list → info → audit → disable → en
     expect(listAfterDisable.skills[0].status).toBe("disabled");
 
     // --- ENABLE ---
-    const enableResult = await enable(env.db, env.paths, "_JIRA");
+    const enableResult = await enable(env.db, env.arc, env.host, "_JIRA");
     expect(enableResult.success).toBe(true);
 
     // Symlink re-created
@@ -193,7 +193,7 @@ describe("Full lifecycle: install → list → info → audit → disable → en
     expect(getSkill(env.db, "mytool")!.status).toBe("disabled");
 
     // --- ENABLE ---
-    const enableResult = await enable(env.db, env.paths, "mytool");
+    const enableResult = await enable(env.db, env.arc, env.host, "mytool");
     expect(enableResult.success).toBe(true);
     expect(existsSync(binLink)).toBe(true);
     expect(getSkill(env.db, "mytool")!.status).toBe("active");
@@ -256,7 +256,7 @@ describe("Full lifecycle: install → list → info → audit → disable → en
     expect(getSkill(env.db, "TestArchitect")!.status).toBe("disabled");
 
     // --- ENABLE ---
-    const enableResult = await enable(env.db, env.paths, "TestArchitect");
+    const enableResult = await enable(env.db, env.arc, env.host, "TestArchitect");
     expect(enableResult.success).toBe(true);
     expect(existsSync(agentLink)).toBe(true);
     expect(lstatSync(agentLink).isSymbolicLink()).toBe(true);
@@ -313,7 +313,7 @@ describe("Full lifecycle: install → list → info → audit → disable → en
     expect(existsSync(promptLink)).toBe(false);
 
     // --- ENABLE ---
-    const enableResult = await enable(env.db, env.paths, "task-router");
+    const enableResult = await enable(env.db, env.arc, env.host, "task-router");
     expect(enableResult.success).toBe(true);
     expect(existsSync(promptLink)).toBe(true);
     expect(lstatSync(promptLink).isSymbolicLink()).toBe(true);
@@ -513,7 +513,7 @@ describe("Full lifecycle: install → list → info → audit → disable → en
     expect(existsSync(join(env.paths.shimDir, "multi-alt"))).toBe(false);
 
     // --- ENABLE restores all ---
-    const enableResult = await enable(env.db, env.paths, "multitool");
+    const enableResult = await enable(env.db, env.arc, env.host, "multitool");
     expect(enableResult.success).toBe(true);
     expect(existsSync(join(env.paths.binDir, "multitool"))).toBe(true);
     expect(existsSync(join(env.paths.binDir, "multi-alt"))).toBe(true);
