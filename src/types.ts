@@ -417,7 +417,7 @@ export interface AuditWarning {
 }
 
 // ── Host adapter types (multi-backend support, see issue #117) ─────
-// Split of legacy PaiPaths into two concerns:
+// Two concerns:
 //   - ArcPaths: arc's own state, host-independent
 //   - HostPaths + HostAdapter: per-backend install dirs and behavior
 
@@ -520,28 +520,6 @@ export interface HostAdapter {
    */
   supports(type: ArtifactType): boolean;
 }
-
-/**
- * Configurable paths — injected for test isolation.
- *
- * @deprecated Use ArcPaths + HostAdapter instead. Will be removed in Phase 3 of #117.
- *   Today kept as an intersection alias so existing call sites keep compiling while
- *   the migration runs incrementally.
- */
-export type PaiPaths = ArcPaths & {
-  /** @deprecated Use HostAdapter.paths.root */
-  claudeRoot: string;
-  /** @deprecated Use HostAdapter.paths.skillsDir */
-  skillsDir: string;
-  /** @deprecated Use HostAdapter.paths.agentsDir */
-  agentsDir: string;
-  /** @deprecated Use HostAdapter.paths.promptsDir */
-  promptsDir: string;
-  /** @deprecated Use HostAdapter.paths.binDir */
-  binDir: string;
-  /** @deprecated Use HostAdapter.paths.settingsPath */
-  settingsPath: string;
-};
 
 // ── Bundle and publish types ─────────────────────────────────
 

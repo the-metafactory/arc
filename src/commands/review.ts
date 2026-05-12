@@ -8,10 +8,10 @@ import {
   type PendingSubmission,
   type SubmissionDetail,
 } from "../lib/review.js";
-import type { PaiPaths } from "../types.js";
+import type { ArcPaths } from "../types.js";
 
 export interface ReviewListOptions {
-  paths: PaiPaths;
+  paths: ArcPaths;
   sourceName?: string;
   page?: number;
   perPage?: number;
@@ -29,7 +29,7 @@ export interface ReviewListResult {
 }
 
 async function resolveSource(
-  paths: PaiPaths,
+  paths: ArcPaths,
   sourceName?: string,
 ): Promise<{ source: import("../types.js").RegistrySource } | { error: string }> {
   const sourcesConfig = await loadSources(paths.sourcesPath);
@@ -64,7 +64,7 @@ export async function reviewList(opts: ReviewListOptions): Promise<ReviewListRes
 }
 
 export interface ReviewShowOptions {
-  paths: PaiPaths;
+  paths: ArcPaths;
   sourceName?: string;
   id: string;
   json?: boolean;
@@ -86,7 +86,7 @@ export async function reviewShow(opts: ReviewShowOptions): Promise<ReviewShowRes
 }
 
 export interface ReviewActionOptions {
-  paths: PaiPaths;
+  paths: ArcPaths;
   sourceName?: string;
   id: string;
   reason?: string;

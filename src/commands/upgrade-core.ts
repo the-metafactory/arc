@@ -2,7 +2,6 @@ import { join, dirname, basename } from "path";
 import { existsSync, readdirSync, lstatSync, readlinkSync } from "fs";
 import { mkdir, readdir } from "fs/promises";
 import type { Database } from "bun:sqlite";
-import type { PaiPaths } from "../types.js";
 import { listSkills } from "../lib/db.js";
 import { createSymlink, isValidSymlink, getSymlinkTarget } from "../lib/symlinks.js";
 

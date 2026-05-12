@@ -128,9 +128,9 @@ describe("info — remote packages", () => {
         enabled: true,
       }],
     });
-    await writeFile(env.paths.sourcesPath, sourcesContent);
+    await writeFile(env.arc.sourcesPath, sourcesContent);
 
-    const result = await info(env.db, "remote-skill", env.paths);
+    const result = await info(env.db, "remote-skill", env.arc);
 
     expect(result.error).toBeUndefined();
     expect(result.manifest).not.toBeNull();
@@ -174,11 +174,11 @@ describe("info — remote packages", () => {
 
     const registryFile = join(env.root, "test-registry.yaml");
     await writeFile(registryFile, registryContent);
-    await writeFile(env.paths.sourcesPath, YAML.stringify({
+    await writeFile(env.arc.sourcesPath, YAML.stringify({
       sources: [{ name: "test-source", url: `file://${registryFile}`, tier: "community", enabled: true }],
     }));
 
-    const result = await info(env.db, "remote-lib", env.paths);
+    const result = await info(env.db, "remote-lib", env.arc);
 
     expect(result.error).toBeUndefined();
     expect(result.manifest).not.toBeNull();
@@ -205,11 +205,11 @@ describe("info — remote packages", () => {
         agents: [], prompts: [], tools: [], components: [], rules: [],
       },
     }));
-    await writeFile(env.paths.sourcesPath, YAML.stringify({
+    await writeFile(env.arc.sourcesPath, YAML.stringify({
       sources: [{ name: "test-source", url: `file://${registryFile}`, tier: "community", enabled: true }],
     }));
 
-    const result = await info(env.db, "remote-lib:alpha", env.paths);
+    const result = await info(env.db, "remote-lib:alpha", env.arc);
 
     expect(result.error).toBeUndefined();
     expect(result.manifest).not.toBeNull();
@@ -234,11 +234,11 @@ describe("info — remote packages", () => {
         agents: [], prompts: [], tools: [], components: [], rules: [],
       },
     }));
-    await writeFile(env.paths.sourcesPath, YAML.stringify({
+    await writeFile(env.arc.sourcesPath, YAML.stringify({
       sources: [{ name: "test-source", url: `file://${registryFile}`, tier: "community", enabled: true }],
     }));
 
-    const result = await info(env.db, "remote-lib:nope", env.paths);
+    const result = await info(env.db, "remote-lib:nope", env.arc);
 
     expect(result.error).toContain("not found in library");
   });
@@ -250,11 +250,11 @@ describe("info — remote packages", () => {
     await writeFile(registryFile, YAML.stringify({
       registry: { skills: [], agents: [], prompts: [], tools: [], components: [], rules: [] },
     }));
-    await writeFile(env.paths.sourcesPath, YAML.stringify({
+    await writeFile(env.arc.sourcesPath, YAML.stringify({
       sources: [{ name: "test-source", url: `file://${registryFile}`, tier: "community", enabled: true }],
     }));
 
-    const result = await info(env.db, "nonexistent", env.paths);
+    const result = await info(env.db, "nonexistent", env.arc);
 
     expect(result.error).toContain("not found");
     expect(result.error).toContain("not installed and not in any configured source");
@@ -383,7 +383,7 @@ describe("info — metafactory API packages (@scope/name)", () => {
     env = await createTestEnv();
 
     // Configure a metafactory source
-    await writeFile(env.paths.sourcesPath, YAML.stringify({
+    await writeFile(env.arc.sourcesPath, YAML.stringify({
       sources: [{
         name: "mf-test",
         url: "https://api.example.com",
@@ -414,7 +414,7 @@ describe("info — metafactory API packages (@scope/name)", () => {
       updated_at: 1700000000,
     });
 
-    const result = await info(env.db, "@jcfischer/demo-skill", env.paths);
+    const result = await info(env.db, "@jcfischer/demo-skill", env.arc);
 
     expect(result.error).toBeUndefined();
     expect(result.manifest).not.toBeNull();
@@ -433,7 +433,7 @@ describe("info — metafactory API packages (@scope/name)", () => {
   test("returns error when @scope/name not found in any API source", async () => {
     env = await createTestEnv();
 
-    await writeFile(env.paths.sourcesPath, YAML.stringify({
+    await writeFile(env.arc.sourcesPath, YAML.stringify({
       sources: [{
         name: "mf-test",
         url: "https://api.example.com",
@@ -447,7 +447,7 @@ describe("info — metafactory API packages (@scope/name)", () => {
     savedFetch = globalThis.fetch;
     (globalThis as any).fetch = async () => new Response('{"error":"Not found"}', { status: 404 });
 
-    const result = await info(env.db, "@jcfischer/nonexistent", env.paths);
+    const result = await info(env.db, "@jcfischer/nonexistent", env.arc);
 
     expect(result.error).toContain("not found");
   });
@@ -479,7 +479,7 @@ describe("info — metafactory API packages (@scope/name)", () => {
   test("formats @scope/name in install hint for API packages", async () => {
     env = await createTestEnv();
 
-    await writeFile(env.paths.sourcesPath, YAML.stringify({
+    await writeFile(env.arc.sourcesPath, YAML.stringify({
       sources: [{
         name: "mf-test",
         url: "https://api.example.com",
@@ -505,7 +505,7 @@ describe("info — metafactory API packages (@scope/name)", () => {
       updated_at: 1700000000,
     });
 
-    const result = await info(env.db, "@jcfischer/demo-skill", env.paths);
+    const result = await info(env.db, "@jcfischer/demo-skill", env.arc);
     const formatted = formatInfo(result);
 
     expect(formatted).toContain("arc install @jcfischer/demo-skill");
@@ -514,7 +514,7 @@ describe("info — metafactory API packages (@scope/name)", () => {
   test("JSON output includes API metadata", async () => {
     env = await createTestEnv();
 
-    await writeFile(env.paths.sourcesPath, YAML.stringify({
+    await writeFile(env.arc.sourcesPath, YAML.stringify({
       sources: [{
         name: "mf-test",
         url: "https://api.example.com",
@@ -540,7 +540,7 @@ describe("info — metafactory API packages (@scope/name)", () => {
       updated_at: 1700000000,
     });
 
-    const result = await info(env.db, "@jcfischer/demo-skill", env.paths);
+    const result = await info(env.db, "@jcfischer/demo-skill", env.arc);
     const json = JSON.parse(formatInfoJson(result));
 
     expect(json.installed).toBe(false);
@@ -554,7 +554,7 @@ describe("info — metafactory API packages (@scope/name)", () => {
   test("JSON output includes sponsor when present", async () => {
     env = await createTestEnv();
 
-    await writeFile(env.paths.sourcesPath, YAML.stringify({
+    await writeFile(env.arc.sourcesPath, YAML.stringify({
       sources: [{
         name: "mf-test",
         url: "https://api.example.com",
@@ -580,7 +580,7 @@ describe("info — metafactory API packages (@scope/name)", () => {
       updated_at: 1700000000,
     });
 
-    const result = await info(env.db, "@jcfischer/sponsored-skill", env.paths);
+    const result = await info(env.db, "@jcfischer/sponsored-skill", env.arc);
     const json = JSON.parse(formatInfoJson(result));
 
     expect(json.sponsor).toBeDefined();

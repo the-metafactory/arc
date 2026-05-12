@@ -35,7 +35,7 @@ describe("install command", () => {
 
     expect(result.success).toBe(true);
 
-    const repoDir = join(env.paths.reposDir, `mock-TestSkill`);
+    const repoDir = join(env.arc.reposDir, `mock-TestSkill`);
     expect(existsSync(repoDir)).toBe(true);
   });
 
@@ -69,7 +69,7 @@ describe("install command", () => {
       yes: true,
     });
 
-    const skillLink = join(env.paths.skillsDir, "TestSkill");
+    const skillLink = join(env.host.paths.skillsDir, "TestSkill");
     expect(existsSync(skillLink)).toBe(true);
     expect(lstatSync(skillLink).isSymbolicLink()).toBe(true);
   });
@@ -87,7 +87,7 @@ describe("install command", () => {
       yes: true,
     });
 
-    const binLink = join(env.paths.binDir, "jira");
+    const binLink = join(env.host.paths.binDir, "jira");
     expect(existsSync(binLink)).toBe(true);
     expect(lstatSync(binLink).isSymbolicLink()).toBe(true);
   });
@@ -166,7 +166,7 @@ describe("install command", () => {
     expect(result.success).toBe(true);
     expect(result.name).toBe("P_RSS_DIGEST");
 
-    const pipelineLink = join(env.paths.pipelinesDir, "P_RSS_DIGEST");
+    const pipelineLink = join(env.arc.pipelinesDir, "P_RSS_DIGEST");
     expect(existsSync(pipelineLink)).toBe(true);
     expect(lstatSync(pipelineLink).isSymbolicLink()).toBe(true);
 
@@ -190,9 +190,9 @@ describe("install command", () => {
     });
 
     // Verify installed
-    const pipelineLink = join(env.paths.pipelinesDir, "P_CLI_PIPE");
+    const pipelineLink = join(env.arc.pipelinesDir, "P_CLI_PIPE");
     expect(existsSync(pipelineLink)).toBe(true);
-    const binLink = join(env.paths.binDir, "p_cli_pipe");
+    const binLink = join(env.host.paths.binDir, "p_cli_pipe");
     expect(existsSync(binLink)).toBe(true);
 
     // Remove
@@ -221,7 +221,7 @@ describe("install command", () => {
     expect(result.success).toBe(true);
     expect(result.name).toBe("A_DISCOVER_REPOS");
 
-    const actionLink = join(env.paths.actionsDir, "A_DISCOVER_REPOS");
+    const actionLink = join(env.arc.actionsDir, "A_DISCOVER_REPOS");
     expect(existsSync(actionLink)).toBe(true);
     expect(lstatSync(actionLink).isSymbolicLink()).toBe(true);
 
@@ -255,7 +255,7 @@ describe("install command", () => {
 
     // Bundle landed at the canonical reposDir path (the user-facing
     // contract from arc#102: `~/.config/metafactory/pkg/repos/<name>/`).
-    const repoDir = join(env.paths.reposDir, "mock-TestAgent");
+    const repoDir = join(env.arc.reposDir, "mock-TestAgent");
     expect(existsSync(repoDir)).toBe(true);
     expect(existsSync(join(repoDir, "arc-manifest.yaml"))).toBe(true);
 
@@ -271,7 +271,7 @@ describe("install command", () => {
     // contract owned by the host (grove) does not depend on this, but
     // we keep the link-shape check so future regressions to the
     // artifact-installer agent case surface here.
-    expect(existsSync(join(env.paths.agentsDir, "TestAgent.md"))).toBe(true);
+    expect(existsSync(join(env.host.paths.agentsDir, "TestAgent.md"))).toBe(true);
   });
 
   // Persona-driven agent shape (arc#100 § 12) — no `capabilities` block.
@@ -386,7 +386,7 @@ describe("install command", () => {
 
     // Bundle landed at canonical reposDir; manifest accessible at
     // <bundle>/agent/arc-manifest.yaml (matches arc#102 smoke test).
-    const bundleRoot = join(env.paths.reposDir, "mock-NestedAgent");
+    const bundleRoot = join(env.arc.reposDir, "mock-NestedAgent");
     expect(existsSync(join(bundleRoot, "agent", "arc-manifest.yaml"))).toBe(true);
     expect(existsSync(join(bundleRoot, "agent", "persona.md"))).toBe(true);
 
@@ -691,8 +691,8 @@ describe("install provides.files (issue #84)", () => {
     expect(result.error).toContain("hooks");
     expect(result.error).toContain(missingHandler);
     // settings.json must not have been written with the broken hook
-    if (existsSync(env.paths.settingsPath)) {
-      const settings = JSON.parse(await Bun.file(env.paths.settingsPath).text());
+    if (existsSync(env.host.paths.settingsPath)) {
+      const settings = JSON.parse(await Bun.file(env.host.paths.settingsPath).text());
       const stopHooks = settings.hooks?.Stop ?? [];
       const ghostFound = stopHooks.some((g: { _pai_pkg?: string }) => g._pai_pkg === "GhostHookSkill");
       expect(ghostFound).toBe(false);
@@ -716,7 +716,7 @@ describe("install provides.files (issue #84)", () => {
     });
 
     expect(result.success).toBe(true);
-    const settings = JSON.parse(await Bun.file(env.paths.settingsPath).text());
+    const settings = JSON.parse(await Bun.file(env.host.paths.settingsPath).text());
     const stopHooks = settings.hooks?.Stop ?? [];
     const ours = stopHooks.find((g: { _pai_pkg?: string }) => g._pai_pkg === "GoodHookSkill");
     expect(ours).toBeDefined();
@@ -746,7 +746,7 @@ describe("install provides.files (issue #84)", () => {
     expect(result.success).toBe(false);
     expect(result.error).toContain("hooks");
     // Diagnostic should reference the resolved absolute path, not the literal ${PAI_DIR}.
-    expect(result.error).toContain(env.paths.claudeRoot);
+    expect(result.error).toContain(env.host.paths.root);
     expect(result.error).toContain("SkillNudge.ts");
   });
 
@@ -776,7 +776,7 @@ describe("install provides.files (issue #84)", () => {
     // anywhere — neither the partial provides.files entry nor the skill dir.
     expect(existsSync(presentTarget)).toBe(false);
     expect(existsSync(missingTarget)).toBe(false);
-    expect(existsSync(join(env.paths.skillsDir, "RollbackPreValidate"))).toBe(false);
+    expect(existsSync(join(env.host.paths.skillsDir, "RollbackPreValidate"))).toBe(false);
   });
 
   test("hook gate failure rolls back per-type symlinks + provides.files targets + CLI shims", async () => {
@@ -785,7 +785,7 @@ describe("install provides.files (issue #84)", () => {
     // gets created. Then the hook gate trips on a separate
     // ${PAI_DIR}/Ghost.ts entry. Install must fail AND clean up everything
     // that was placed before the gate ran.
-    const filesTarget = join(env.paths.claudeRoot, "handlers", "Live.ts");
+    const filesTarget = join(env.host.paths.root, "handlers", "Live.ts");
     const repoUrl = await buildRepoWithProvides({
       name: "RollbackOnHookGate",
       extraFiles: {
@@ -812,11 +812,11 @@ describe("install provides.files (issue #84)", () => {
     expect(result.success).toBe(false);
     expect(result.error).toContain("hooks");
     // Every artifact placed before the gate must be gone.
-    expect(existsSync(join(env.paths.skillsDir, "RollbackOnHookGate"))).toBe(false);
+    expect(existsSync(join(env.host.paths.skillsDir, "RollbackOnHookGate"))).toBe(false);
     expect(existsSync(filesTarget)).toBe(false);
     // bin symlink + PATH shim for the declared CLI
-    expect(existsSync(join(env.paths.binDir, "rollbackgate"))).toBe(false);
-    expect(existsSync(join(env.paths.shimDir, "rollbackgate"))).toBe(false);
+    expect(existsSync(join(env.host.paths.binDir, "rollbackgate"))).toBe(false);
+    expect(existsSync(join(env.arc.shimDir, "rollbackgate"))).toBe(false);
   });
 
   // Issue #97: postinstall script failure leaves the same partial-state shape
@@ -824,7 +824,7 @@ describe("install provides.files (issue #84)", () => {
   // settings.json (registerHooks runs before postinstall). Install must tear
   // down both before returning.
   test("postinstall failure rolls back symlinks AND unregisters hooks", async () => {
-    const filesTarget = join(env.paths.claudeRoot, "handlers", "Live.ts");
+    const filesTarget = join(env.host.paths.root, "handlers", "Live.ts");
     const repoUrl = await buildRepoWithProvides({
       name: "PostinstallRollback",
       extraFiles: { "handlers/Live.ts": "// live\n" },
@@ -850,18 +850,18 @@ describe("install provides.files (issue #84)", () => {
     expect(result.error).toContain("Postinstall script failed");
 
     // Symlink rollback assertions (same shape as #89 hook-gate test).
-    expect(existsSync(join(env.paths.skillsDir, "PostinstallRollback"))).toBe(false);
+    expect(existsSync(join(env.host.paths.skillsDir, "PostinstallRollback"))).toBe(false);
     expect(existsSync(filesTarget)).toBe(false);
-    expect(existsSync(join(env.paths.binDir, "postrollback"))).toBe(false);
-    expect(existsSync(join(env.paths.shimDir, "postrollback"))).toBe(false);
+    expect(existsSync(join(env.host.paths.binDir, "postrollback"))).toBe(false);
+    expect(existsSync(join(env.arc.shimDir, "postrollback"))).toBe(false);
 
     // Hook unregistration assertion: settings.json was written by
     // registerHooks earlier in the install flow, then the package's group
     // was removed by removeHooks on postinstall failure. The file must
     // exist (otherwise we'd be silently passing the assertion when
     // registerHooks didn't run) AND not contain our group.
-    expect(existsSync(env.paths.settingsPath)).toBe(true);
-    const settings = JSON.parse(await Bun.file(env.paths.settingsPath).text());
+    expect(existsSync(env.host.paths.settingsPath)).toBe(true);
+    const settings = JSON.parse(await Bun.file(env.host.paths.settingsPath).text());
     const stopHooks = settings.hooks?.Stop ?? [];
     const ours = stopHooks.find(
       (g: { _pai_pkg?: string }) => g._pai_pkg === "PostinstallRollback",
@@ -874,7 +874,7 @@ describe("install provides.files (issue #84)", () => {
   });
 
   test("install succeeds when ${PAI_DIR} hook target is landed via provides.files", async () => {
-    const targetPath = join(env.paths.claudeRoot, "hooks", "handlers", "Live.ts");
+    const targetPath = join(env.host.paths.root, "hooks", "handlers", "Live.ts");
     const repoUrl = await buildRepoWithProvides({
       name: "PaiDirLiveHook",
       extraFiles: { "hooks/handlers/Live.ts": "// live\n" },
@@ -892,7 +892,7 @@ describe("install provides.files (issue #84)", () => {
     });
 
     expect(result.success).toBe(true);
-    const settings = JSON.parse(await Bun.file(env.paths.settingsPath).text());
+    const settings = JSON.parse(await Bun.file(env.host.paths.settingsPath).text());
     const stopHooks = settings.hooks?.Stop ?? [];
     const ours = stopHooks.find((g: { _pai_pkg?: string }) => g._pai_pkg === "PaiDirLiveHook");
     expect(ours).toBeDefined();

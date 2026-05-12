@@ -103,7 +103,7 @@ describe("formatPackageRef", () => {
 describe("verifyChecksum", () => {
   test("returns valid for matching hash", async () => {
     const content = "test package content";
-    const filePath = join(env.paths.reposDir, "test-verify.bin");
+    const filePath = join(env.arc.reposDir, "test-verify.bin");
     await writeFile(filePath, content);
 
     // Compute expected hash
@@ -118,7 +118,7 @@ describe("verifyChecksum", () => {
   });
 
   test("returns invalid for mismatched hash", async () => {
-    const filePath = join(env.paths.reposDir, "test-bad.bin");
+    const filePath = join(env.arc.reposDir, "test-bad.bin");
     await writeFile(filePath, "actual content");
 
     const result = await verifyChecksum(filePath, "0000000000000000000000000000000000000000000000000000000000000000");
@@ -129,7 +129,7 @@ describe("verifyChecksum", () => {
 
   test("handles case-insensitive comparison", async () => {
     const content = "case test";
-    const filePath = join(env.paths.reposDir, "test-case.bin");
+    const filePath = join(env.arc.reposDir, "test-case.bin");
     await writeFile(filePath, content);
 
     const hasher = new Bun.CryptoHasher("sha256");
@@ -141,7 +141,7 @@ describe("verifyChecksum", () => {
   });
 
   test("empty file has deterministic hash", async () => {
-    const filePath = join(env.paths.reposDir, "test-empty.bin");
+    const filePath = join(env.arc.reposDir, "test-empty.bin");
     await writeFile(filePath, "");
 
     const result = await verifyChecksum(filePath, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
@@ -155,10 +155,10 @@ describe("verifyChecksum", () => {
 
 describe("extractPackage", () => {
   test("fails on invalid tarball", async () => {
-    const badTarball = join(env.paths.reposDir, "bad.tar.gz");
+    const badTarball = join(env.arc.reposDir, "bad.tar.gz");
     await writeFile(badTarball, "this is not a tarball");
 
-    const result = await extractPackage(badTarball, env.paths.reposDir, "test-pkg");
+    const result = await extractPackage(badTarball, env.arc.reposDir, "test-pkg");
     expect(result.success).toBe(false);
     expect(result.error).toContain("Extraction failed");
   });
@@ -359,7 +359,7 @@ describe("downloadPackage", () => {
     globalThis.fetch = mockFetch(async () => new Response(new ArrayBuffer(1024), { status: 200 }));
 
     try {
-      const result = await downloadPackage("https://example.com/pkg.tar.gz", env.paths.reposDir);
+      const result = await downloadPackage("https://example.com/pkg.tar.gz", env.arc.reposDir);
       expect(result.success).toBe(true);
       expect(result.bytesDownloaded).toBe(1024);
       expect(result.tempPath).toBeDefined();
@@ -378,7 +378,7 @@ describe("downloadPackage", () => {
     });
 
     try {
-      await downloadPackage("https://example.com/pkg.tar.gz", env.paths.reposDir);
+      await downloadPackage("https://example.com/pkg.tar.gz", env.arc.reposDir);
       expect(capturedAuth).toBeNull();
     } finally {
       globalThis.fetch = originalFetch;
@@ -390,7 +390,7 @@ describe("downloadPackage", () => {
     globalThis.fetch = mockFetch(async () => new Response("Unauthorized", { status: 401 }));
 
     try {
-      const result = await downloadPackage("https://example.com/pkg.tar.gz", env.paths.reposDir);
+      const result = await downloadPackage("https://example.com/pkg.tar.gz", env.arc.reposDir);
       expect(result.success).toBe(false);
       expect(result.error).toContain("Access denied");
     } finally {
@@ -403,7 +403,7 @@ describe("downloadPackage", () => {
     globalThis.fetch = mockFetch(async () => new Response("Not found", { status: 404 }));
 
     try {
-      const result = await downloadPackage("https://example.com/pkg.tar.gz", env.paths.reposDir);
+      const result = await downloadPackage("https://example.com/pkg.tar.gz", env.arc.reposDir);
       expect(result.success).toBe(false);
       expect(result.error).toContain("not found");
     } finally {
@@ -420,7 +420,7 @@ describe("downloadPackage", () => {
     });
 
     try {
-      const result = await downloadPackage("https://example.com/pkg.tar.gz", env.paths.reposDir);
+      const result = await downloadPackage("https://example.com/pkg.tar.gz", env.arc.reposDir);
       expect(result.success).toBe(false);
       expect(attempts).toBe(2); // original + 1 retry
       expect(result.error).toContain("network");
@@ -444,7 +444,7 @@ describe("downloadPackage", () => {
     try {
       const result = await downloadPackage(
         "https://example.com/pkg.tar.gz",
-        env.paths.reposDir,
+        env.arc.reposDir,
         metafactorySource("test-token-abc"),
       );
       expect(result.success).toBe(true);
@@ -466,7 +466,7 @@ describe("downloadPackage", () => {
     try {
       await downloadPackage(
         "https://example.com/pkg.tar.gz",
-        env.paths.reposDir,
+        env.arc.reposDir,
         metafactorySource(),
       );
       expect(capturedAuth).toBeNull();
@@ -497,7 +497,7 @@ describe("downloadPackage", () => {
       };
       await downloadPackage(
         "https://example.com/pkg.tar.gz",
-        env.paths.reposDir,
+        env.arc.reposDir,
         registrySource,
       );
       expect(capturedAuth).toBeNull();
@@ -515,7 +515,7 @@ describe("downloadPackage", () => {
     try {
       const result = await downloadPackage(
         "https://example.com/pkg.tar.gz",
-        env.paths.reposDir,
+        env.arc.reposDir,
         metafactorySource("expired-token"),
       );
       expect(result.success).toBe(false);
@@ -546,7 +546,7 @@ describe("downloadPackage", () => {
     try {
       const result = await downloadPackage(
         "https://meta-factory.test/api/v1/storage/download/abc",
-        env.paths.reposDir,
+        env.arc.reposDir,
         metafactorySource("super-secret-token"),
       );
       expect(result.success).toBe(true);
@@ -581,7 +581,7 @@ describe("downloadPackage", () => {
     try {
       const result = await downloadPackage(
         "https://meta-factory.test/api/v1/storage/download/abc",
-        env.paths.reposDir,
+        env.arc.reposDir,
         metafactorySource("super-secret-token"),
       );
       // downloadPackage's retry loop catches the thrown "too many redirects"
@@ -617,7 +617,7 @@ describe("downloadPackage", () => {
     try {
       const result = await downloadPackage(
         "https://meta-factory.test/v1/storage/download/abc",
-        env.paths.reposDir,
+        env.arc.reposDir,
         metafactorySource("super-secret-token"),
       );
       expect(result.success).toBe(true);
@@ -653,7 +653,7 @@ describe("downloadPackage", () => {
     ));
 
     try {
-      const result = await downloadPackage("https://example.com/pkg.tar.gz", env.paths.reposDir);
+      const result = await downloadPackage("https://example.com/pkg.tar.gz", env.arc.reposDir);
       expect(result.success).toBe(false);
       expect(result.quarantine).toBeDefined();
       expect(result.quarantine!.reasonCode).toBe("QUARANTINED_SECURITY");
@@ -673,7 +673,7 @@ describe("downloadPackage", () => {
       ));
 
       try {
-        const result = await downloadPackage("https://example.com/pkg.tar.gz", env.paths.reposDir);
+        const result = await downloadPackage("https://example.com/pkg.tar.gz", env.arc.reposDir);
         expect(result.success).toBe(false);
         expect(result.quarantine?.reasonCode).toBe(code);
       } finally {
@@ -692,7 +692,7 @@ describe("downloadPackage", () => {
     ));
 
     try {
-      const result = await downloadPackage("https://example.com/pkg.tar.gz", env.paths.reposDir);
+      const result = await downloadPackage("https://example.com/pkg.tar.gz", env.arc.reposDir);
       expect(result.quarantine?.reasonCode).toBe("QUARANTINED_LEGAL");
       expect(result.quarantine?.reason).toBe("DMCA");
     } finally {
@@ -710,7 +710,7 @@ describe("downloadPackage", () => {
     ));
 
     try {
-      const result = await downloadPackage("https://example.com/pkg.tar.gz", env.paths.reposDir);
+      const result = await downloadPackage("https://example.com/pkg.tar.gz", env.arc.reposDir);
       expect(result.quarantine?.reasonCode).toBe("QUARANTINED_OTHER");
     } finally {
       globalThis.fetch = originalFetch;
@@ -727,7 +727,7 @@ describe("downloadPackage", () => {
     ));
 
     try {
-      const result = await downloadPackage("https://example.com/pkg.tar.gz", env.paths.reposDir);
+      const result = await downloadPackage("https://example.com/pkg.tar.gz", env.arc.reposDir);
       expect(result.success).toBe(false);
       expect(result.quarantine?.reasonCode).toBe("QUARANTINED_POLICY");
       expect(result.quarantine?.reason).toBe("");
@@ -741,7 +741,7 @@ describe("downloadPackage", () => {
     globalThis.fetch = mockFetch(async () => new Response("", { status: 451 }));
 
     try {
-      const result = await downloadPackage("https://example.com/pkg.tar.gz", env.paths.reposDir);
+      const result = await downloadPackage("https://example.com/pkg.tar.gz", env.arc.reposDir);
       expect(result.success).toBe(false);
       expect(result.quarantine?.reasonCode).toBe("QUARANTINED_OTHER");
     } finally {
@@ -761,7 +761,7 @@ describe("downloadPackage", () => {
     });
 
     try {
-      await downloadPackage("https://example.com/pkg.tar.gz", env.paths.reposDir);
+      await downloadPackage("https://example.com/pkg.tar.gz", env.arc.reposDir);
       expect(attempts).toBe(1);
     } finally {
       globalThis.fetch = originalFetch;
@@ -961,7 +961,7 @@ describe("adversarial: SHA-256 tamper detection", () => {
     // than what the artifact actually contains. arc must reject because
     // it recomputes the hash from the downloaded bytes independently.
     const realContent = "legitimate package content";
-    const filePath = join(env.paths.reposDir, "tampered-hash.tar.gz");
+    const filePath = join(env.arc.reposDir, "tampered-hash.tar.gz");
     await writeFile(filePath, realContent);
 
     // Registry claims a hash that doesn't match the actual file
@@ -985,7 +985,7 @@ describe("adversarial: SHA-256 tamper detection", () => {
     const originalHash = hasher.digest("hex");
 
     // Write the malicious content but verify against original hash
-    const filePath = join(env.paths.reposDir, "swapped-same-size.bin");
+    const filePath = join(env.arc.reposDir, "swapped-same-size.bin");
     await writeFile(filePath, maliciousContent);
 
     const result = await verifyChecksum(filePath, originalHash);
@@ -1005,7 +1005,7 @@ describe("adversarial: SHA-256 tamper detection", () => {
     const fullHash = hasher.digest("hex");
 
     // Write truncated version and verify against full hash
-    const filePath = join(env.paths.reposDir, "truncated.tar.gz");
+    const filePath = join(env.arc.reposDir, "truncated.tar.gz");
     await writeFile(filePath, truncatedContent);
 
     const result = await verifyChecksum(filePath, fullHash);
@@ -1022,7 +1022,7 @@ describe("adversarial: SHA-256 tamper detection", () => {
     hasher.update(originalContent);
     const originalHash = hasher.digest("hex");
 
-    const filePath = join(env.paths.reposDir, "appended.tar.gz");
+    const filePath = join(env.arc.reposDir, "appended.tar.gz");
     await writeFile(filePath, tamperedContent);
 
     const result = await verifyChecksum(filePath, originalHash);
@@ -1040,7 +1040,7 @@ describe("adversarial: download path error handling", () => {
     });
 
     try {
-      const result = await downloadPackage("https://example.com/pkg.tar.gz", env.paths.reposDir);
+      const result = await downloadPackage("https://example.com/pkg.tar.gz", env.arc.reposDir);
       expect(result.success).toBe(false);
       expect(result.error).toContain("500");
       expect(attempts).toBe(2); // original + 1 retry
@@ -1054,13 +1054,13 @@ describe("adversarial: download path error handling", () => {
     globalThis.fetch = mockFetch(async () => new Response("Forbidden", { status: 403 }));
 
     try {
-      const result = await downloadPackage("https://example.com/pkg.tar.gz", env.paths.reposDir);
+      const result = await downloadPackage("https://example.com/pkg.tar.gz", env.arc.reposDir);
       expect(result.success).toBe(false);
       // No tempPath should be returned on failure
       expect(result.tempPath).toBeUndefined();
       // Also verify no arc-download-* files leaked to disk
       const { readdirSync } = await import("fs");
-      const leaked = readdirSync(env.paths.reposDir).filter((f: string) => f.startsWith("arc-download-"));
+      const leaked = readdirSync(env.arc.reposDir).filter((f: string) => f.startsWith("arc-download-"));
       expect(leaked).toHaveLength(0);
     } finally {
       globalThis.fetch = originalFetch;
@@ -1070,31 +1070,31 @@ describe("adversarial: download path error handling", () => {
 
 describe("adversarial: extract path integrity", () => {
   test("extraction cleans up on invalid tarball — no partial files left", async () => {
-    const badTarball = join(env.paths.reposDir, "adversarial-bad.tar.gz");
+    const badTarball = join(env.arc.reposDir, "adversarial-bad.tar.gz");
     await writeFile(badTarball, "this is not a valid tarball at all");
 
     const extractDir = "adversarial-test-pkg";
-    const result = await extractPackage(badTarball, env.paths.reposDir, extractDir);
+    const result = await extractPackage(badTarball, env.arc.reposDir, extractDir);
 
     expect(result.success).toBe(false);
     // The target directory should be cleaned up after failed extraction
     const { existsSync } = await import("fs");
-    expect(existsSync(join(env.paths.reposDir, extractDir))).toBe(false);
+    expect(existsSync(join(env.arc.reposDir, extractDir))).toBe(false);
   });
 
   test("extraction rejects archive without manifest", async () => {
     // Create a valid tarball but without arc-manifest.yaml
-    const tarDir = join(env.paths.reposDir, "no-manifest-src");
+    const tarDir = join(env.arc.reposDir, "no-manifest-src");
     const { mkdir: mkdirFs } = await import("fs/promises");
     await mkdirFs(tarDir, { recursive: true });
     await writeFile(join(tarDir, "README.md"), "# No manifest here");
 
-    const tarball = join(env.paths.reposDir, "no-manifest.tar.gz");
-    Bun.spawnSync(["tar", "czf", tarball, "-C", env.paths.reposDir, "no-manifest-src"], {
+    const tarball = join(env.arc.reposDir, "no-manifest.tar.gz");
+    Bun.spawnSync(["tar", "czf", tarball, "-C", env.arc.reposDir, "no-manifest-src"], {
       stdout: "pipe", stderr: "pipe",
     });
 
-    const result = await extractPackage(tarball, env.paths.reposDir, "no-manifest-pkg");
+    const result = await extractPackage(tarball, env.arc.reposDir, "no-manifest-pkg");
     expect(result.success).toBe(false);
     expect(result.error).toContain("arc-manifest.yaml");
   });

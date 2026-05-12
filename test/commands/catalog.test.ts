@@ -126,7 +126,7 @@ describe("catalogList", () => {
   });
 
   test("lists all entries with install status", async () => {
-    await saveCatalog(env.paths.catalogPath, sampleCatalog(env.root));
+    await saveCatalog(env.arc.catalogPath, sampleCatalog(env.root));
 
     const result = await catalogList(env.arc, env.host, env.db);
     expect(result.success).toBe(true);
@@ -135,7 +135,7 @@ describe("catalogList", () => {
   });
 
   test("formatCatalogList shows entries", async () => {
-    await saveCatalog(env.paths.catalogPath, sampleCatalog(env.root));
+    await saveCatalog(env.arc.catalogPath, sampleCatalog(env.root));
 
     const result = await catalogList(env.arc, env.host, env.db);
     const output = formatCatalogList(result);
@@ -148,7 +148,7 @@ describe("catalogList", () => {
 
 describe("catalogSearch", () => {
   test("finds entries by name", async () => {
-    await saveCatalog(env.paths.catalogPath, sampleCatalog(env.root));
+    await saveCatalog(env.arc.catalogPath, sampleCatalog(env.root));
 
     const result = await catalogSearch(env.arc, env.host, "research");
     expect(result.success).toBe(true);
@@ -157,7 +157,7 @@ describe("catalogSearch", () => {
   });
 
   test("finds entries by description", async () => {
-    await saveCatalog(env.paths.catalogPath, sampleCatalog(env.root));
+    await saveCatalog(env.arc.catalogPath, sampleCatalog(env.root));
 
     const result = await catalogSearch(env.arc, env.host, "debate");
     expect(result.success).toBe(true);
@@ -166,7 +166,7 @@ describe("catalogSearch", () => {
   });
 
   test("returns empty for no match", async () => {
-    await saveCatalog(env.paths.catalogPath, sampleCatalog(env.root));
+    await saveCatalog(env.arc.catalogPath, sampleCatalog(env.root));
 
     const result = await catalogSearch(env.arc, env.host, "zzzznotfound");
     expect(result.success).toBe(true);
@@ -174,7 +174,7 @@ describe("catalogSearch", () => {
   });
 
   test("formatCatalogSearch shows results", async () => {
-    await saveCatalog(env.paths.catalogPath, sampleCatalog(env.root));
+    await saveCatalog(env.arc.catalogPath, sampleCatalog(env.root));
 
     const result = await catalogSearch(env.arc, env.host, "design");
     const output = formatCatalogSearch(result);
@@ -185,7 +185,7 @@ describe("catalogSearch", () => {
 
 describe("catalogAdd", () => {
   test("adds entry to catalog", async () => {
-    await saveCatalog(env.paths.catalogPath, sampleCatalog(env.root));
+    await saveCatalog(env.arc.catalogPath, sampleCatalog(env.root));
 
     const entry: CatalogEntry = {
       name: "SpecFlow",
@@ -205,7 +205,7 @@ describe("catalogAdd", () => {
   });
 
   test("rejects duplicate name", async () => {
-    await saveCatalog(env.paths.catalogPath, sampleCatalog(env.root));
+    await saveCatalog(env.arc.catalogPath, sampleCatalog(env.root));
 
     const entry: CatalogEntry = {
       name: "Research",
@@ -222,7 +222,7 @@ describe("catalogAdd", () => {
 
 describe("catalogRemove", () => {
   test("removes entry from catalog", async () => {
-    await saveCatalog(env.paths.catalogPath, sampleCatalog(env.root));
+    await saveCatalog(env.arc.catalogPath, sampleCatalog(env.root));
 
     const result = await catalogRemove(env.arc, env.host, "Research");
     expect(result.success).toBe(true);
@@ -234,7 +234,7 @@ describe("catalogRemove", () => {
   });
 
   test("returns error for non-existent entry", async () => {
-    await saveCatalog(env.paths.catalogPath, sampleCatalog(env.root));
+    await saveCatalog(env.arc.catalogPath, sampleCatalog(env.root));
 
     const result = await catalogRemove(env.arc, env.host, "NonExistent");
     expect(result.success).toBe(false);
@@ -245,7 +245,7 @@ describe("catalogRemove", () => {
 describe("catalogUse", () => {
   test("installs local skill entry and records in DB", async () => {
     await createMockSkillDir(env.root, "mock-skills/Research", { name: "Research" });
-    await saveCatalog(env.paths.catalogPath, sampleCatalog(env.root));
+    await saveCatalog(env.arc.catalogPath, sampleCatalog(env.root));
 
     const result = await catalogUse(env.arc, env.host, env.db, "Research");
     expect(result.success).toBe(true);
@@ -253,7 +253,7 @@ describe("catalogUse", () => {
     expect(result.installed![0].name).toBe("Research");
 
     // Verify the skill dir was created
-    const skillDir = join(env.paths.skillsDir, "Research");
+    const skillDir = join(env.host.paths.skillsDir, "Research");
     expect(existsSync(skillDir)).toBe(true);
     expect(existsSync(join(skillDir, "SKILL.md"))).toBe(true);
 
@@ -267,7 +267,7 @@ describe("catalogUse", () => {
 
   test("installs local agent entry", async () => {
     await createMockAgentFile(env.root, "mock-agents", "Architect");
-    await saveCatalog(env.paths.catalogPath, sampleCatalog(env.root));
+    await saveCatalog(env.arc.catalogPath, sampleCatalog(env.root));
 
     const result = await catalogUse(env.arc, env.host, env.db, "Architect");
     expect(result.success).toBe(true);
@@ -282,7 +282,7 @@ describe("catalogUse", () => {
   test("resolves dependencies before installing", async () => {
     await createMockSkillDir(env.root, "mock-skills/Thinking", { name: "Thinking" });
     await createMockSkillDir(env.root, "mock-skills/Thinking/Council", { name: "Council" });
-    await saveCatalog(env.paths.catalogPath, sampleCatalog(env.root));
+    await saveCatalog(env.arc.catalogPath, sampleCatalog(env.root));
 
     const result = await catalogUse(env.arc, env.host, env.db, "Council");
     expect(result.success).toBe(true);
@@ -291,13 +291,13 @@ describe("catalogUse", () => {
     expect(result.installed![0].name).toBe("Thinking");
     expect(result.installed![1].name).toBe("Council");
 
-    expect(existsSync(join(env.paths.skillsDir, "Thinking"))).toBe(true);
-    expect(existsSync(join(env.paths.skillsDir, "Council"))).toBe(true);
+    expect(existsSync(join(env.host.paths.skillsDir, "Thinking"))).toBe(true);
+    expect(existsSync(join(env.host.paths.skillsDir, "Council"))).toBe(true);
   });
 
   test("catalog list shows installed status after use", async () => {
     await createMockSkillDir(env.root, "mock-skills/Research", { name: "Research" });
-    await saveCatalog(env.paths.catalogPath, sampleCatalog(env.root));
+    await saveCatalog(env.arc.catalogPath, sampleCatalog(env.root));
 
     await catalogUse(env.arc, env.host, env.db, "Research");
 
@@ -311,24 +311,24 @@ describe("catalogUse", () => {
 
   test("refreshes already-installed skill (overwrites)", async () => {
     await createMockSkillDir(env.root, "mock-skills/Research", { name: "Research" });
-    await saveCatalog(env.paths.catalogPath, sampleCatalog(env.root));
+    await saveCatalog(env.arc.catalogPath, sampleCatalog(env.root));
 
     // Install first time
     await catalogUse(env.arc, env.host, env.db, "Research");
-    expect(existsSync(join(env.paths.skillsDir, "Research", "SKILL.md"))).toBe(
+    expect(existsSync(join(env.host.paths.skillsDir, "Research", "SKILL.md"))).toBe(
       true
     );
 
     // Install again (refresh)
     const result = await catalogUse(env.arc, env.host, env.db, "Research");
     expect(result.success).toBe(true);
-    expect(existsSync(join(env.paths.skillsDir, "Research", "SKILL.md"))).toBe(
+    expect(existsSync(join(env.host.paths.skillsDir, "Research", "SKILL.md"))).toBe(
       true
     );
   });
 
   test("returns error for unknown entry", async () => {
-    await saveCatalog(env.paths.catalogPath, sampleCatalog(env.root));
+    await saveCatalog(env.arc.catalogPath, sampleCatalog(env.root));
 
     const result = await catalogUse(env.arc, env.host, env.db, "NonExistent");
     expect(result.success).toBe(false);
@@ -338,7 +338,7 @@ describe("catalogUse", () => {
 
 describe("catalogSync", () => {
   test("returns empty when nothing installed", async () => {
-    await saveCatalog(env.paths.catalogPath, sampleCatalog(env.root));
+    await saveCatalog(env.arc.catalogPath, sampleCatalog(env.root));
 
     const result = await catalogSync(env.arc, env.host, env.db);
     expect(result.success).toBe(true);

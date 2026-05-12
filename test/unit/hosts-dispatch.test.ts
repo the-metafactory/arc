@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { hostPathFor, requireHostDir } from "../../src/lib/hosts/dispatch.js";
-import { createPaths, getDefaultHost } from "../../src/lib/paths.js";
+import { createArcPaths, getDefaultHost } from "../../src/lib/paths.js";
 import { createArtifactSymlinks } from "../../src/lib/artifact-installer.js";
 import type { ArcManifest, HostAdapter } from "../../src/types.js";
 
@@ -82,8 +82,7 @@ describe("createArtifactSymlinks null-guard throws", () => {
   test("createArtifactSymlinks throws when the host has no agent directory", async () => {
     const tmp = mkdtempSync(join(tmpdir(), "arc-guard-test-"));
     try {
-      const paths = createPaths({
-        claudeRoot: join(tmp, ".claude"),
+      const arc = createArcPaths({
         configRoot: join(tmp, ".config", "metafactory"),
       });
       const stub = makeEmptyPathHost();
@@ -97,7 +96,7 @@ describe("createArtifactSymlinks null-guard throws", () => {
         createArtifactSymlinks({
           type: "agent",
           manifest,
-          arc: paths,
+          arc,
           host: stub,
           installDir: tmp,
           quiet: true,
@@ -116,17 +115,17 @@ describe("createArtifactSymlinks null-guard throws", () => {
     // skills successfully.
     const tmp = mkdtempSync(join(tmpdir(), "arc-skill-nocli-"));
     try {
-      const paths = createPaths({
-        claudeRoot: join(tmp, ".claude"),
+      const arc = createArcPaths({
         configRoot: join(tmp, ".config", "metafactory"),
       });
+      const claudeRoot = join(tmp, ".claude");
       // Host that exposes skillsDir but no binDir.
       const skillsOnlyHost: HostAdapter = {
         id: "claude-code",
         detect: () => true,
         paths: {
-          root: paths.claudeRoot,
-          skillsDir: join(paths.claudeRoot, "skills"),
+          root: claudeRoot,
+          skillsDir: join(claudeRoot, "skills"),
           agentsDir: "",
           promptsDir: "",
           binDir: "",
@@ -143,7 +142,7 @@ describe("createArtifactSymlinks null-guard throws", () => {
       const result = await createArtifactSymlinks({
         type: "skill",
         manifest,
-        arc: paths,
+        arc,
         host: skillsOnlyHost,
         installDir: tmp,
         quiet: true,

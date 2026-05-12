@@ -34,7 +34,7 @@ describe("disable command", () => {
       yes: true,
     });
 
-    const skillLink = join(env.paths.skillsDir, "TestSkill");
+    const skillLink = join(env.host.paths.skillsDir, "TestSkill");
     expect(existsSync(skillLink)).toBe(true);
 
     await disable(env.db, env.arc, env.host, "TestSkill");
@@ -73,7 +73,7 @@ describe("disable command", () => {
 
     await disable(env.db, env.arc, env.host, "TestSkill");
 
-    const repoDir = join(env.paths.reposDir, "mock-TestSkill");
+    const repoDir = join(env.arc.reposDir, "mock-TestSkill");
     expect(existsSync(repoDir)).toBe(true);
   });
 
@@ -100,7 +100,7 @@ describe("enable command", () => {
     await disable(env.db, env.arc, env.host, "TestSkill");
     await enable(env.db, env.arc, env.host, "TestSkill");
 
-    const skillLink = join(env.paths.skillsDir, "TestSkill");
+    const skillLink = join(env.host.paths.skillsDir, "TestSkill");
     expect(existsSync(skillLink)).toBe(true);
   });
 

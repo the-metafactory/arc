@@ -12,24 +12,15 @@ import { Database } from "bun:sqlite";
 import YAML from "yaml";
 import {
   createArcPaths,
-  createPaths,
   ensureDirectories,
   getDefaultHost,
 } from "../../src/lib/paths.js";
 import { openDatabase } from "../../src/lib/db.js";
-import type { ArcPaths, HostAdapter, PaiPaths } from "../../src/types.js";
+import type { ArcPaths, HostAdapter } from "../../src/types.js";
 
 export interface TestEnv {
   /** Root temp directory for this test */
   root: string;
-  /**
-   * Combined arc + host paths for back-compat.
-   *
-   * @deprecated Use `env.arc` for arc state paths and `env.host.paths` for
-   *   host install paths. Kept during the #117 migration so existing tests
-   *   keep passing; will be removed once all test sites migrate.
-   */
-  paths: PaiPaths;
   /** arc's host-independent state paths (configRoot, dbPath, …). */
   arc: ArcPaths;
   /** Target host adapter (Claude Code by default, with paths rooted at the temp dir). */
@@ -65,34 +56,11 @@ export async function createTestEnv(): Promise<TestEnv> {
   });
   const host = getDefaultHost({ root: claudeRoot });
 
-  // Compose the legacy PaiPaths object from arc + host for back-compat
-  // consumers. Once tests migrate to env.arc / env.host.paths this can go.
-  const paths = createPaths({
-    claudeRoot,
-    configRoot,
-    skillsDir: host.paths.skillsDir,
-    agentsDir: host.paths.agentsDir,
-    promptsDir: host.paths.promptsDir,
-    binDir: host.paths.binDir,
-    shimDir: arc.shimDir,
-    reposDir: arc.reposDir,
-    dbPath: arc.dbPath,
-    secretsDir: arc.secretsDir,
-    runtimeDir: arc.runtimeDir,
-    catalogPath: arc.catalogPath,
-    registryPath: arc.registryPath,
-    sourcesPath: arc.sourcesPath,
-    cachePath: arc.cachePath,
-    actionsDir: arc.actionsDir,
-    settingsPath: host.paths.settingsPath,
-  });
-
-  await ensureDirectories(paths);
+  await ensureDirectories(arc, host);
   const db = openDatabase(arc.dbPath);
 
   return {
     root,
-    paths,
     arc,
     host,
     db,

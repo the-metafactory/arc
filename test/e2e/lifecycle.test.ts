@@ -67,11 +67,11 @@ describe("Full lifecycle: install → list → info → audit → disable → en
     expect(installResult.version).toBe("1.1.0");
 
     // Verify filesystem state
-    const skillLink = join(env.paths.skillsDir, "_JIRA");
+    const skillLink = join(env.host.paths.skillsDir, "_JIRA");
     expect(existsSync(skillLink)).toBe(true);
     expect(lstatSync(skillLink).isSymbolicLink()).toBe(true);
 
-    const binLink = join(env.paths.binDir, "jira");
+    const binLink = join(env.host.paths.binDir, "jira");
     expect(existsSync(binLink)).toBe(true);
 
     // Verify database state
@@ -118,7 +118,7 @@ describe("Full lifecycle: install → list → info → audit → disable → en
     expect(disabledSkill!.status).toBe("disabled");
 
     // Repo preserved
-    const repoDir = join(env.paths.reposDir, "mock-_JIRA");
+    const repoDir = join(env.arc.reposDir, "mock-_JIRA");
     expect(existsSync(repoDir)).toBe(true);
 
     // List shows disabled
@@ -175,12 +175,12 @@ describe("Full lifecycle: install → list → info → audit → disable → en
     expect(installResult.manifest!.type).toBe("tool");
 
     // Tool symlinked to binDir (not skillsDir)
-    const binLink = join(env.paths.binDir, "mytool");
+    const binLink = join(env.host.paths.binDir, "mytool");
     expect(existsSync(binLink)).toBe(true);
     expect(lstatSync(binLink).isSymbolicLink()).toBe(true);
 
     // NOT in skillsDir
-    expect(existsSync(join(env.paths.skillsDir, "mytool"))).toBe(false);
+    expect(existsSync(join(env.host.paths.skillsDir, "mytool"))).toBe(false);
 
     // DB records correct artifact_type
     const dbEntry = getSkill(env.db, "mytool");
@@ -226,15 +226,15 @@ describe("Full lifecycle: install → list → info → audit → disable → en
     expect(installResult.manifest!.type).toBe("agent");
 
     // Agent .md file symlinked directly to agentsDir for auto-discovery
-    const agentLink = join(env.paths.agentsDir, "TestArchitect.md");
+    const agentLink = join(env.host.paths.agentsDir, "TestArchitect.md");
     expect(existsSync(agentLink)).toBe(true);
     expect(lstatSync(agentLink).isSymbolicLink()).toBe(true);
 
     // NOT in skillsDir or binDir
-    expect(existsSync(join(env.paths.skillsDir, "TestArchitect"))).toBe(false);
-    expect(existsSync(join(env.paths.binDir, "TestArchitect"))).toBe(false);
+    expect(existsSync(join(env.host.paths.skillsDir, "TestArchitect"))).toBe(false);
+    expect(existsSync(join(env.host.paths.binDir, "TestArchitect"))).toBe(false);
     // NOT as directory symlink (old format)
-    expect(existsSync(join(env.paths.agentsDir, "TestArchitect"))).toBe(false);
+    expect(existsSync(join(env.host.paths.agentsDir, "TestArchitect"))).toBe(false);
 
     // DB records correct artifact_type
     const dbEntry = getSkill(env.db, "TestArchitect");
@@ -266,7 +266,7 @@ describe("Full lifecycle: install → list → info → audit → disable → en
     const removeResult = await remove(env.db, env.arc, env.host, "TestArchitect");
     expect(removeResult.success).toBe(true);
     expect(existsSync(agentLink)).toBe(false);
-    const repoDir = join(env.paths.reposDir, "mock-TestArchitect");
+    const repoDir = join(env.arc.reposDir, "mock-TestArchitect");
     expect(existsSync(repoDir)).toBe(false);
     expect(getSkill(env.db, "TestArchitect")).toBeNull();
   });
@@ -292,16 +292,16 @@ describe("Full lifecycle: install → list → info → audit → disable → en
     expect(installResult.manifest!.type).toBe("prompt");
 
     // Prompt .md file symlinked directly to promptsDir for auto-discovery
-    const promptLink = join(env.paths.promptsDir, "task-router.md");
+    const promptLink = join(env.host.paths.promptsDir, "task-router.md");
     expect(existsSync(promptLink)).toBe(true);
     expect(lstatSync(promptLink).isSymbolicLink()).toBe(true);
 
     // NOT in skillsDir or binDir or agentsDir
-    expect(existsSync(join(env.paths.skillsDir, "task-router"))).toBe(false);
-    expect(existsSync(join(env.paths.binDir, "task-router"))).toBe(false);
-    expect(existsSync(join(env.paths.agentsDir, "task-router"))).toBe(false);
+    expect(existsSync(join(env.host.paths.skillsDir, "task-router"))).toBe(false);
+    expect(existsSync(join(env.host.paths.binDir, "task-router"))).toBe(false);
+    expect(existsSync(join(env.host.paths.agentsDir, "task-router"))).toBe(false);
     // NOT as directory symlink (old format)
-    expect(existsSync(join(env.paths.promptsDir, "task-router"))).toBe(false);
+    expect(existsSync(join(env.host.paths.promptsDir, "task-router"))).toBe(false);
 
     // DB records correct artifact_type
     const dbEntry = getSkill(env.db, "task-router");
@@ -378,7 +378,7 @@ describe("Full lifecycle: install → list → info → audit → disable → en
 
   test("multi-source search finds results from cached remote registry", async () => {
     // Pre-populate cache with a remote registry
-    await mkdir(env.paths.cachePath, { recursive: true });
+    await mkdir(env.arc.cachePath, { recursive: true });
     const remoteRegistry: RegistryConfig = {
       registry: {
         skills: [
@@ -407,7 +407,7 @@ describe("Full lifecycle: install → list → info → audit → disable → en
     };
 
     await writeFile(
-      join(env.paths.cachePath, "test-hub.yaml"),
+      join(env.arc.cachePath, "test-hub.yaml"),
       YAML.stringify(remoteRegistry)
     );
 
@@ -426,7 +426,7 @@ describe("Full lifecycle: install → list → info → audit → disable → en
     const docResults = await searchAllSources(
       sources,
       "doc",
-      env.paths.cachePath
+      env.arc.cachePath
     );
     expect(docResults.length).toBe(1);
     expect(docResults[0].entry.name).toBe("_DOC");
@@ -438,7 +438,7 @@ describe("Full lifecycle: install → list → info → audit → disable → en
     const agentResults = await searchAllSources(
       sources,
       "architect",
-      env.paths.cachePath
+      env.arc.cachePath
     );
     expect(agentResults.length).toBe(1);
     expect(agentResults[0].entry.name).toBe("CustomArchitect");
@@ -453,11 +453,11 @@ describe("Full lifecycle: install → list → info → audit → disable → en
 
   test("tests never touch real ~/.claude or ~/.config", () => {
     // Verify test paths don't point to real directories
-    expect(env.paths.claudeRoot).not.toContain(Bun.env.HOME + "/.claude");
-    expect(env.paths.configRoot).not.toContain(
+    expect(env.host.paths.root).not.toContain(Bun.env.HOME + "/.claude");
+    expect(env.arc.configRoot).not.toContain(
       Bun.env.HOME + "/.config/metafactory"
     );
-    expect(env.paths.claudeRoot).toContain("arc-test-");
+    expect(env.host.paths.root).toContain("arc-test-");
   });
 
   test("tool with multiple CLI entries creates shims for all", async () => {
@@ -488,44 +488,44 @@ describe("Full lifecycle: install → list → info → audit → disable → en
     expect(result.success).toBe(true);
 
     // Both bin symlinks exist
-    expect(existsSync(join(env.paths.binDir, "multitool"))).toBe(true);
-    expect(existsSync(join(env.paths.binDir, "multi-alt"))).toBe(true);
+    expect(existsSync(join(env.host.paths.binDir, "multitool"))).toBe(true);
+    expect(existsSync(join(env.host.paths.binDir, "multi-alt"))).toBe(true);
 
     // Both shims exist
-    expect(existsSync(join(env.paths.shimDir, "multitool"))).toBe(true);
-    expect(existsSync(join(env.paths.shimDir, "multi-alt"))).toBe(true);
+    expect(existsSync(join(env.arc.shimDir, "multitool"))).toBe(true);
+    expect(existsSync(join(env.arc.shimDir, "multi-alt"))).toBe(true);
 
     // Second shim uses direct exec (not bun) for non-bun command
-    const altShimContent = await Bun.file(join(env.paths.shimDir, "multi-alt")).text();
+    const altShimContent = await Bun.file(join(env.arc.shimDir, "multi-alt")).text();
     expect(altShimContent).toContain("exec ./bin/multi-alt");
     expect(altShimContent).not.toContain("bun run");
 
     // First shim uses bun run
-    const mainShimContent = await Bun.file(join(env.paths.shimDir, "multitool")).text();
+    const mainShimContent = await Bun.file(join(env.arc.shimDir, "multitool")).text();
     expect(mainShimContent).toContain("bun run");
 
     // --- DISABLE removes all ---
     const disableResult = await disable(env.db, env.arc, env.host, "multitool");
     expect(disableResult.success).toBe(true);
-    expect(existsSync(join(env.paths.binDir, "multitool"))).toBe(false);
-    expect(existsSync(join(env.paths.binDir, "multi-alt"))).toBe(false);
-    expect(existsSync(join(env.paths.shimDir, "multitool"))).toBe(false);
-    expect(existsSync(join(env.paths.shimDir, "multi-alt"))).toBe(false);
+    expect(existsSync(join(env.host.paths.binDir, "multitool"))).toBe(false);
+    expect(existsSync(join(env.host.paths.binDir, "multi-alt"))).toBe(false);
+    expect(existsSync(join(env.arc.shimDir, "multitool"))).toBe(false);
+    expect(existsSync(join(env.arc.shimDir, "multi-alt"))).toBe(false);
 
     // --- ENABLE restores all ---
     const enableResult = await enable(env.db, env.arc, env.host, "multitool");
     expect(enableResult.success).toBe(true);
-    expect(existsSync(join(env.paths.binDir, "multitool"))).toBe(true);
-    expect(existsSync(join(env.paths.binDir, "multi-alt"))).toBe(true);
-    expect(existsSync(join(env.paths.shimDir, "multitool"))).toBe(true);
-    expect(existsSync(join(env.paths.shimDir, "multi-alt"))).toBe(true);
+    expect(existsSync(join(env.host.paths.binDir, "multitool"))).toBe(true);
+    expect(existsSync(join(env.host.paths.binDir, "multi-alt"))).toBe(true);
+    expect(existsSync(join(env.arc.shimDir, "multitool"))).toBe(true);
+    expect(existsSync(join(env.arc.shimDir, "multi-alt"))).toBe(true);
 
     // --- REMOVE cleans up all ---
     const removeResult = await remove(env.db, env.arc, env.host, "multitool");
     expect(removeResult.success).toBe(true);
-    expect(existsSync(join(env.paths.binDir, "multitool"))).toBe(false);
-    expect(existsSync(join(env.paths.binDir, "multi-alt"))).toBe(false);
-    expect(existsSync(join(env.paths.shimDir, "multitool"))).toBe(false);
-    expect(existsSync(join(env.paths.shimDir, "multi-alt"))).toBe(false);
+    expect(existsSync(join(env.host.paths.binDir, "multitool"))).toBe(false);
+    expect(existsSync(join(env.host.paths.binDir, "multi-alt"))).toBe(false);
+    expect(existsSync(join(env.arc.shimDir, "multitool"))).toBe(false);
+    expect(existsSync(join(env.arc.shimDir, "multi-alt"))).toBe(false);
   });
 });

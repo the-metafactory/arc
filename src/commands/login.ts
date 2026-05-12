@@ -1,9 +1,9 @@
-import type { PaiPaths } from "../types.js";
+import type { ArcPaths } from "../types.js";
 import { loadSources, saveSources, findMetafactorySource } from "../lib/sources.js";
 import { initiateDeviceCode, pollForToken, openBrowser } from "../lib/device-auth.js";
 
 export interface LoginOptions {
-  paths: PaiPaths;
+  paths: ArcPaths;
   sourceName?: string;
   force?: boolean;
 }

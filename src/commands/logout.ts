@@ -1,8 +1,8 @@
-import type { PaiPaths } from "../types.js";
+import type { ArcPaths } from "../types.js";
 import { loadSources, saveSources, findMetafactorySource } from "../lib/sources.js";
 
 export interface LogoutOptions {
-  paths: PaiPaths;
+  paths: ArcPaths;
   sourceName?: string;
 }
 

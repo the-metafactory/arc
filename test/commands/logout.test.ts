@@ -40,22 +40,22 @@ function registrySource(): SourcesConfig {
 
 describe("logout - source finding", () => {
   test("returns error when no metafactory source configured", async () => {
-    await saveSources(env.paths.sourcesPath, registrySource());
-    const result = await logout({ paths: env.paths });
+    await saveSources(env.arc.sourcesPath, registrySource());
+    const result = await logout({ paths: env.arc });
     expect(result.success).toBe(false);
     expect(result.error).toContain("No metafactory source configured");
   });
 
   test("returns error when --source name not found", async () => {
-    await saveSources(env.paths.sourcesPath, metafactorySource("token"));
-    const result = await logout({ paths: env.paths, sourceName: "nonexistent" });
+    await saveSources(env.arc.sourcesPath, metafactorySource("token"));
+    const result = await logout({ paths: env.arc, sourceName: "nonexistent" });
     expect(result.success).toBe(false);
     expect(result.error).toContain('"nonexistent" not found');
   });
 
   test("returns error when source is type registry", async () => {
-    await saveSources(env.paths.sourcesPath, registrySource());
-    const result = await logout({ paths: env.paths, sourceName: "my-registry" });
+    await saveSources(env.arc.sourcesPath, registrySource());
+    const result = await logout({ paths: env.arc, sourceName: "my-registry" });
     expect(result.success).toBe(false);
     expect(result.error).toContain("registry");
     expect(result.error).toContain("not \"metafactory\"");
@@ -64,30 +64,30 @@ describe("logout - source finding", () => {
 
 describe("logout - token removal", () => {
   test("returns error when not logged in", async () => {
-    await saveSources(env.paths.sourcesPath, metafactorySource());
-    const result = await logout({ paths: env.paths });
+    await saveSources(env.arc.sourcesPath, metafactorySource());
+    const result = await logout({ paths: env.arc });
     expect(result.success).toBe(false);
     expect(result.error).toContain("Not logged in");
   });
 
   test("removes token on success", async () => {
-    await saveSources(env.paths.sourcesPath, metafactorySource("my-secret-token"));
-    const result = await logout({ paths: env.paths });
+    await saveSources(env.arc.sourcesPath, metafactorySource("my-secret-token"));
+    const result = await logout({ paths: env.arc });
     expect(result.success).toBe(true);
     expect(result.sourceName).toBe("mf-test");
 
     // Verify token removed from disk
-    const config = await loadSources(env.paths.sourcesPath);
+    const config = await loadSources(env.arc.sourcesPath);
     const source = config.sources.find((s) => s.name === "mf-test");
     expect(source).toBeDefined();
     expect(source!.token).toBeUndefined();
   });
 
   test("source still exists after logout", async () => {
-    await saveSources(env.paths.sourcesPath, metafactorySource("token-to-remove"));
-    await logout({ paths: env.paths });
+    await saveSources(env.arc.sourcesPath, metafactorySource("token-to-remove"));
+    await logout({ paths: env.arc });
 
-    const config = await loadSources(env.paths.sourcesPath);
+    const config = await loadSources(env.arc.sourcesPath);
     expect(config.sources.find((s) => s.name === "mf-test")).toBeDefined();
   });
 
@@ -98,10 +98,10 @@ describe("logout - token removal", () => {
         { name: "other", url: "https://example.com/R.yaml", tier: "community", enabled: true },
       ],
     };
-    await saveSources(env.paths.sourcesPath, config);
-    await logout({ paths: env.paths });
+    await saveSources(env.arc.sourcesPath, config);
+    await logout({ paths: env.arc });
 
-    const reloaded = await loadSources(env.paths.sourcesPath);
+    const reloaded = await loadSources(env.arc.sourcesPath);
     expect(reloaded.sources).toHaveLength(2);
     expect(reloaded.sources[1].name).toBe("other");
     expect(reloaded.sources[1].url).toBe("https://example.com/R.yaml");

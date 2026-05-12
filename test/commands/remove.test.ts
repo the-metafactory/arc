@@ -34,7 +34,7 @@ describe("remove command", () => {
       yes: true,
     });
 
-    const repoDir = join(env.paths.reposDir, "mock-TestSkill");
+    const repoDir = join(env.arc.reposDir, "mock-TestSkill");
     expect(existsSync(repoDir)).toBe(true);
 
     await remove(env.db, env.arc, env.host, "TestSkill");
@@ -71,7 +71,7 @@ describe("remove command", () => {
 
     await remove(env.db, env.arc, env.host, "TestSkill");
 
-    const skillLink = join(env.paths.skillsDir, "TestSkill");
+    const skillLink = join(env.host.paths.skillsDir, "TestSkill");
     expect(existsSync(skillLink)).toBe(false);
   });
 

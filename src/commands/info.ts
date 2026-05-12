@@ -10,7 +10,7 @@ import { loadSources, getSourceType } from "../lib/sources.js";
 import { findInAllSources } from "../lib/remote-registry.js";
 import { parsePackageRef } from "../lib/registry-install.js";
 import { fetchMetafactoryPackageDetail } from "../lib/metafactory-api.js";
-import type { InstalledSkill, ArcManifest, PaiPaths, MetafactoryPackageDetail } from "../types.js";
+import type { InstalledSkill, ArcManifest, ArcPaths, MetafactoryPackageDetail } from "../types.js";
 
 export interface InfoResult {
   skill: InstalledSkill | null;
@@ -36,7 +36,7 @@ export interface InfoResult {
 export async function info(
   db: Database,
   name: string,
-  paths?: PaiPaths
+  paths?: ArcPaths
 ): Promise<InfoResult> {
   // Check if input is a scoped package ref (@scope/name)
   const pkgRef = parsePackageRef(name);
@@ -128,7 +128,7 @@ async function resolveRemote(
   originalName: string,
   lookupName: string,
   artifactFilter: string | undefined,
-  paths: PaiPaths
+  paths: ArcPaths
 ): Promise<InfoResult> {
   const sources = await loadSources(paths.sourcesPath);
   const found = await findInAllSources(sources, lookupName, paths.cachePath);
@@ -190,7 +190,7 @@ async function resolveRemoteLibraryArtifact(
 async function resolveMetafactoryInfo(
   scope: string,
   name: string,
-  paths: PaiPaths,
+  paths: ArcPaths,
 ): Promise<InfoResult> {
   const sources = await loadSources(paths.sourcesPath);
   const mfSources = sources.sources.filter((s) => s.enabled && getSourceType(s) === "metafactory");
