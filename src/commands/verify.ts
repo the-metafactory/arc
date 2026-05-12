@@ -23,6 +23,13 @@ export interface VerifyResult {
 /**
  * Verify integrity of an installed skill.
  */
+/**
+ * Verify integrity of an installed skill.
+ *
+ * @param arc Unused until Phase 3c, which adds arc-state checks (db row /
+ *   manifest cross-reference, sources.yaml integrity). Kept in the
+ *   signature now so that pass doesn't churn every call site twice.
+ */
 export async function verify(
   db: Database,
   arc: ArcPaths,
