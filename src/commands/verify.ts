@@ -1,7 +1,7 @@
 import { join, relative } from "path";
 import { existsSync, readdirSync, statSync } from "fs";
 import type { Database } from "bun:sqlite";
-import type { PaiPaths } from "../types.js";
+import type { ArcPaths, HostAdapter } from "../types.js";
 import { getSkill } from "../lib/db.js";
 import { isValidSymlink } from "../lib/symlinks.js";
 import { readManifest } from "../lib/manifest.js";
@@ -23,9 +23,17 @@ export interface VerifyResult {
 /**
  * Verify integrity of an installed skill.
  */
+/**
+ * Verify integrity of an installed skill.
+ *
+ * @param arc Unused until Phase 3c, which adds arc-state checks (db row /
+ *   manifest cross-reference, sources.yaml integrity). Kept in the
+ *   signature now so that pass doesn't churn every call site twice.
+ */
 export async function verify(
   db: Database,
-  paths: PaiPaths,
+  arc: ArcPaths,
+  host: HostAdapter,
   name: string
 ): Promise<VerifyResult> {
   const skill = getSkill(db, name);
@@ -57,7 +65,7 @@ export async function verify(
 
   // Check 3: Skill symlink valid (only for active skills)
   if (skill.status === "active") {
-    const skillLink = join(paths.skillsDir, name);
+    const skillLink = join(host.paths.skillsDir, name);
     const linkValid = await isValidSymlink(skillLink);
     checks.push({
       check: "Skill symlink valid",
@@ -94,7 +102,7 @@ export async function verify(
   // package whose installer registered hooks pointing at files that were
   // never placed (see #84) would still pass verify. Walk the package's hooks
   // from settings.json and stat each absolute path token.
-  const registeredHooks = listPackageHooks(name, paths.settingsPath);
+  const registeredHooks = listPackageHooks(name, host.paths.settingsPath);
   if (registeredHooks.length) {
     const missing = findMissingHookFiles(registeredHooks);
     if (missing.length === 0) {
