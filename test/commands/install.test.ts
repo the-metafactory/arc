@@ -196,7 +196,7 @@ describe("install command", () => {
     expect(existsSync(binLink)).toBe(true);
 
     // Remove
-    const result = await remove(env.db, env.paths, "P_CLI_PIPE");
+    const result = await remove(env.db, env.arc, env.host, "P_CLI_PIPE");
     expect(result.success).toBe(true);
 
     // Verify cleaned up
@@ -230,7 +230,7 @@ describe("install command", () => {
     expect(skill!.artifact_type).toBe("action");
 
     // Remove
-    const removeResult = await remove(env.db, env.paths, "A_DISCOVER_REPOS");
+    const removeResult = await remove(env.db, env.arc, env.host, "A_DISCOVER_REPOS");
     expect(removeResult.success).toBe(true);
     expect(existsSync(actionLink)).toBe(false);
     expect(getSkill(env.db, "A_DISCOVER_REPOS")).toBeNull();

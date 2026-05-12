@@ -85,7 +85,7 @@ describe("Library lifecycle: install → list → upgrade → remove", () => {
     expect(reviewDb.version).toBe("1.1.0");
 
     // --- REMOVE ONE ---
-    const removeResult = await remove(env.db, env.paths, "review");
+    const removeResult = await remove(env.db, env.arc, env.host, "review");
     expect(removeResult.success).toBe(true);
 
     // Verify review is gone but deploy remains
@@ -105,7 +105,7 @@ describe("Library lifecycle: install → list → upgrade → remove", () => {
     expect(libArtifacts[0].name).toBe("deploy");
 
     // --- REMOVE LAST ---
-    const removeLastResult = await remove(env.db, env.paths, "deploy");
+    const removeLastResult = await remove(env.db, env.arc, env.host, "deploy");
     expect(removeLastResult.success).toBe(true);
 
     // Everything gone

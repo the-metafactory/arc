@@ -37,7 +37,7 @@ describe("remove command", () => {
     const repoDir = join(env.paths.reposDir, "mock-TestSkill");
     expect(existsSync(repoDir)).toBe(true);
 
-    await remove(env.db, env.paths, "TestSkill");
+    await remove(env.db, env.arc, env.host, "TestSkill");
     expect(existsSync(repoDir)).toBe(false);
   });
 
@@ -53,7 +53,7 @@ describe("remove command", () => {
       yes: true,
     });
 
-    await remove(env.db, env.paths, "TestSkill");
+    await remove(env.db, env.arc, env.host, "TestSkill");
     expect(getSkill(env.db, "TestSkill")).toBeNull();
   });
 
@@ -69,14 +69,14 @@ describe("remove command", () => {
       yes: true,
     });
 
-    await remove(env.db, env.paths, "TestSkill");
+    await remove(env.db, env.arc, env.host, "TestSkill");
 
     const skillLink = join(env.paths.skillsDir, "TestSkill");
     expect(existsSync(skillLink)).toBe(false);
   });
 
   test("rejects removing non-installed skill", async () => {
-    const result = await remove(env.db, env.paths, "NonExistent");
+    const result = await remove(env.db, env.arc, env.host, "NonExistent");
     expect(result.success).toBe(false);
     expect(result.error).toContain("not installed");
   });
@@ -103,7 +103,7 @@ describe("removeLibrary", () => {
     expect(getSkill(env.db, "alpha")).not.toBeNull();
     expect(getSkill(env.db, "beta")).not.toBeNull();
 
-    const result = await removeLibrary(env.db, env.paths, "test-lib");
+    const result = await removeLibrary(env.db, env.arc, env.host, "test-lib");
     expect(result.success).toBe(true);
     expect(result.removedCount).toBe(2);
     expect(getSkill(env.db, "alpha")).toBeNull();
@@ -132,7 +132,7 @@ describe("removeLibrary", () => {
 
     expect(existsSync(repoDir)).toBe(true);
 
-    await removeLibrary(env.db, env.paths, "test-lib");
+    await removeLibrary(env.db, env.arc, env.host, "test-lib");
     expect(existsSync(repoDir)).toBe(false);
   });
 
@@ -153,7 +153,7 @@ describe("removeLibrary", () => {
     });
 
     // Remove only alpha
-    const result = await remove(env.db, env.paths, "alpha");
+    const result = await remove(env.db, env.arc, env.host, "alpha");
     expect(result.success).toBe(true);
 
     // Beta should still exist
@@ -163,7 +163,7 @@ describe("removeLibrary", () => {
   });
 
   test("returns error for unknown name (not artifact, not library)", async () => {
-    const result = await removeLibrary(env.db, env.paths, "nonexistent");
+    const result = await removeLibrary(env.db, env.arc, env.host, "nonexistent");
     expect(result.success).toBe(false);
     expect(result.error).toContain("not installed");
   });
