@@ -147,7 +147,10 @@ describe("importPrincipals — security", () => {
     const origExitCode = process.exitCode;
     importPrincipals(importFile);
     expect(process.exitCode).toBe(1);
-    process.exitCode = origExitCode;
+    // `process.exitCode = undefined` does NOT clear it under Bun — the
+    // process retains the last assigned value and the whole `bun test`
+    // run exits non-zero even with 0 fails. Coerce to 0 for the smoke gate.
+    process.exitCode = origExitCode ?? 0;
   });
 
   test("rejects invalid file format", async () => {
@@ -159,7 +162,10 @@ describe("importPrincipals — security", () => {
     const origExitCode = process.exitCode;
     importPrincipals(importFile);
     expect(process.exitCode).toBe(1);
-    process.exitCode = origExitCode;
+    // `process.exitCode = undefined` does NOT clear it under Bun — the
+    // process retains the last assigned value and the whole `bun test`
+    // run exits non-zero even with 0 fails. Coerce to 0 for the smoke gate.
+    process.exitCode = origExitCode ?? 0;
   });
 });
 
