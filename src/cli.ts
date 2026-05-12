@@ -482,12 +482,13 @@ program
   .option("--force", "Re-run upgrade pipeline even if already at latest version")
   .action(async (name: string | undefined, opts: { check?: boolean; force?: boolean }) => {
     const paths = createPaths();
+    const host = getDefaultHost({ root: paths.claudeRoot });
     await ensureDirectories(paths);
     const db = openDatabase(paths.dbPath);
 
     if (opts.check || (!name && !opts.force)) {
       // Check mode or upgrade-all (without force): first show what's available
-      const checks = await checkUpgrades(db, paths);
+      const checks = await checkUpgrades(db, paths, host);
 
       if (opts.check) {
         // Also check if arc itself has an update
@@ -502,13 +503,13 @@ program
           console.log("All packages are up to date.");
         } else {
           console.log(`Upgrading ${upgradable.length} package(s)...\n`);
-          const results = await upgradeAll(db, paths);
+          const results = await upgradeAll(db, paths, host);
           console.log(formatUpgradeResults(results));
         }
       }
     } else if (!name && opts.force) {
       // Force upgrade all
-      const results = await upgradeAll(db, paths, { force: true });
+      const results = await upgradeAll(db, paths, host, { force: true });
       if (!results.length) {
         console.log("No packages installed.");
       } else {
@@ -530,10 +531,10 @@ program
       }
 
       if (isLibraryUpgrade) {
-        const results = await upgradeLibrary(db, paths, name!, { force: opts.force });
+        const results = await upgradeLibrary(db, paths, host, name!, { force: opts.force });
         console.log(formatUpgradeResults(results, { force: opts.force }));
       } else {
-        const result = await upgradePackage(db, paths, upgradeName, { force: opts.force });
+        const result = await upgradePackage(db, paths, host, upgradeName, { force: opts.force });
         if (result.success) {
           if (result.oldVersion === result.newVersion) {
             if (opts.force) {
