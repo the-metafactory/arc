@@ -37,7 +37,7 @@ describe("disable command", () => {
     const skillLink = join(env.paths.skillsDir, "TestSkill");
     expect(existsSync(skillLink)).toBe(true);
 
-    await disable(env.db, env.paths, "TestSkill");
+    await disable(env.db, env.arc, env.host, "TestSkill");
     expect(existsSync(skillLink)).toBe(false);
   });
 
@@ -53,7 +53,7 @@ describe("disable command", () => {
       yes: true,
     });
 
-    await disable(env.db, env.paths, "TestSkill");
+    await disable(env.db, env.arc, env.host, "TestSkill");
 
     const skill = getSkill(env.db, "TestSkill");
     expect(skill!.status).toBe("disabled");
@@ -71,14 +71,14 @@ describe("disable command", () => {
       yes: true,
     });
 
-    await disable(env.db, env.paths, "TestSkill");
+    await disable(env.db, env.arc, env.host, "TestSkill");
 
     const repoDir = join(env.paths.reposDir, "mock-TestSkill");
     expect(existsSync(repoDir)).toBe(true);
   });
 
   test("rejects non-installed skill", async () => {
-    const result = await disable(env.db, env.paths, "NonExistent");
+    const result = await disable(env.db, env.arc, env.host, "NonExistent");
     expect(result.success).toBe(false);
     expect(result.error).toContain("not installed");
   });
@@ -97,7 +97,7 @@ describe("enable command", () => {
       yes: true,
     });
 
-    await disable(env.db, env.paths, "TestSkill");
+    await disable(env.db, env.arc, env.host, "TestSkill");
     await enable(env.db, env.arc, env.host, "TestSkill");
 
     const skillLink = join(env.paths.skillsDir, "TestSkill");
@@ -116,7 +116,7 @@ describe("enable command", () => {
       yes: true,
     });
 
-    await disable(env.db, env.paths, "TestSkill");
+    await disable(env.db, env.arc, env.host, "TestSkill");
     await enable(env.db, env.arc, env.host, "TestSkill");
 
     const skill = getSkill(env.db, "TestSkill");

@@ -107,7 +107,7 @@ describe("Full lifecycle: install → list → info → audit → disable → en
     expect(auditResult.surface.secret).toBe(2);
 
     // --- DISABLE ---
-    const disableResult = await disable(env.db, env.paths, "_JIRA");
+    const disableResult = await disable(env.db, env.arc, env.host, "_JIRA");
     expect(disableResult.success).toBe(true);
 
     // Symlink removed
@@ -187,7 +187,7 @@ describe("Full lifecycle: install → list → info → audit → disable → en
     expect(dbEntry!.artifact_type).toBe("tool");
 
     // --- DISABLE ---
-    const disableResult = await disable(env.db, env.paths, "mytool");
+    const disableResult = await disable(env.db, env.arc, env.host, "mytool");
     expect(disableResult.success).toBe(true);
     expect(existsSync(binLink)).toBe(false);
     expect(getSkill(env.db, "mytool")!.status).toBe("disabled");
@@ -250,7 +250,7 @@ describe("Full lifecycle: install → list → info → audit → disable → en
     expect(infoResult.skill).not.toBeNull();
 
     // --- DISABLE ---
-    const disableResult = await disable(env.db, env.paths, "TestArchitect");
+    const disableResult = await disable(env.db, env.arc, env.host, "TestArchitect");
     expect(disableResult.success).toBe(true);
     expect(existsSync(agentLink)).toBe(false);
     expect(getSkill(env.db, "TestArchitect")!.status).toBe("disabled");
@@ -308,7 +308,7 @@ describe("Full lifecycle: install → list → info → audit → disable → en
     expect(dbEntry!.artifact_type).toBe("prompt");
 
     // --- DISABLE ---
-    const disableResult = await disable(env.db, env.paths, "task-router");
+    const disableResult = await disable(env.db, env.arc, env.host, "task-router");
     expect(disableResult.success).toBe(true);
     expect(existsSync(promptLink)).toBe(false);
 
@@ -505,7 +505,7 @@ describe("Full lifecycle: install → list → info → audit → disable → en
     expect(mainShimContent).toContain("bun run");
 
     // --- DISABLE removes all ---
-    const disableResult = await disable(env.db, env.paths, "multitool");
+    const disableResult = await disable(env.db, env.arc, env.host, "multitool");
     expect(disableResult.success).toBe(true);
     expect(existsSync(join(env.paths.binDir, "multitool"))).toBe(false);
     expect(existsSync(join(env.paths.binDir, "multi-alt"))).toBe(false);
