@@ -1,7 +1,6 @@
 import { join } from "path";
 import { existsSync } from "fs";
 import { homedir } from "os";
-import { execSync } from "child_process";
 import type {
   ArtifactType,
   CortexHostPaths,
@@ -16,10 +15,15 @@ import type {
  * (`~/.config/nats/creds/<id>.creds`). Cortex does NOT host skills, prompts,
  * or tools — those belong to a claude-code or codex host.
  *
- * Detection: a cortex install is recognized when `~/.config/cortex/cortex.yaml`
- * exists OR a `cortex` binary is on PATH. The NATS health probe envisioned in
- * `docs/design-arc-agent-bots.md` §6.2 is deferred — too heavy for sync
- * `detect()`, flaky in CI, and config-file presence already covers v1.
+ * Detection: a cortex install is recognized by the presence of
+ * `~/.config/cortex/cortex.yaml` at `paths.settingsPath`. This matches the
+ * cross-platform `existsSync` strategy used by `claude-code.ts` — no shell
+ * spawn, works identically on Windows / macOS / Linux. The NATS health probe
+ * envisioned in `docs/design-arc-agent-bots.md` §6.2 and a `cortex`-binary-
+ * on-PATH probe are both deferred: the former is too heavy for a sync
+ * `detect()`, the latter requires a platform-specific implementation
+ * (`/bin/sh -c "command -v …"` is POSIX-only). Operators on a fresh install
+ * without `cortex.yaml` yet can run `cortex init` to materialize the file.
  *
  * See cortex `docs/design-arc-agent-bots.md` §6.2 for the full design
  * rationale and the post-install side effects (`cortex agents reload`,
@@ -36,12 +40,6 @@ export interface CortexHostOptions {
    * because NATS clients expect creds at the NATS-conventional location.
    */
   credsRoot?: string;
-  /**
-   * Override the cortex-binary-on-PATH check used by `detect()`. Useful in
-   * tests that want to assert config-file-only detection without depending
-   * on the dev host's actual PATH.
-   */
-  cortexOnPath?: () => boolean;
 }
 
 /** Build cortex host paths rooted at the given config root + creds root. */
@@ -69,24 +67,14 @@ export function cortexPaths(opts?: CortexHostOptions): CortexHostPaths {
   };
 }
 
-function defaultCortexOnPath(): boolean {
-  try {
-    execSync("command -v cortex", { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 export function createCortexHost(opts?: CortexHostOptions): HostAdapter & {
   paths: CortexHostPaths;
 } {
   const paths = cortexPaths(opts);
-  const cortexOnPath = opts?.cortexOnPath ?? defaultCortexOnPath;
   return {
     id: "cortex",
     paths,
-    detect: () => existsSync(paths.settingsPath) || cortexOnPath(),
+    detect: () => existsSync(paths.settingsPath),
     supports: (type: ArtifactType) => type === "agent",
   };
 }

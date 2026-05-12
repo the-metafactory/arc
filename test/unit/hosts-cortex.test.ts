@@ -55,18 +55,12 @@ describe("cortexPaths", () => {
 
 describe("createCortexHost", () => {
   test("returns a HostAdapter with id 'cortex'", () => {
-    const host = createCortexHost({
-      configRoot: "/tmp/x",
-      cortexOnPath: () => false,
-    });
+    const host = createCortexHost({ configRoot: "/tmp/x" });
     expect(host.id).toBe("cortex");
   });
 
   test("supports agent and only agent", () => {
-    const host = createCortexHost({
-      configRoot: "/tmp/x",
-      cortexOnPath: () => false,
-    });
+    const host = createCortexHost({ configRoot: "/tmp/x" });
     const types: ArtifactType[] = [
       "skill",
       "agent",
@@ -89,22 +83,18 @@ describe("createCortexHost", () => {
       const configRoot = join(tmp, ".config", "cortex");
       mkdirSync(configRoot, { recursive: true });
       writeFileSync(join(configRoot, "cortex.yaml"), "version: 1\n");
-      const host = createCortexHost({
-        configRoot,
-        cortexOnPath: () => false,
-      });
+      const host = createCortexHost({ configRoot });
       expect(host.detect()).toBe(true);
     } finally {
       rmSync(tmp, { recursive: true, force: true });
     }
   });
 
-  test("detect() false when no cortex.yaml and binary not on PATH", () => {
+  test("detect() false when no cortex.yaml at settings path", () => {
     const tmp = mkdtempSync(join(tmpdir(), "arc-cortex-nodetect-"));
     try {
       const host = createCortexHost({
         configRoot: join(tmp, ".config", "cortex"),
-        cortexOnPath: () => false,
       });
       expect(host.detect()).toBe(false);
     } finally {
@@ -112,14 +102,21 @@ describe("createCortexHost", () => {
     }
   });
 
-  test("detect() true when binary on PATH even without cortex.yaml", () => {
-    const tmp = mkdtempSync(join(tmpdir(), "arc-cortex-binonly-"));
+  test("detect() ignores cortex binary on PATH — config file is the sole signal", () => {
+    // Echo arc#121: an `execSync("command -v cortex")` PATH probe is
+    // POSIX-only (Windows has no `/bin/sh`) and an order of magnitude heavier
+    // than the cross-platform `existsSync` claude-code uses. Detection is
+    // intentionally config-file-only; this test pins that contract so a
+    // future re-introduction of a binary probe has to update the assertion
+    // explicitly.
+    const tmp = mkdtempSync(join(tmpdir(), "arc-cortex-no-bin-probe-"));
     try {
       const host = createCortexHost({
         configRoot: join(tmp, ".config", "cortex"),
-        cortexOnPath: () => true,
       });
-      expect(host.detect()).toBe(true);
+      // Even if `cortex` happens to be on the dev host's PATH, detect() must
+      // stay false because the config file is absent.
+      expect(host.detect()).toBe(false);
     } finally {
       rmSync(tmp, { recursive: true, force: true });
     }
@@ -129,7 +126,6 @@ describe("createCortexHost", () => {
     const host = createCortexHost({
       configRoot: "/tmp/x",
       credsRoot: "/tmp/y",
-      cortexOnPath: () => false,
     });
     // Type narrows because createCortexHost returns HostAdapter & { paths: CortexHostPaths }
     expect(host.paths.personasDir).toBe("/tmp/x/personas");
@@ -139,18 +135,12 @@ describe("createCortexHost", () => {
 
 describe("hostPathFor integration with cortex host", () => {
   test("maps agent → agentsDir", () => {
-    const host = createCortexHost({
-      configRoot: "/tmp/x",
-      cortexOnPath: () => false,
-    });
+    const host = createCortexHost({ configRoot: "/tmp/x" });
     expect(hostPathFor(host, "agent")).toBe("/tmp/x/agents.d");
   });
 
   test("returns null for non-host-directory types (component/rules/library)", () => {
-    const host = createCortexHost({
-      configRoot: "/tmp/x",
-      cortexOnPath: () => false,
-    });
+    const host = createCortexHost({ configRoot: "/tmp/x" });
     expect(hostPathFor(host, "component")).toBeNull();
     expect(hostPathFor(host, "rules")).toBeNull();
     expect(hostPathFor(host, "library")).toBeNull();
@@ -163,20 +153,14 @@ describe("hostPathFor integration with cortex host", () => {
     // there. `hostPathFor` still hands back the host's declared directory
     // (empty string), and the `if (!dir)` guard in artifact-installer treats
     // it as falsy, matching the contract from the dispatch test.
-    const host = createCortexHost({
-      configRoot: "/tmp/x",
-      cortexOnPath: () => false,
-    });
+    const host = createCortexHost({ configRoot: "/tmp/x" });
     expect(hostPathFor(host, "skill")).toBe("");
     expect(hostPathFor(host, "prompt")).toBe("");
     expect(hostPathFor(host, "tool")).toBe("");
   });
 
   test("requireHostDir throws for unsupported artifact types", () => {
-    const host = createCortexHost({
-      configRoot: "/tmp/x",
-      cortexOnPath: () => false,
-    });
+    const host = createCortexHost({ configRoot: "/tmp/x" });
     // skill -> hostPathFor returns "" (falsy) -> requireHostDir throws
     expect(() => requireHostDir(host, "skill")).toThrow(
       /Host cortex does not/,
