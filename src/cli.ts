@@ -38,6 +38,15 @@ import type { CatalogEntry, ArtifactType, PackageTier, RegistrySource, SourceTyp
 import { login } from "./commands/login.js";
 import { logout } from "./commands/logout.js";
 import { addBot, reissueBot, listBots, removeBot, setupOperator } from "./commands/nats.js";
+import {
+  ARC_NATS_SCHEMA,
+  emitJson,
+  classifyError,
+  type AddBotJson,
+  type ReissueBotJson,
+  type RemoveBotJson,
+  type SetupOperatorJson,
+} from "./lib/json-response.js";
 import { generateIdentity, exportPrincipals, importPrincipals, listPrincipals } from "./commands/identity.js";
 import { bundle, formatBundle } from "./commands/bundle.js";
 import { publish, formatPublish } from "./commands/publish.js";
@@ -1205,7 +1214,27 @@ nats
   .option("-o, --output <path>", "Credentials output path")
   .option("--force", "Overwrite existing user")
   .option("--with-identity", "Also generate Myelin signing keypair + register principal")
-  .action(async (name: string, opts: { account?: string; pub?: string; sub?: string; output?: string; force?: boolean; withIdentity?: boolean }) => {
+  .option("--json", "Emit a single line of stable JSON (schema: arc.nats.v1)")
+  .action(async (name: string, opts: { account?: string; pub?: string; sub?: string; output?: string; force?: boolean; withIdentity?: boolean; json?: boolean }) => {
+    if (opts.json) {
+      try {
+        const r = await addBot(name, { ...opts, json: true });
+        const payload: AddBotJson = {
+          schema: ARC_NATS_SCHEMA,
+          ok: true,
+          bot: r.bot,
+          account: r.account,
+          credsPath: r.credsPath,
+          jwt: r.jwt,
+          pubKey: r.pubKey,
+        };
+        emitJson(payload);
+        process.exit(0);
+      } catch (err) {
+        emitJson({ schema: ARC_NATS_SCHEMA, ok: false, error: classifyError(err) });
+        process.exit(1);
+      }
+    }
     await addBot(name, opts);
   });
 
@@ -1214,7 +1243,28 @@ nats
   .description("Revoke and re-issue credentials for a bot user")
   .option("-a, --account <account>", "NSC account name")
   .option("-o, --output <path>", "Credentials output path")
-  .action((name: string, opts: { account?: string; output?: string }) => {
+  .option("--json", "Emit a single line of stable JSON (schema: arc.nats.v1)")
+  .action((name: string, opts: { account?: string; output?: string; json?: boolean }) => {
+    if (opts.json) {
+      try {
+        const r = reissueBot(name, { ...opts, json: true });
+        const payload: ReissueBotJson = {
+          schema: ARC_NATS_SCHEMA,
+          ok: true,
+          bot: r.bot,
+          account: r.account,
+          credsPath: r.credsPath,
+          newPubKey: r.newPubKey,
+          revokedPubKey: r.revokedPubKey,
+        };
+        emitJson(payload);
+        process.exit(0);
+      } catch (err) {
+        emitJson({ schema: ARC_NATS_SCHEMA, ok: false, error: classifyError(err) });
+        process.exit(1);
+      }
+      return;
+    }
     reissueBot(name, opts);
   });
 
@@ -1232,7 +1282,27 @@ nats
   .option("-a, --account <account>", "NSC account name")
   .option("-o, --output <path>", "Credentials file path to delete (if --delete-creds)")
   .option("--delete-creds", "Also delete the credentials file")
-  .action((name: string, opts: { account?: string; output?: string; deleteCreds?: boolean }) => {
+  .option("--json", "Emit a single line of stable JSON (schema: arc.nats.v1)")
+  .action((name: string, opts: { account?: string; output?: string; deleteCreds?: boolean; json?: boolean }) => {
+    if (opts.json) {
+      try {
+        const r = removeBot(name, { ...opts, json: true });
+        const payload: RemoveBotJson = {
+          schema: ARC_NATS_SCHEMA,
+          ok: true,
+          bot: r.bot,
+          account: r.account,
+          revokedPubKey: r.revokedPubKey,
+          credsFileDeleted: r.credsFileDeleted,
+        };
+        emitJson(payload);
+        process.exit(0);
+      } catch (err) {
+        emitJson({ schema: ARC_NATS_SCHEMA, ok: false, error: classifyError(err) });
+        process.exit(1);
+      }
+      return;
+    }
     removeBot(name, opts);
   });
 
@@ -1241,11 +1311,39 @@ nats
   .description("Provision multiple bots with NATS creds + signing identity in one command")
   .requiredOption("--bots <names>", "Comma-separated bot names (e.g. jc-pilot,jc-luna,jc-ivy)")
   .option("--force", "Overwrite existing users and keys")
-  .action(async (account: string, opts: { bots: string; force?: boolean }) => {
+  .option("--json", "Emit a single line of stable JSON (schema: arc.nats.v1)")
+  .action(async (account: string, opts: { bots: string; force?: boolean; json?: boolean }) => {
     const botNames = opts.bots.split(",").map(s => s.trim()).filter(Boolean);
     if (botNames.length === 0) {
+      if (opts.json) {
+        emitJson({
+          schema: ARC_NATS_SCHEMA,
+          ok: false,
+          error: { code: "VALIDATION_ERROR", message: "--bots requires at least one bot name" },
+        });
+        process.exit(1);
+      }
       console.error("Error: --bots requires at least one bot name");
       process.exit(1);
+    }
+    if (opts.json) {
+      try {
+        const r = await setupOperator(account, botNames, { force: opts.force, json: true });
+        const payload: SetupOperatorJson = {
+          schema: ARC_NATS_SCHEMA,
+          ok: true,
+          account: r.account,
+          bots: r.bots,
+          summary: r.summary,
+        };
+        emitJson(payload);
+        // Exit code: 0 only if every bot succeeded. Cortex can rely on this.
+        process.exit(r.summary.failed === 0 ? 0 : 1);
+      } catch (err) {
+        emitJson({ schema: ARC_NATS_SCHEMA, ok: false, error: classifyError(err) });
+        process.exit(1);
+      }
+      return;
     }
     await setupOperator(account, botNames, { force: opts.force });
   });
