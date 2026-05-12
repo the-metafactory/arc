@@ -1,6 +1,6 @@
 import { join } from "path";
 import type { Database } from "bun:sqlite";
-import type { PaiPaths } from "../types.js";
+import type { ArcPaths, HostAdapter } from "../types.js";
 import { getSkill, updateSkillStatus } from "../lib/db.js";
 import { removeSymlink, removeCliShim, extractAllCliInfo } from "../lib/symlinks.js";
 import { readManifest } from "../lib/manifest.js";
@@ -18,7 +18,8 @@ export interface DisableResult {
  */
 export async function disable(
   db: Database,
-  paths: PaiPaths,
+  arc: ArcPaths,
+  host: HostAdapter,
   name: string
 ): Promise<DisableResult> {
   const skill = getSkill(db, name);
@@ -38,25 +39,25 @@ export async function disable(
 
   if (isPipeline) {
     // Pipelines: remove pipeline symlink
-    const pipelineLink = join(paths.pipelinesDir, name);
+    const pipelineLink = join(arc.pipelinesDir, name);
     await removeSymlink(pipelineLink);
   } else if (isAgent) {
     // Agents: remove .md file symlink (or legacy directory symlink)
-    const mdLink = join(paths.agentsDir, `${name}.md`);
-    const dirLink = join(paths.agentsDir, name);
+    const mdLink = join(host.paths.agentsDir, `${name}.md`);
+    const dirLink = join(host.paths.agentsDir, name);
     if (!await removeSymlink(mdLink)) {
       await removeSymlink(dirLink);
     }
   } else if (isPrompt) {
     // Prompts: remove .md file symlink (or legacy directory symlink)
-    const mdLink = join(paths.promptsDir, `${name}.md`);
-    const dirLink = join(paths.promptsDir, name);
+    const mdLink = join(host.paths.promptsDir, `${name}.md`);
+    const dirLink = join(host.paths.promptsDir, name);
     if (!await removeSymlink(mdLink)) {
       await removeSymlink(dirLink);
     }
   } else if (!isTool) {
     // Skills: remove skill symlink
-    const skillLink = join(paths.skillsDir, name);
+    const skillLink = join(host.paths.skillsDir, name);
     await removeSymlink(skillLink);
   }
 
@@ -64,17 +65,17 @@ export async function disable(
   if (!isAgent && !isPrompt && manifest) {
     const cliEntries = extractAllCliInfo(manifest);
     for (const entry of cliEntries) {
-      await removeCliShim(paths.shimDir, entry.binName);
-      await removeSymlink(join(paths.binDir, entry.binName));
+      await removeCliShim(arc.shimDir, entry.binName);
+      await removeSymlink(join(host.paths.binDir, entry.binName));
     }
     if (!cliEntries.length) {
       const fallbackName = isTool ? name.toLowerCase() : name.replace(/^_/, "").toLowerCase();
-      await removeCliShim(paths.shimDir, fallbackName);
-      await removeSymlink(join(paths.binDir, fallbackName));
+      await removeCliShim(arc.shimDir, fallbackName);
+      await removeSymlink(join(host.paths.binDir, fallbackName));
     }
   }
   if (hasHooks(manifest?.provides?.hooks)) {
-    const settingsPath = paths.settingsPath;
+    const settingsPath = host.paths.settingsPath;
     await removeHooks(name, settingsPath);
   }
 

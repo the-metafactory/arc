@@ -51,7 +51,7 @@ describe("list command", () => {
       yes: true,
     });
 
-    await disable(env.db, env.paths, "TestSkill");
+    await disable(env.db, env.arc, env.host, "TestSkill");
 
     const result = list(env.db);
     expect(result.skills[0].status).toBe("disabled");

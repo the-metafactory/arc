@@ -389,7 +389,8 @@ program
   .action(async (name: string) => {
     const paths = createPaths();
     const db = openDatabase(paths.dbPath);
-    const result = await disable(db, paths, name);
+    const host = getDefaultHost({ root: paths.claudeRoot });
+    const result = await disable(db, paths, host, name);
 
     if (result.success) {
       console.log(`⏸️  Disabled ${result.name}`);
