@@ -11,7 +11,7 @@ import {
   removeCliShim,
 } from "./symlinks.js";
 import { generateRules } from "./rules.js";
-import { hostPathFor } from "./hosts/dispatch.js";
+import { requireHostDir } from "./hosts/dispatch.js";
 
 /**
  * Maps an artifact type to its conventional source subdirectory within a cloned repo.
@@ -169,10 +169,7 @@ export async function createArtifactSymlinks(opts: {
 
     case "tool": {
       // Tools: symlink repo root to the host's binDir for each CLI entry.
-      const binDir = hostPathFor(host, "tool");
-      if (!binDir) {
-        throw new Error(`Host ${host.id} does not support tool artifacts`);
-      }
+      const binDir = requireHostDir(host, "tool");
       const cliEntries = extractAllCliInfo(manifest);
       for (const entry of cliEntries) {
         const binLinkPath = join(binDir, entry.binName);
@@ -190,10 +187,7 @@ export async function createArtifactSymlinks(opts: {
 
     case "agent": {
       // Agents: symlink the .md file directly into agentsDir for auto-discovery.
-      const agentsDir = hostPathFor(host, "agent");
-      if (!agentsDir) {
-        throw new Error(`Host ${host.id} does not support agent artifacts`);
-      }
+      const agentsDir = requireHostDir(host, "agent");
       const agentSourceDir = join(installDir, "agent");
       const sourceDir = existsSync(agentSourceDir) ? agentSourceDir : installDir;
       const mdFile = `${manifest.name}.md`;
@@ -211,10 +205,7 @@ export async function createArtifactSymlinks(opts: {
 
     case "prompt": {
       // Prompts: symlink the .md file directly into promptsDir for auto-discovery.
-      const promptsDir = hostPathFor(host, "prompt");
-      if (!promptsDir) {
-        throw new Error(`Host ${host.id} does not support prompt artifacts`);
-      }
+      const promptsDir = requireHostDir(host, "prompt");
       const promptSourceDir = join(installDir, "prompt");
       const sourceDir = existsSync(promptSourceDir) ? promptSourceDir : installDir;
       const mdFile = `${manifest.name}.md`;
@@ -233,10 +224,7 @@ export async function createArtifactSymlinks(opts: {
     case "skill":
     case "system": {
       // Skills: symlink skill/ subdirectory (or root) to the host's skillsDir.
-      const skillsDir = hostPathFor(host, type);
-      if (!skillsDir) {
-        throw new Error(`Host ${host.id} does not support skill artifacts`);
-      }
+      const skillsDir = requireHostDir(host, type);
       const skillSourceDir = join(installDir, "skill");
       const skillLinkPath = join(skillsDir, manifest.name);
 
@@ -252,12 +240,11 @@ export async function createArtifactSymlinks(opts: {
       // pure-content skills cleanly.
       const cliEntries = extractAllCliInfo(manifest);
       if (cliEntries.length) {
-        const binDir = hostPathFor(host, "tool");
-        if (!binDir) {
-          throw new Error(
-            `Host ${host.id} does not expose a bin directory for skill CLIs`,
-          );
-        }
+        const binDir = requireHostDir(
+          host,
+          "tool",
+          "expose a bin directory for skill CLIs",
+        );
         for (const entry of cliEntries) {
           const binLinkPath = join(binDir, entry.binName);
           await linkTracked(installDir, binLinkPath);

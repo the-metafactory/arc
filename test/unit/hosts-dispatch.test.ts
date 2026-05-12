@@ -2,7 +2,7 @@ import { describe, test, expect } from "bun:test";
 import { mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { hostPathFor } from "../../src/lib/hosts/dispatch.js";
+import { hostPathFor, requireHostDir } from "../../src/lib/hosts/dispatch.js";
 import { createPaths, getDefaultHost } from "../../src/lib/paths.js";
 import { createArtifactSymlinks } from "../../src/lib/artifact-installer.js";
 import type { ArcManifest, HostAdapter } from "../../src/types.js";
@@ -51,28 +51,27 @@ describe("hostPathFor", () => {
   });
 });
 
-describe("createArtifactSymlinks null-guard throws", () => {
-  // Stub adapter with empty host paths — fires the `if (!dir) throw`
-  // branches in artifact-installer's switch when a future host adapter
-  // doesn't expose a directory for a given artifact type. With only the
-  // Claude-Code adapter shipping today, this is the only way to exercise
-  // those throws (see Holly's review on #119).
-  function makeEmptyPathHost(): HostAdapter {
-    return {
-      id: "claude-code",
-      detect: () => false,
-      paths: {
-        root: "",
-        skillsDir: "",
-        agentsDir: "",
-        promptsDir: "",
-        binDir: "",
-        settingsPath: "",
-      },
-      supports: () => false,
-    };
-  }
+// Stub adapter with empty host paths — used to exercise the `if (!dir)`
+// guard / requireHostDir() throws when a future host adapter doesn't expose
+// a directory for a given artifact type. With only the Claude-Code adapter
+// shipping today, this is the only way to fire those paths.
+function makeEmptyPathHost(): HostAdapter {
+  return {
+    id: "claude-code",
+    detect: () => false,
+    paths: {
+      root: "",
+      skillsDir: "",
+      agentsDir: "",
+      promptsDir: "",
+      binDir: "",
+      settingsPath: "",
+    },
+    supports: () => false,
+  };
+}
 
+describe("createArtifactSymlinks null-guard throws", () => {
   test("hostPathFor returns falsy for skill when host paths are empty", () => {
     // The artifact-installer guard is `if (!dir)`, which catches both null
     // and empty string — the runtime safety net works for both shapes.
@@ -155,5 +154,36 @@ describe("createArtifactSymlinks null-guard throws", () => {
     } finally {
       rmSync(tmp, { recursive: true, force: true });
     }
+  });
+});
+
+describe("requireHostDir", () => {
+  test("returns the directory for supported types (passthrough of hostPathFor)", () => {
+    const host = getDefaultHost({ root: "/tmp/test/.claude" });
+    expect(requireHostDir(host, "skill")).toBe("/tmp/test/.claude/skills");
+    expect(requireHostDir(host, "agent")).toBe("/tmp/test/.claude/agents");
+    expect(requireHostDir(host, "prompt")).toBe("/tmp/test/.claude/commands");
+    expect(requireHostDir(host, "tool")).toBe("/tmp/test/.claude/bin");
+  });
+
+  test("throws with default message when hostPathFor returns null", () => {
+    const host = getDefaultHost({ root: "/tmp/test/.claude" });
+    expect(() => requireHostDir(host, "rules")).toThrow(
+      /Host claude-code does not support rules artifacts/,
+    );
+  });
+
+  test("accepts a custom description for context-specific guards", () => {
+    const host = getDefaultHost({ root: "/tmp/test/.claude" });
+    expect(() =>
+      requireHostDir(host, "library", "expose a registry for library artifacts"),
+    ).toThrow(
+      /Host claude-code does not expose a registry for library artifacts/,
+    );
+  });
+
+  test("throws with host id baked into the error message", () => {
+    const stubHost = makeEmptyPathHost();
+    expect(() => requireHostDir(stubHost, "skill")).toThrow(/^Host claude-code/);
   });
 });

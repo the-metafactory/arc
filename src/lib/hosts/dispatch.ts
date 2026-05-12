@@ -57,3 +57,25 @@ export function hostPathFor(
       return null;
   }
 }
+
+/**
+ * Throwing variant of {@link hostPathFor}. Use at install/remove dispatch
+ * points that have already established the artifact type *must* live in a
+ * host directory (skill / agent / prompt / tool) — turning a null into a
+ * single-line precondition error keeps the call sites readable.
+ *
+ * For types that legitimately return null (component / rules / library /
+ * pipeline / action), use {@link hostPathFor} directly and branch on null.
+ */
+export function requireHostDir(
+  host: HostAdapter,
+  type: ArtifactType | "system",
+  description?: string,
+): string {
+  const dir = hostPathFor(host, type);
+  if (!dir) {
+    const what = description ?? `support ${type as string} artifacts`;
+    throw new Error(`Host ${host.id} does not ${what}`);
+  }
+  return dir;
+}
