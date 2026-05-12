@@ -40,7 +40,7 @@
 
 ### Types
 
-- `src/types.ts` — All core types: `ArcManifest`, `ArtifactType`, `Capabilities`, `InstalledSkill`, `PaiPaths`, `RegistryEntry`, `CatalogEntry`, and more.
+- `src/types.ts` — All core types: `ArcManifest`, `ArtifactType`, `Capabilities`, `InstalledSkill`, `ArcPaths`, `HostAdapter`, `HostPaths`, `RegistryEntry`, `CatalogEntry`, and more.
 
 ### Data Flow
 

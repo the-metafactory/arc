@@ -25,7 +25,7 @@ bun test:e2e                # End-to-end lifecycle tests (test/e2e/)
 All tests use `createTestEnv()` from `test/helpers/test-env.ts`. This creates:
 - Isolated temp directories simulating the full arc directory structure
 - A fresh SQLite database
-- Configurable `PaiPaths` pointing to the temp dirs
+- Configurable `ArcPaths` + `HostAdapter` pointing to the temp dirs
 - A `cleanup()` function that closes the DB and removes the temp dir
 
 Mock skill repos are created via `createMockSkillRepo()` which scaffolds a git-initialized repo with arc-manifest.yaml.

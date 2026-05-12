@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.24.0
+
+### Changed
+
+- **Multi-backend host adapter foundation (closes [#117](https://github.com/the-metafactory/arc/issues/117)).** 12-PR series ([#118–#129](https://github.com/the-metafactory/arc/pull/129)) splits the monolithic `PaiPaths` into two concerns: `ArcPaths` for arc's own host-independent state (config, db, repos, catalog) and `HostAdapter` + `HostPaths` for per-backend install dirs (Claude Code, Cortex). Phase 1 added the types and the Claude-Code adapter; Phase 2 introduced `hostPathFor()`/`requireHostDir()` dispatch and the Cortex adapter; Phase 3b migrated every production command (`verify`, `upgrade`, `install`, `remove`, `enable`, `disable`, `catalog`) command-by-command; this release (Phase 3d) deletes the deprecated `PaiPaths` type, `createPaths()` factory, and `TestEnv.paths` back-compat field, plus migrates the 5 remaining non-command callers (`info`, `login`, `logout`, `publish`, `review`, `bundle`).
+
+### Removed
+
+- **Breaking (TS only):** `PaiPaths` type, `createPaths()` factory, `TestEnv.paths` field. Replace with `ArcPaths` + `HostAdapter`. See `src/types.ts` and `test/helpers/test-env.ts` for the new shape.
+
+### Notes
+
+- Runtime behavior unchanged. Multi-host dispatch is wired but Claude Code remains the only default; future host adapters (Codex, Cursor) plug in via the `HostAdapter` interface without further surgery to commands.
+- `ensureDirectories()` signature changed from `(paths: PaiPaths)` to `(arc: ArcPaths, host: HostAdapter)`.
+
 ## 0.22.0
 
 ### Added

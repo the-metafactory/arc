@@ -86,6 +86,16 @@ export function getDefaultHost(opts?: { root?: string }): HostAdapter {
 
 /**
  * Ensure all required directories exist — arc state + host-managed dirs.
+ *
+ * Intentionally NOT in this list:
+ * - `arc.cachePath` — file path, not a directory; remote-registry lazy-creates the parent.
+ * - `arc.dbPath` / `arc.sourcesPath` / `arc.catalogPath` / `arc.registryPath` — file
+ *   paths created on first write (`openDatabase`, `saveSources`, etc.).
+ * - `arc.shimDir` — created on first `arc install` of a CLI artifact (createCliShim).
+ * - `host.paths.settingsPath` — host-owned file; we never pre-create it.
+ *
+ * When adding a new directory-shaped field to `ArcPaths` or `HostPaths`, also
+ * add it here. Files belong elsewhere.
  */
 export async function ensureDirectories(
   arc: ArcPaths,
