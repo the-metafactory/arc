@@ -51,28 +51,27 @@ describe("hostPathFor", () => {
   });
 });
 
-describe("createArtifactSymlinks null-guard throws", () => {
-  // Stub adapter with empty host paths — fires the `if (!dir) throw`
-  // branches in artifact-installer's switch when a future host adapter
-  // doesn't expose a directory for a given artifact type. With only the
-  // Claude-Code adapter shipping today, this is the only way to exercise
-  // those throws (see Holly's review on #119).
-  function makeEmptyPathHost(): HostAdapter {
-    return {
-      id: "claude-code",
-      detect: () => false,
-      paths: {
-        root: "",
-        skillsDir: "",
-        agentsDir: "",
-        promptsDir: "",
-        binDir: "",
-        settingsPath: "",
-      },
-      supports: () => false,
-    };
-  }
+// Stub adapter with empty host paths — used to exercise the `if (!dir)`
+// guard / requireHostDir() throws when a future host adapter doesn't expose
+// a directory for a given artifact type. With only the Claude-Code adapter
+// shipping today, this is the only way to fire those paths.
+function makeEmptyPathHost(): HostAdapter {
+  return {
+    id: "claude-code",
+    detect: () => false,
+    paths: {
+      root: "",
+      skillsDir: "",
+      agentsDir: "",
+      promptsDir: "",
+      binDir: "",
+      settingsPath: "",
+    },
+    supports: () => false,
+  };
+}
 
+describe("createArtifactSymlinks null-guard throws", () => {
   test("hostPathFor returns falsy for skill when host paths are empty", () => {
     // The artifact-installer guard is `if (!dir)`, which catches both null
     // and empty string — the runtime safety net works for both shapes.
@@ -184,19 +183,7 @@ describe("requireHostDir", () => {
   });
 
   test("throws with host id baked into the error message", () => {
-    const stubHost = {
-      id: "claude-code" as const,
-      detect: () => false,
-      paths: {
-        root: "",
-        skillsDir: "",
-        agentsDir: "",
-        promptsDir: "",
-        binDir: "",
-        settingsPath: "",
-      },
-      supports: () => false,
-    };
+    const stubHost = makeEmptyPathHost();
     expect(() => requireHostDir(stubHost, "skill")).toThrow(/^Host claude-code/);
   });
 });

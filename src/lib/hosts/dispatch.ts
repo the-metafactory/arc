@@ -66,9 +66,6 @@ export function hostPathFor(
  *
  * For types that legitimately return null (component / rules / library /
  * pipeline / action), use {@link hostPathFor} directly and branch on null.
- *
- * Suggested by Holly in cycle 1 of #119; landed in Phase 3 of #117 alongside
- * the wide rename.
  */
 export function requireHostDir(
   host: HostAdapter,
