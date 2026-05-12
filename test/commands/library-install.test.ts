@@ -151,7 +151,7 @@ describe("library install", () => {
     await install({ arc: env.arc, host: env.host, db: env.db, repoUrl: lib.url, yes: true });
 
     // Remove just alpha
-    const removeResult = await remove(env.db, env.paths, "alpha");
+    const removeResult = await remove(env.db, env.arc, env.host, "alpha");
     expect(removeResult.success).toBe(true);
 
     // Beta should still be installed

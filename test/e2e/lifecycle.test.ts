@@ -137,7 +137,7 @@ describe("Full lifecycle: install → list → info → audit → disable → en
     expect(enabledSkill!.status).toBe("active");
 
     // --- REMOVE ---
-    const removeResult = await remove(env.db, env.paths, "_JIRA");
+    const removeResult = await remove(env.db, env.arc, env.host, "_JIRA");
     expect(removeResult.success).toBe(true);
 
     // Everything gone
@@ -199,7 +199,7 @@ describe("Full lifecycle: install → list → info → audit → disable → en
     expect(getSkill(env.db, "mytool")!.status).toBe("active");
 
     // --- REMOVE ---
-    const removeResult = await remove(env.db, env.paths, "mytool");
+    const removeResult = await remove(env.db, env.arc, env.host, "mytool");
     expect(removeResult.success).toBe(true);
     expect(existsSync(binLink)).toBe(false);
     expect(getSkill(env.db, "mytool")).toBeNull();
@@ -263,7 +263,7 @@ describe("Full lifecycle: install → list → info → audit → disable → en
     expect(getSkill(env.db, "TestArchitect")!.status).toBe("active");
 
     // --- REMOVE ---
-    const removeResult = await remove(env.db, env.paths, "TestArchitect");
+    const removeResult = await remove(env.db, env.arc, env.host, "TestArchitect");
     expect(removeResult.success).toBe(true);
     expect(existsSync(agentLink)).toBe(false);
     const repoDir = join(env.paths.reposDir, "mock-TestArchitect");
@@ -319,7 +319,7 @@ describe("Full lifecycle: install → list → info → audit → disable → en
     expect(lstatSync(promptLink).isSymbolicLink()).toBe(true);
 
     // --- REMOVE ---
-    const removeResult = await remove(env.db, env.paths, "task-router");
+    const removeResult = await remove(env.db, env.arc, env.host, "task-router");
     expect(removeResult.success).toBe(true);
     expect(existsSync(promptLink)).toBe(false);
     expect(getSkill(env.db, "task-router")).toBeNull();
@@ -521,7 +521,7 @@ describe("Full lifecycle: install → list → info → audit → disable → en
     expect(existsSync(join(env.paths.shimDir, "multi-alt"))).toBe(true);
 
     // --- REMOVE cleans up all ---
-    const removeResult = await remove(env.db, env.paths, "multitool");
+    const removeResult = await remove(env.db, env.arc, env.host, "multitool");
     expect(removeResult.success).toBe(true);
     expect(existsSync(join(env.paths.binDir, "multitool"))).toBe(false);
     expect(existsSync(join(env.paths.binDir, "multi-alt"))).toBe(false);

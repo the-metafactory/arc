@@ -426,6 +426,7 @@ program
   .action(async (name: string, opts: { library?: string }) => {
     const paths = createPaths();
     const db = openDatabase(paths.dbPath);
+    const host = getDefaultHost({ root: paths.claudeRoot });
 
     if (opts.library) {
       // Remove all artifacts from a library
@@ -433,7 +434,7 @@ program
       const libArtifacts = listByLibrary(db, opts.library);
       if (libArtifacts.length) {
         for (const art of libArtifacts) {
-          const result = await remove(db, paths, art.name);
+          const result = await remove(db, paths, host, art.name);
           if (result.success) {
             console.log(`🗑️  Removed ${result.name}`);
           }
@@ -447,13 +448,13 @@ program
       const libRef = parseLibraryRef(name);
       const removeName = libRef?.artifactName ?? name;
 
-      const result = await remove(db, paths, removeName);
+      const result = await remove(db, paths, host, removeName);
 
       if (result.success) {
         console.log(`🗑️  Removed ${result.name}`);
       } else {
         // Artifact not found — check if name matches a library
-        const libResult = await removeLibrary(db, paths, removeName);
+        const libResult = await removeLibrary(db, paths, host, removeName);
         if (libResult.success) {
           console.log(`🗑️  Removed ${libResult.removedCount} artifact(s) from library '${removeName}'`);
         } else {

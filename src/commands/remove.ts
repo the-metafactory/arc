@@ -1,7 +1,7 @@
 import { join } from "path";
 import { rm } from "fs/promises";
 import type { Database } from "bun:sqlite";
-import type { PaiPaths } from "../types.js";
+import type { ArcPaths, HostAdapter } from "../types.js";
 import { getSkill, removeSkill, listByLibrary } from "../lib/db.js";
 import { removeSymlink, removeCliShim, extractAllCliInfo } from "../lib/symlinks.js";
 import { readManifest } from "../lib/manifest.js";
@@ -22,7 +22,8 @@ export interface RemoveResult {
  */
 export async function remove(
   db: Database,
-  paths: PaiPaths,
+  arc: ArcPaths,
+  host: HostAdapter,
   name: string
 ): Promise<RemoveResult> {
   const skill = getSkill(db, name);
@@ -38,33 +39,33 @@ export async function remove(
 
   if (isAction) {
     // Actions: remove action symlink
-    const actionLink = join(paths.actionsDir, name);
+    const actionLink = join(arc.actionsDir, name);
     await removeSymlink(actionLink);
   } else if (isPipeline) {
     // Pipelines: remove pipeline symlink
-    const pipelineLink = join(paths.pipelinesDir, name);
+    const pipelineLink = join(arc.pipelinesDir, name);
     await removeSymlink(pipelineLink);
   } else if (isTool) {
     // Tools: remove bin symlink (repo root linked to binDir)
-    const binLink = join(paths.binDir, name);
+    const binLink = join(host.paths.binDir, name);
     await removeSymlink(binLink);
   } else if (isAgent) {
     // Agents: remove .md file symlink (or legacy directory symlink)
-    const mdLink = join(paths.agentsDir, `${name}.md`);
-    const dirLink = join(paths.agentsDir, name);
+    const mdLink = join(host.paths.agentsDir, `${name}.md`);
+    const dirLink = join(host.paths.agentsDir, name);
     if (!await removeSymlink(mdLink)) {
       await removeSymlink(dirLink);
     }
   } else if (isPrompt) {
     // Prompts: remove .md file symlink (or legacy directory symlink)
-    const mdLink = join(paths.promptsDir, `${name}.md`);
-    const dirLink = join(paths.promptsDir, name);
+    const mdLink = join(host.paths.promptsDir, `${name}.md`);
+    const dirLink = join(host.paths.promptsDir, name);
     if (!await removeSymlink(mdLink)) {
       await removeSymlink(dirLink);
     }
   } else {
     // Skills: remove skill symlink
-    const skillLink = join(paths.skillsDir, name);
+    const skillLink = join(host.paths.skillsDir, name);
     await removeSymlink(skillLink);
   }
 
@@ -75,26 +76,26 @@ export async function remove(
   if (!isAgent && !isPrompt && manifest) {
     const cliEntries = extractAllCliInfo(manifest);
     for (const entry of cliEntries) {
-      await removeCliShim(paths.shimDir, entry.binName);
-      await removeSymlink(join(paths.binDir, entry.binName));
+      await removeCliShim(arc.shimDir, entry.binName);
+      await removeSymlink(join(host.paths.binDir, entry.binName));
     }
     if (!cliEntries.length) {
       // Fallback: remove by conventional name
       const fallbackName = isTool ? name.toLowerCase() : name.replace(/^_/, "").toLowerCase();
-      await removeCliShim(paths.shimDir, fallbackName);
-      await removeSymlink(join(paths.binDir, fallbackName));
+      await removeCliShim(arc.shimDir, fallbackName);
+      await removeSymlink(join(host.paths.binDir, fallbackName));
     }
   }
 
   // Remove hooks from settings.json (before deleting repo)
   if (hasHooks(manifest?.provides?.hooks)) {
-    const settingsPath = paths.settingsPath;
+    const settingsPath = host.paths.settingsPath;
     await removeHooks(name, settingsPath);
   }
 
   // Remove extensions (before deleting repo)
   if (manifest?.extensions) {
-    await unwireExtensions(manifest, paths.claudeRoot);
+    await unwireExtensions(manifest, host.paths.root);
   }
 
   // Remove from database (CASCADE deletes capabilities) — before repo removal
@@ -127,7 +128,8 @@ export async function remove(
  */
 export async function removeLibrary(
   db: Database,
-  paths: PaiPaths,
+  arc: ArcPaths,
+  host: HostAdapter,
   libraryName: string
 ): Promise<RemoveResult> {
   const artifacts = listByLibrary(db, libraryName);
@@ -140,7 +142,7 @@ export async function removeLibrary(
 
   const results: RemoveResult[] = [];
   for (const artifact of artifacts) {
-    const result = await remove(db, paths, artifact.name);
+    const result = await remove(db, arc, host, artifact.name);
     results.push(result);
   }
 
