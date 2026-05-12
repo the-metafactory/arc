@@ -427,7 +427,7 @@ export interface AuditWarning {
  * an actually implemented `HostAdapter`. Phase 2 of #117 adds `"codex"`,
  * `"cursor"`, etc. as those adapters arrive.
  */
-export type HostId = "claude-code";
+export type HostId = "claude-code" | "cortex";
 
 /** arc's own state — host-independent. Lives under ~/.config/metafactory/. */
 export interface ArcPaths {
@@ -472,6 +472,29 @@ export interface HostPaths {
   /** Host settings file (e.g. ~/.claude/settings.json, ~/.codex/config.toml) */
   settingsPath: string;
 }
+
+/**
+ * Cortex-host-only path extensions. Not promoted to `HostPaths` because no
+ * other backend has the same concepts (personas are cortex-specific; NATS
+ * creds live in a NATS-conventional location). Cortex's adapter exposes
+ * these as `HostPaths & CortexPaths` so cortex-aware callers see them while
+ * generic dispatch (`hostPathFor`, `requireHostDir`) keeps working off the
+ * base `HostPaths` surface.
+ *
+ * See cortex `docs/design-arc-agent-bots.md` §6.2 "Note on `HostPaths` extension".
+ */
+export interface CortexPaths {
+  /** Persona markdown files for in-process bots (~/.config/cortex/personas/). */
+  personasDir: string;
+  /** Per-agent NATS user creds, daemon-written (~/.config/nats/creds/). */
+  credsDir: string;
+}
+
+/**
+ * Cortex host's concrete `paths` shape — base `HostPaths` plus cortex-only
+ * extensions. Use this when you've already narrowed `host.id === "cortex"`.
+ */
+export type CortexHostPaths = HostPaths & CortexPaths;
 
 /**
  * Host adapter — describes one agentic backend (Claude Code, Codex CLI, Cursor, …).
