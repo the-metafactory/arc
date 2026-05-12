@@ -272,6 +272,87 @@ describe("reissueBot — server-side revocation of OLD pubkey", () => {
     expect(calls.some((c) => c.args[0] === "generate")).toBe(false);
     expect(exitSpy).toHaveBeenCalledWith(1);
   });
+
+  test("does NOT write .bak when push fails — fail-closed against leaked-backup", () => {
+    // The original threat #130 was filed for: a .bak holding the still-valid
+    // old creds survives a failed revoke and continues to authenticate against
+    // NATS. After this fix the .bak is written AFTER revokeAndPushUser
+    // succeeds, so the abort path leaves no backup on disk.
+    const outDir = dirname(CUSTOM_OUT);
+    if (!existsSync(outDir)) mkdirSync(outDir, { recursive: true, mode: 0o700 });
+    writeFileSync(CUSTOM_OUT, "OLD CREDS CONTENT", { mode: 0o600 });
+    // Pre-clean any stale .bak from prior runs.
+    try { unlinkSync(`${CUSTOM_OUT}.bak`); } catch { /* ok */ }
+
+    const { runner } = buildRunner({
+      "describe user": (args) => args.includes("-J") ? ok(FAKE_USER_JWT_JSON) : ok("exists"),
+      "revocations add-user": () => ok("revoked locally"),
+      "push": () => fail("nats: server unreachable"),
+      "delete user": () => ok("should-not-be-called"),
+      "add user": () => ok("should-not-be-called"),
+      "generate creds": () => ok("should-not-be-called"),
+    });
+    __setNscRunnerForTests(runner);
+
+    const exitSpy = mock(() => { throw new Error("process.exit called"); });
+    const origExit = process.exit;
+    const origErr = console.error;
+    process.exit = exitSpy as unknown as typeof process.exit;
+    console.error = mock(() => undefined);
+
+    try {
+      expect(() => reissueBot(TEST_BOT, { account: TEST_ACCOUNT, output: CUSTOM_OUT })).toThrow("process.exit called");
+    } finally {
+      process.exit = origExit;
+      console.error = origErr;
+    }
+
+    // The invariant: a .bak holding live creds must not exist after a
+    // failed revoke. Original creds file is untouched.
+    expect(existsSync(`${CUSTOM_OUT}.bak`)).toBe(false);
+    expect(existsSync(CUSTOM_OUT)).toBe(true);
+  });
+});
+
+describe("test-mode seam env-gate", () => {
+  test("__setNscRunnerForTests throws when ARC_TEST_MODE / NODE_ENV not set", () => {
+    const origTestMode = process.env.ARC_TEST_MODE;
+    const origNodeEnv = process.env.NODE_ENV;
+    delete process.env.ARC_TEST_MODE;
+    delete process.env.NODE_ENV;
+
+    try {
+      expect(() => __setNscRunnerForTests(null)).toThrow(/test-only seam/);
+    } finally {
+      if (origTestMode !== undefined) process.env.ARC_TEST_MODE = origTestMode;
+      if (origNodeEnv !== undefined) process.env.NODE_ENV = origNodeEnv;
+    }
+  });
+
+  test("__setNscInstallCheckForTests throws when env not set", () => {
+    const origTestMode = process.env.ARC_TEST_MODE;
+    const origNodeEnv = process.env.NODE_ENV;
+    delete process.env.ARC_TEST_MODE;
+    delete process.env.NODE_ENV;
+
+    try {
+      expect(() => __setNscInstallCheckForTests(null)).toThrow(/test-only seam/);
+    } finally {
+      if (origTestMode !== undefined) process.env.ARC_TEST_MODE = origTestMode;
+      if (origNodeEnv !== undefined) process.env.NODE_ENV = origNodeEnv;
+    }
+  });
+
+  test("__setNscRunnerForTests succeeds when ARC_TEST_MODE=1", () => {
+    const origTestMode = process.env.ARC_TEST_MODE;
+    process.env.ARC_TEST_MODE = "1";
+    try {
+      expect(() => __setNscRunnerForTests(null)).not.toThrow();
+    } finally {
+      if (origTestMode === undefined) delete process.env.ARC_TEST_MODE;
+      else process.env.ARC_TEST_MODE = origTestMode;
+    }
+  });
 });
 
 describe("getUserPubKey — error surface", () => {

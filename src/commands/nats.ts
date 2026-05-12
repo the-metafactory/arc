@@ -47,9 +47,13 @@ let runner: NscRunner = defaultRunner;
 
 /**
  * Test-only hook to swap the nsc runner. Pass `null` to restore the default.
- * Do NOT call from production code paths.
+ *
+ * Gated on test-mode env so production callers that import this module can't
+ * silently swap the runner process-wide. Set `ARC_TEST_MODE=1` (or
+ * `NODE_ENV=test`, which `bun:test` sets implicitly) to enable the swap.
  */
 export function __setNscRunnerForTests(next: NscRunner | null): void {
+  assertTestModeForSeam("__setNscRunnerForTests");
   runner = next ?? defaultRunner;
 }
 
@@ -79,9 +83,19 @@ let nscInstallCheck: () => boolean = () => {
 
 /**
  * Test-only hook to swap the install check. Pass `null` to restore the default.
+ * Gated on test-mode env; see {@link __setNscRunnerForTests}.
  */
 export function __setNscInstallCheckForTests(next: (() => boolean) | null): void {
+  assertTestModeForSeam("__setNscInstallCheckForTests");
   nscInstallCheck = next ?? (() => Bun.spawnSync(["which", "nsc"], { stdout: "pipe" }).exitCode === 0);
+}
+
+function assertTestModeForSeam(seamName: string): void {
+  if (process.env.ARC_TEST_MODE !== "1" && process.env.NODE_ENV !== "test") {
+    throw new Error(
+      `${seamName} is a test-only seam. Set ARC_TEST_MODE=1 or NODE_ENV=test to enable.`,
+    );
+  }
 }
 
 export function ensureNscInstalled(): void {
@@ -289,22 +303,25 @@ export function reissueBot(name: string, opts: ReissueBotOptions): void {
     process.exit(1);
   }
 
-  // nsc requires delete+add for new keys (no in-place rekey).
-  // Back up old creds file before the destructive delete.
-  if (existsSync(outPath)) {
-    const backup = `${outPath}.bak`;
-    writeFileSync(backup, readFileSync(outPath));
-    chmodSync(backup, 0o600);
-    console.log(`  backup: ${backup}`);
-  }
-
-  // Revoke the OLD user pubkey server-side BEFORE delete+add. If this fails
-  // we abort — leaking the old creds is the whole reason for the reissue.
+  // Revoke the OLD user pubkey server-side BEFORE we touch local state. If
+  // this fails we abort cleanly: no local delete, and — critically — no .bak
+  // on disk holding the still-valid old creds (writing the backup before the
+  // revoke would re-create the exact leaked-backup threat #130 was filed for).
   try {
     revokeAndPushUser(account, name);
   } catch (err) {
     console.error(err instanceof Error ? err.message : String(err));
     process.exit(1);
+  }
+
+  // nsc requires delete+add for new keys (no in-place rekey). Now that the
+  // old JWT is revoked server-side, the .bak is safe to write — its
+  // embedded creds are already dead on the bus.
+  if (existsSync(outPath)) {
+    const backup = `${outPath}.bak`;
+    writeFileSync(backup, readFileSync(outPath));
+    chmodSync(backup, 0o600);
+    console.log(`  backup: ${backup}`);
   }
 
   nsc(["delete", "user", "-a", account, "-n", name]);

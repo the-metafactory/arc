@@ -9,6 +9,21 @@ const TEST_ACCOUNT = "OP_JC";
 const TEST_BOT = "arc-test-bot";
 const CREDS_PATH = join(homedir(), ".config", "nats", `${TEST_BOT}.creds`);
 
+// `removeBot` now requires server-side revocation push (#130). The local nsc
+// lifecycle test only runs against an operator whose JWT carries a reachable
+// account-jwt-server URL. `nsc push --diff` is non-destructive and reports
+// the same connectivity error as a real push, so we use it as a probe.
+// Coverage of revocation call-order + abort semantics without a server lives
+// in test/commands/nats-revoke.test.ts.
+const NATS_REACHABLE = (() => {
+  if (!NSC_AVAILABLE) return false;
+  const probe = Bun.spawnSync(
+    ["nsc", "push", "-a", TEST_ACCOUNT, "--diff"],
+    { stdout: "pipe", stderr: "pipe" },
+  );
+  return probe.exitCode === 0;
+})();
+
 function cleanupTestBot(): void {
   Bun.spawnSync(["nsc", "delete", "user", "-a", TEST_ACCOUNT, "-n", TEST_BOT]);
   try { unlinkSync(CREDS_PATH); } catch { /* ok */ }
@@ -30,7 +45,7 @@ describe("nats commands", () => {
   });
 
   describe("addBot + removeBot lifecycle", () => {
-    test.skipIf(!NSC_AVAILABLE)("creates user, writes creds with correct perms, removes cleanly", () => {
+    test.skipIf(!NATS_REACHABLE)("creates user, writes creds with correct perms, removes cleanly", () => {
       cleanupTestBot();
 
       addBot(TEST_BOT, { account: TEST_ACCOUNT });
