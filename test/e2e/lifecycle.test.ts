@@ -97,7 +97,7 @@ describe("Full lifecycle: install → list → info → audit → disable → en
     expect(infoResult.manifest!.author?.name).toBe("mellanon");
 
     // --- VERIFY ---
-    const verifyResult = await verify(env.db, env.paths, "_JIRA");
+    const verifyResult = await verify(env.db, env.arc, env.host, "_JIRA");
     expect(verifyResult.allPassed).toBe(true);
 
     // --- AUDIT ---

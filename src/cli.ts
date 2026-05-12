@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 
 import { Command } from "commander";
-import { createPaths, ensureDirectories } from "./lib/paths.js";
+import { createPaths, ensureDirectories, getDefaultHost } from "./lib/paths.js";
 import { openDatabase } from "./lib/db.js";
 import { install, parseNameVersion } from "./commands/install.js";
 import { list, formatList, formatListJson } from "./commands/list.js";
@@ -468,8 +468,9 @@ program
   .description("Verify integrity of an installed skill")
   .action(async (name: string) => {
     const paths = createPaths();
+    const host = getDefaultHost({ root: paths.claudeRoot });
     const db = openDatabase(paths.dbPath);
-    const result = await verify(db, paths, name);
+    const result = await verify(db, paths, host, name);
     console.log(formatVerify(result));
     db.close();
   });

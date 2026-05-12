@@ -30,7 +30,7 @@ describe("verify command", () => {
       yes: true,
     });
 
-    const result = await verify(env.db, env.paths, "TestSkill");
+    const result = await verify(env.db, env.arc, env.host, "TestSkill");
     expect(result.allPassed).toBe(true);
 
     const symlinkCheck = result.checks.find((c) =>
@@ -51,7 +51,7 @@ describe("verify command", () => {
       yes: true,
     });
 
-    const result = await verify(env.db, env.paths, "TestSkill");
+    const result = await verify(env.db, env.arc, env.host, "TestSkill");
     const manifestCheck = result.checks.find((c) =>
       c.check.includes("manifest")
     );
@@ -59,7 +59,7 @@ describe("verify command", () => {
   });
 
   test("returns error for non-installed skill", async () => {
-    const result = await verify(env.db, env.paths, "NonExistent");
+    const result = await verify(env.db, env.arc, env.host, "NonExistent");
     expect(result.allPassed).toBe(false);
     expect(result.error).toContain("not installed");
   });
@@ -78,7 +78,7 @@ describe("verify command", () => {
       yes: true,
     });
 
-    const result = await verify(env.db, env.paths, "NoHookSkill");
+    const result = await verify(env.db, env.arc, env.host, "NoHookSkill");
     expect(result.allPassed).toBe(true);
     const hookCheck = result.checks.find((c) => c.check.includes("Hook command"));
     expect(hookCheck).toBeUndefined();
@@ -132,7 +132,7 @@ describe("verify command", () => {
     });
     expect(installResult.success).toBe(true);
 
-    const result = await verify(env.db, env.paths, "LiveHook");
+    const result = await verify(env.db, env.arc, env.host, "LiveHook");
     const hookCheck = result.checks.find((c) => c.check.includes("Hook command"));
     expect(hookCheck).toBeDefined();
     expect(hookCheck!.passed).toBe(true);
@@ -190,7 +190,7 @@ describe("verify command", () => {
     // still points at the path, repo dir still has the source file.
     await rm(targetPath, { force: true });
 
-    const result = await verify(env.db, env.paths, "DeletedHook");
+    const result = await verify(env.db, env.arc, env.host, "DeletedHook");
     expect(result.allPassed).toBe(false);
     const hookCheck = result.checks.find((c) => c.check.includes("Hook command"));
     expect(hookCheck).toBeDefined();
