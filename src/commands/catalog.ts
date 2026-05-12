@@ -720,6 +720,10 @@ async function installAgentEntry(
   }
 }
 
+/**
+ * @param host Unused today; threaded for #117 signature consistency.
+ *   Forwarded as-is to installAgentEntry, which also doesn't read it.
+ */
 async function installPromptEntry(
   arc: ArcPaths,
   host: HostAdapter,
