@@ -21,10 +21,34 @@ const NSC_CONFIG_CANDIDATES = [
   join(process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config"), "nsc", "nsc.json"),
 ];
 
-function nsc(args: string[]): string {
+export interface NscResult {
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+}
+
+export type NscRunner = (args: string[]) => NscResult;
+
+const realNscRunner: NscRunner = (args) => {
   const result = Bun.spawnSync(["nsc", ...args], { stderr: "pipe", stdout: "pipe" });
-  const stdout = result.stdout.toString().trim();
-  const stderr = result.stderr.toString().trim();
+  return {
+    exitCode: result.exitCode ?? 1,
+    stdout: result.stdout.toString(),
+    stderr: result.stderr.toString(),
+  };
+};
+
+let currentNscRunner: NscRunner = realNscRunner;
+
+// Test seam: replace the nsc invoker. Pass null to restore the real runner.
+export function __setNscRunner(fn: NscRunner | null): void {
+  currentNscRunner = fn ?? realNscRunner;
+}
+
+function nsc(args: string[]): string {
+  const result = currentNscRunner(args);
+  const stdout = result.stdout.trim();
+  const stderr = result.stderr.trim();
   if (result.exitCode !== 0) {
     throw new Error(`nsc ${args[0]} failed: ${stderr || stdout || "unknown error"}`);
   }
@@ -32,13 +56,13 @@ function nsc(args: string[]): string {
 }
 
 function nscWithStderr(args: string[]): string {
-  const result = Bun.spawnSync(["nsc", ...args], { stderr: "pipe", stdout: "pipe" });
+  const result = currentNscRunner(args);
   if (result.exitCode !== 0) {
-    const stderr = result.stderr.toString().trim();
-    const stdout = result.stdout.toString().trim();
+    const stderr = result.stderr.trim();
+    const stdout = result.stdout.trim();
     throw new Error(`nsc ${args[0]} failed: ${stderr || stdout || "unknown error"}`);
   }
-  return (result.stdout.toString() + result.stderr.toString()).trim();
+  return (result.stdout + result.stderr).trim();
 }
 
 export function ensureNscInstalled(): void {
@@ -92,6 +116,46 @@ function userExists(account: string, name: string): boolean {
     return true;
   } catch {
     return false;
+  }
+}
+
+/**
+ * Server-side revocation: add the user's public key to the account's revocations
+ * map, then push the updated account JWT to the NATS server's $SYS account so
+ * the server starts rejecting connections from any creds derived from that key.
+ *
+ * MUST be called before `nsc delete user` — the pubkey can't be looked up after
+ * the local user record is gone. Throws on push failure WITHOUT deleting the
+ * user, leaving a recoverable state.
+ */
+function revokeAndPush(account: string, name: string): void {
+  // 1. Resolve pubkey from the user JWT (`sub` field). Must happen before delete.
+  let userPubKey: string;
+  try {
+    userPubKey = nsc(["describe", "user", "-a", account, "-n", name, "--field", "sub"]);
+  } catch (err) {
+    throw new Error(
+      `Cannot look up pubkey for user "${name}" — server-side revoke skipped. ` +
+      `Cause: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+  // nsc may wrap `--field` output in quotes; strip them.
+  userPubKey = userPubKey.replace(/^"|"$/g, "");
+  if (!userPubKey) {
+    throw new Error(`Empty pubkey returned for user "${name}" — refusing to proceed.`);
+  }
+
+  // 2. Add to account revocations map.
+  nsc(["revocations", "add-user", "-a", account, "-u", userPubKey]);
+
+  // 3. Push the updated account JWT to the NATS server's $SYS account.
+  try {
+    nsc(["push", "-a", account]);
+  } catch (err) {
+    throw new Error(
+      `Server-side revoke failed: ${err instanceof Error ? err.message : String(err)}. ` +
+      `The user JWT is STILL VALID on the bus. Resolve and retry.`,
+    );
   }
 }
 
@@ -201,6 +265,12 @@ export function reissueBot(name: string, opts: ReissueBotOptions): void {
     console.log(`  backup: ${backup}`);
   }
 
+  // Server-side revoke of the OLD user's pubkey BEFORE delete. The new user
+  // gets a fresh keypair and is unaffected. If push fails, abort without
+  // delete (recoverable). See issue #130.
+  revokeAndPush(account, name);
+  console.log(`Revoked old credentials on server`);
+
   nsc(["delete", "user", "-a", account, "-n", name]);
 
   try {
@@ -211,7 +281,7 @@ export function reissueBot(name: string, opts: ReissueBotOptions): void {
     console.error(`CRITICAL: failed to re-create user "${name}" after delete.`);
     if (existsSync(`${outPath}.bak`)) {
       console.error(`Old credentials backed up at: ${outPath}.bak`);
-      console.error(`Note: old creds are invalidated — backup is for reference only.`);
+      console.error(`Note: old creds are already revoked server-side — backup is for forensic reference only.`);
     }
     console.error(`Manual recovery: nsc add user -a ${account} -n ${name}`);
     console.error(`Cause: ${err instanceof Error ? err.message : String(err)}`);
@@ -223,7 +293,7 @@ export function reissueBot(name: string, opts: ReissueBotOptions): void {
 
   console.log(`Re-issued credentials for ${name}`);
   console.log(`  credentials: ${outPath} (mode 600)`);
-  console.log(`  Note: old credentials are now invalid.`);
+  console.log(`  Note: old credentials are revoked on the NATS server.`);
 }
 
 export function listBots(account?: string): void {
@@ -284,6 +354,11 @@ export function removeBot(name: string, opts: RemoveBotOptions): void {
     console.error(`Error: user "${name}" not found under "${account}".`);
     process.exit(1);
   }
+
+  // Server-side revoke FIRST. If the push fails, abort without deleting the
+  // user locally — leaves a recoverable state. See issue #130.
+  revokeAndPush(account, name);
+  console.log(`Revoked on server: ${name} (account: ${account})`);
 
   nsc(["delete", "user", "-a", account, "-n", name]);
   console.log(`Removed user: ${name} (account: ${account})`);
