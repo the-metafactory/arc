@@ -24,7 +24,7 @@ describe("verify command", () => {
     });
 
     await install({
-      paths: env.paths,
+      arc: env.arc, host: env.host,
       db: env.db,
       repoUrl: repo.url,
       yes: true,
@@ -45,7 +45,7 @@ describe("verify command", () => {
     });
 
     await install({
-      paths: env.paths,
+      arc: env.arc, host: env.host,
       db: env.db,
       repoUrl: repo.url,
       yes: true,
@@ -72,7 +72,7 @@ describe("verify command", () => {
       name: "NoHookSkill",
     });
     await install({
-      paths: env.paths,
+      arc: env.arc, host: env.host,
       db: env.db,
       repoUrl: repo.url,
       yes: true,
@@ -125,7 +125,7 @@ describe("verify command", () => {
     );
 
     const installResult = await install({
-      paths: env.paths,
+      arc: env.arc, host: env.host,
       db: env.db,
       repoUrl: repoDir,
       yes: true,
@@ -179,7 +179,7 @@ describe("verify command", () => {
     );
 
     const installResult = await install({
-      paths: env.paths,
+      arc: env.arc, host: env.host,
       db: env.db,
       repoUrl: repoDir,
       yes: true,

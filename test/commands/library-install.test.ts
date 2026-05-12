@@ -24,7 +24,7 @@ describe("library install", () => {
     });
 
     const result = await install({
-      paths: env.paths,
+      arc: env.arc, host: env.host,
       db: env.db,
       repoUrl: lib.url,
       yes: true,
@@ -57,7 +57,7 @@ describe("library install", () => {
     });
 
     const result = await install({
-      paths: env.paths,
+      arc: env.arc, host: env.host,
       db: env.db,
       repoUrl: lib.url,
       yes: true,
@@ -83,7 +83,7 @@ describe("library install", () => {
     });
 
     const result = await install({
-      paths: env.paths,
+      arc: env.arc, host: env.host,
       db: env.db,
       repoUrl: lib.url,
       yes: true,
@@ -99,7 +99,7 @@ describe("library install", () => {
     const skill = await createMockSkillRepo(env.root, { name: "standalone" });
 
     const result = await install({
-      paths: env.paths,
+      arc: env.arc, host: env.host,
       db: env.db,
       repoUrl: skill.url,
       yes: true,
@@ -122,11 +122,11 @@ describe("library install", () => {
         { path: "skills/beta", name: "beta", type: "skill" },
       ],
     });
-    await install({ paths: env.paths, db: env.db, repoUrl: lib.url, yes: true });
+    await install({ arc: env.arc, host: env.host, db: env.db, repoUrl: lib.url, yes: true });
 
     // Install a standalone
     const standalone = await createMockSkillRepo(env.root, { name: "standalone" });
-    await install({ paths: env.paths, db: env.db, repoUrl: standalone.url, yes: true });
+    await install({ arc: env.arc, host: env.host, db: env.db, repoUrl: standalone.url, yes: true });
 
     // List all
     const allResult = list(env.db);
@@ -148,7 +148,7 @@ describe("library install", () => {
       ],
     });
 
-    await install({ paths: env.paths, db: env.db, repoUrl: lib.url, yes: true });
+    await install({ arc: env.arc, host: env.host, db: env.db, repoUrl: lib.url, yes: true });
 
     // Remove just alpha
     const removeResult = await remove(env.db, env.paths, "alpha");
@@ -171,7 +171,7 @@ describe("library install", () => {
     });
 
     const result = await install({
-      paths: env.paths,
+      arc: env.arc, host: env.host,
       db: env.db,
       repoUrl: lib.url,
       yes: true,
@@ -197,10 +197,10 @@ describe("library install", () => {
     });
 
     // First install — all
-    await install({ paths: env.paths, db: env.db, repoUrl: lib.url, yes: true });
+    await install({ arc: env.arc, host: env.host, db: env.db, repoUrl: lib.url, yes: true });
 
     // Second install — should skip already-installed
-    const result2 = await install({ paths: env.paths, db: env.db, repoUrl: lib.url, yes: true });
+    const result2 = await install({ arc: env.arc, host: env.host, db: env.db, repoUrl: lib.url, yes: true });
     expect(result2.success).toBe(true);
     // Both artifacts should be "success" (skipped counts as success)
     expect(result2.artifacts!.every((a) => a.success)).toBe(true);

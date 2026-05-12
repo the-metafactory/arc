@@ -1,7 +1,6 @@
 import { join } from "path";
 import { existsSync } from "fs";
-import type { PaiPaths, ArcManifest, ArtifactType, HostAdapter, PackageTier } from "../types.js";
-import { getDefaultHost } from "../lib/paths.js";
+import type { ArcPaths, ArcManifest, ArtifactType, HostAdapter, PackageTier } from "../types.js";
 import type { Database } from "bun:sqlite";
 import { readManifest, readLibraryArtifacts, assessRisk, formatCapabilities } from "../lib/manifest.js";
 import { recordInstall, getSkill } from "../lib/db.js";
@@ -22,9 +21,10 @@ import { wireExtensions } from "../lib/extensions.js";
 import { extractRepoName } from "../lib/repo-name.js";
 
 export interface InstallOptions {
-  paths: PaiPaths;
-  /** Target host adapter. Defaults to Claude-Code when omitted. */
-  host?: HostAdapter;
+  /** arc's own state paths (configRoot, dbPath, reposDir, …). Host-independent. */
+  arc: ArcPaths;
+  /** Target host adapter (Claude Code today; Codex/Cursor later). */
+  host: HostAdapter;
   db: Database;
   repoUrl: string;
   /** Skip capability display confirmation (for non-interactive / test use) */
@@ -71,19 +71,17 @@ export interface InstallResult {
  * 7. Record in database
  */
 export async function install(opts: InstallOptions): Promise<InstallResult> {
-  const { paths, db, repoUrl } = opts;
-  // Resolve target host: caller-supplied or default (Claude Code).
-  const host = opts.host ?? getDefaultHost({ root: paths.claudeRoot });
+  const { arc, host, db, repoUrl } = opts;
 
   // 1. Clone repo (or use pre-extracted path for registry installs)
   const repoName = opts.preExtractedPath
     ? opts.preExtractedPath.split("/").pop() ?? extractRepoName(repoUrl)
     : extractRepoName(repoUrl);
-  const installPath = opts.preExtractedPath ?? join(paths.reposDir, repoName);
+  const installPath = opts.preExtractedPath ?? join(arc.reposDir, repoName);
 
   // S2: Path traversal guard — ensure installPath stays inside reposDir
   const normalizedInstall = join(installPath); // resolves ../ segments
-  const normalizedRepos = join(paths.reposDir);
+  const normalizedRepos = join(arc.reposDir);
   if (!normalizedInstall.startsWith(normalizedRepos + "/") && normalizedInstall !== normalizedRepos) {
     return {
       success: false,
@@ -200,7 +198,8 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
       }
 
       const depResult = await install({
-        paths,
+        arc,
+        host,
         db,
         repoUrl: dep.repo,
         yes: opts.yes,
@@ -268,7 +267,7 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
   const symlinkResult = await createArtifactSymlinks({
     type: manifest.type,
     manifest,
-    paths,
+    arc,
     host,
     installDir: installPath,
     consumerDir: opts.consumerDir,
@@ -286,14 +285,14 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
   }
 
   // 5b. Register hooks (if declared, with consent gating).
-  // paths.claudeRoot is passed as the $PAI_DIR expansion target so a hook
+  // host.paths.root is passed as the $PAI_DIR expansion target so a hook
   // command like ${PAI_DIR}/hooks/handlers/Foo.ts gets stat'd against the
   // absolute path the runtime would resolve to (issue #85).
   const resolvedHooks = resolveHooksFromManifest(
     manifest.provides?.hooks,
     installPath,
     manifest.name,
-    paths.claudeRoot,
+    host.paths.root,
   );
   if (resolvedHooks?.length) {
     // Refuse to register hooks whose command points at a file that does not
@@ -323,7 +322,7 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
       opts.yes,
     );
     if (approved) {
-      const settingsPath = paths.settingsPath;
+      const settingsPath = host.paths.settingsPath;
       await registerHooks(manifest.name, resolvedHooks, settingsPath);
       if (!opts.yes) {
         console.log("  \u2713 Hooks registered in settings.json");
@@ -337,7 +336,7 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
 
   // 5c. Wire extensions (if declared)
   if (manifest.extensions) {
-    const wired = await wireExtensions(manifest, installPath, paths.claudeRoot);
+    const wired = await wireExtensions(manifest, installPath, host.paths.root);
     if (wired.length && !opts.yes) {
       for (const ext of wired) {
         console.log(`  \u2713 Extension wired: ${ext}`);
@@ -363,7 +362,7 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
       // Tear down hook registrations and symlinks before returning so the
       // user gets a clean failure rather than orphans they have to clean up
       // by hand.
-      await removeHooks(manifest.name, paths.settingsPath);
+      await removeHooks(manifest.name, host.paths.settingsPath);
       await rollbackArtifactSymlinks(symlinkResult.record);
       return {
         success: false,
@@ -512,8 +511,7 @@ export async function installSingleArtifact(
   manifest: ArcManifest,
   libraryName: string,
 ): Promise<InstallResult> {
-  const { paths, db, repoUrl } = opts;
-  const host = opts.host ?? getDefaultHost({ root: paths.claudeRoot });
+  const { arc, host, db, repoUrl } = opts;
 
   // Display capabilities per-artifact
   const risk = assessRisk(manifest);
@@ -552,7 +550,7 @@ export async function installSingleArtifact(
   const symlinkResult = await createArtifactSymlinks({
     type: artifactType,
     manifest,
-    paths,
+    arc,
     host,
     installDir: artifactDir,
     consumerDir: opts.consumerDir,
@@ -570,12 +568,12 @@ export async function installSingleArtifact(
   }
 
   // Register hooks (with consent gating — same as standalone install).
-  // See note above on paths.claudeRoot threading $PAI_DIR substitution.
+  // See note above on host.paths.root threading $PAI_DIR substitution.
   const resolvedHooks = resolveHooksFromManifest(
     manifest.provides?.hooks,
     artifactDir,
     manifest.name,
-    paths.claudeRoot,
+    host.paths.root,
   );
   if (resolvedHooks?.length) {
     // Refuse to register hooks whose command points at a file that does not
@@ -605,7 +603,7 @@ export async function installSingleArtifact(
       opts.yes,
     );
     if (approved) {
-      const settingsPath = paths.settingsPath;
+      const settingsPath = host.paths.settingsPath;
       await registerHooks(manifest.name, resolvedHooks, settingsPath);
       if (!opts.yes) {
         console.log("  \u2713 Hooks registered in settings.json");
@@ -635,7 +633,7 @@ export async function installSingleArtifact(
       // Tear down hook registrations and symlinks before returning so the
       // user gets a clean failure rather than orphans they have to clean up
       // by hand.
-      await removeHooks(manifest.name, paths.settingsPath);
+      await removeHooks(manifest.name, host.paths.settingsPath);
       await rollbackArtifactSymlinks(symlinkResult.record);
       return {
         success: false,

@@ -27,7 +27,7 @@ describe("install command", () => {
     });
 
     const result = await install({
-      paths: env.paths,
+      arc: env.arc, host: env.host,
       db: env.db,
       repoUrl: repo.url,
       yes: true,
@@ -46,7 +46,7 @@ describe("install command", () => {
     });
 
     const result = await install({
-      paths: env.paths,
+      arc: env.arc, host: env.host,
       db: env.db,
       repoUrl: repo.url,
       yes: true,
@@ -63,7 +63,7 @@ describe("install command", () => {
     });
 
     await install({
-      paths: env.paths,
+      arc: env.arc, host: env.host,
       db: env.db,
       repoUrl: repo.url,
       yes: true,
@@ -81,7 +81,7 @@ describe("install command", () => {
     });
 
     await install({
-      paths: env.paths,
+      arc: env.arc, host: env.host,
       db: env.db,
       repoUrl: repo.url,
       yes: true,
@@ -99,7 +99,7 @@ describe("install command", () => {
     });
 
     await install({
-      paths: env.paths,
+      arc: env.arc, host: env.host,
       db: env.db,
       repoUrl: repo.url,
       yes: true,
@@ -118,7 +118,7 @@ describe("install command", () => {
     });
 
     const result = await install({
-      paths: env.paths,
+      arc: env.arc, host: env.host,
       db: env.db,
       repoUrl: repo.url,
       yes: true,
@@ -138,7 +138,7 @@ describe("install command", () => {
     });
 
     const result = await install({
-      paths: env.paths,
+      arc: env.arc, host: env.host,
       db: env.db,
       repoUrl: repo.url,
       yes: true,
@@ -157,7 +157,7 @@ describe("install command", () => {
     });
 
     const result = await install({
-      paths: env.paths,
+      arc: env.arc, host: env.host,
       db: env.db,
       repoUrl: repo.url,
       yes: true,
@@ -183,7 +183,7 @@ describe("install command", () => {
     });
 
     await install({
-      paths: env.paths,
+      arc: env.arc, host: env.host,
       db: env.db,
       repoUrl: repo.url,
       yes: true,
@@ -212,7 +212,7 @@ describe("install command", () => {
     });
 
     const result = await install({
-      paths: env.paths,
+      arc: env.arc, host: env.host,
       db: env.db,
       repoUrl: repo.url,
       yes: true,
@@ -244,7 +244,7 @@ describe("install command", () => {
     });
 
     const result = await install({
-      paths: env.paths,
+      arc: env.arc, host: env.host,
       db: env.db,
       repoUrl: repo.url,
       yes: true,
@@ -315,7 +315,7 @@ describe("install command", () => {
     );
 
     const result = await install({
-      paths: env.paths,
+      arc: env.arc, host: env.host,
       db: env.db,
       repoUrl: repoDir,
       yes: true,
@@ -375,7 +375,7 @@ describe("install command", () => {
     );
 
     const result = await install({
-      paths: env.paths,
+      arc: env.arc, host: env.host,
       db: env.db,
       repoUrl: repoDir,
       yes: true,
@@ -431,7 +431,7 @@ describe("install command", () => {
     );
 
     const result = await install({
-      paths: env.paths,
+      arc: env.arc, host: env.host,
       db: env.db,
       repoUrl: repoDir,
       yes: true,
@@ -448,7 +448,7 @@ describe("install command", () => {
 
     // First install
     await install({
-      paths: env.paths,
+      arc: env.arc, host: env.host,
       db: env.db,
       repoUrl: repo.url,
       yes: true,
@@ -456,7 +456,7 @@ describe("install command", () => {
 
     // Second install should fail
     const result = await install({
-      paths: env.paths,
+      arc: env.arc, host: env.host,
       db: env.db,
       repoUrl: repo.url,
       yes: true,
@@ -494,7 +494,7 @@ describe("install command", () => {
 
     // Install pinned to v1.0.0
     const result = await install({
-      paths: env.paths,
+      arc: env.arc, host: env.host,
       db: env.db,
       repoUrl: repo.url,
       yes: true,
@@ -512,7 +512,7 @@ describe("install command", () => {
     });
 
     const result = await install({
-      paths: env.paths,
+      arc: env.arc, host: env.host,
       db: env.db,
       repoUrl: repo.url,
       yes: true,
@@ -536,7 +536,7 @@ describe("install command", () => {
     );
 
     const result = await install({
-      paths: env.paths,
+      arc: env.arc, host: env.host,
       db: env.db,
       repoUrl: repo.url,
       yes: true,
@@ -639,7 +639,7 @@ describe("install provides.files (issue #84)", () => {
     });
 
     const result = await install({
-      paths: env.paths,
+      arc: env.arc, host: env.host,
       db: env.db,
       repoUrl,
       yes: true,
@@ -659,7 +659,7 @@ describe("install provides.files (issue #84)", () => {
     });
 
     const result = await install({
-      paths: env.paths,
+      arc: env.arc, host: env.host,
       db: env.db,
       repoUrl,
       yes: true,
@@ -681,7 +681,7 @@ describe("install provides.files (issue #84)", () => {
     });
 
     const result = await install({
-      paths: env.paths,
+      arc: env.arc, host: env.host,
       db: env.db,
       repoUrl,
       yes: true,
@@ -709,7 +709,7 @@ describe("install provides.files (issue #84)", () => {
     });
 
     const result = await install({
-      paths: env.paths,
+      arc: env.arc, host: env.host,
       db: env.db,
       repoUrl,
       yes: true,
@@ -737,7 +737,7 @@ describe("install provides.files (issue #84)", () => {
     });
 
     const result = await install({
-      paths: env.paths,
+      arc: env.arc, host: env.host,
       db: env.db,
       repoUrl,
       yes: true,
@@ -764,7 +764,7 @@ describe("install provides.files (issue #84)", () => {
     });
 
     const result = await install({
-      paths: env.paths,
+      arc: env.arc, host: env.host,
       db: env.db,
       repoUrl,
       yes: true,
@@ -803,7 +803,7 @@ describe("install provides.files (issue #84)", () => {
     });
 
     const result = await install({
-      paths: env.paths,
+      arc: env.arc, host: env.host,
       db: env.db,
       repoUrl,
       yes: true,
@@ -840,7 +840,7 @@ describe("install provides.files (issue #84)", () => {
     });
 
     const result = await install({
-      paths: env.paths,
+      arc: env.arc, host: env.host,
       db: env.db,
       repoUrl,
       yes: true,
@@ -885,7 +885,7 @@ describe("install provides.files (issue #84)", () => {
     });
 
     const result = await install({
-      paths: env.paths,
+      arc: env.arc, host: env.host,
       db: env.db,
       repoUrl,
       yes: true,

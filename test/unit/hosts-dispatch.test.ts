@@ -97,7 +97,7 @@ describe("createArtifactSymlinks null-guard throws", () => {
         createArtifactSymlinks({
           type: "agent",
           manifest,
-          paths,
+          arc: paths,
           host: stub,
           installDir: tmp,
           quiet: true,
@@ -143,7 +143,7 @@ describe("createArtifactSymlinks null-guard throws", () => {
       const result = await createArtifactSymlinks({
         type: "skill",
         manifest,
-        paths,
+        arc: paths,
         host: skillsOnlyHost,
         installDir: tmp,
         quiet: true,

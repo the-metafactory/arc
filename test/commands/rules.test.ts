@@ -98,7 +98,7 @@ repo_description: "A test project"
   );
 
   const result = await install({
-    paths: env.paths,
+    arc: env.arc, host: env.host,
     db: env.db,
     repoUrl: rulesRepo.url,
     yes: true,
@@ -146,7 +146,7 @@ extra_labels:
   );
 
   const result = await install({
-    paths: env.paths,
+    arc: env.arc, host: env.host,
     db: env.db,
     repoUrl: rulesRepo.url,
     yes: true,
@@ -177,7 +177,7 @@ repo_description: "Test"
   );
 
   await install({
-    paths: env.paths,
+    arc: env.arc, host: env.host,
     db: env.db,
     repoUrl: rulesRepo.url,
     yes: true,

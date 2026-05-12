@@ -2,7 +2,7 @@ import { join, dirname } from "path";
 import { existsSync } from "fs";
 import { mkdir } from "fs/promises";
 import { homedir } from "os";
-import type { ArtifactType, ArcManifest, HostAdapter, PaiPaths } from "../types.js";
+import type { ArtifactType, ArcManifest, ArcPaths, HostAdapter } from "../types.js";
 import {
   createSymlink,
   createCliShim,
@@ -70,7 +70,7 @@ export interface ArtifactSymlinkRecord {
 export async function createArtifactSymlinks(opts: {
   type: ArtifactType | "rules" | "system";
   manifest: ArcManifest;
-  paths: PaiPaths;
+  arc: ArcPaths;
   /** Target host adapter. Defaults to Claude-Code in the caller. */
   host: HostAdapter;
   installDir: string;
@@ -81,8 +81,8 @@ export async function createArtifactSymlinks(opts: {
   filesMissingSource: Array<{ source: string; target: string }>;
   record: ArtifactSymlinkRecord;
 }> {
-  const { type, manifest, paths, host, installDir, quiet } = opts;
-  const record: ArtifactSymlinkRecord = { symlinks: [], shims: { dir: paths.shimDir, names: [] } };
+  const { type, manifest, arc, host, installDir, quiet } = opts;
+  const record: ArtifactSymlinkRecord = { symlinks: [], shims: { dir: arc.shimDir, names: [] } };
 
   // Helper that wraps createSymlink + tracks the target for rollback (#89).
   const linkTracked = async (source: string, target: string) => {
@@ -90,7 +90,7 @@ export async function createArtifactSymlinks(opts: {
     record.symlinks.push(target);
   };
   const shimTracked = async () => {
-    const created = await createCliShim(paths.shimDir, host.paths.binDir, manifest);
+    const created = await createCliShim(arc.shimDir, host.paths.binDir, manifest);
     record.shims.names.push(...created);
   };
 
@@ -116,7 +116,7 @@ export async function createArtifactSymlinks(opts: {
   switch (type) {
     case "action": {
       // Actions: symlink action directory into actionsDir
-      const actionLinkPath = join(paths.actionsDir, manifest.name);
+      const actionLinkPath = join(arc.actionsDir, manifest.name);
       await linkTracked(installDir, actionLinkPath);
       break;
     }
@@ -145,7 +145,7 @@ export async function createArtifactSymlinks(opts: {
       // pipelinesDir is arc state (host-independent) — pipelines aren't host-installed.
       const pipelineSourceDir = join(installDir, "pipeline");
       const sourceDir = existsSync(pipelineSourceDir) ? pipelineSourceDir : installDir;
-      const pipelineLinkPath = join(paths.pipelinesDir, manifest.name);
+      const pipelineLinkPath = join(arc.pipelinesDir, manifest.name);
       await linkTracked(sourceDir, pipelineLinkPath);
 
       // If the manifest declares CLI entries, the bin shims still go through
