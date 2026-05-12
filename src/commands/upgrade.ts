@@ -50,10 +50,16 @@ function compareSemver(a: string, b: string): number {
 
 /**
  * Check which installed packages have newer versions available.
+ *
+ * @param host Unused today; threaded for signature consistency with
+ *   upgradePackage / upgradeAll / upgradeLibrary. Will be consumed when
+ *   check needs host-specific upgrade-path detection (e.g. an adapter
+ *   that resolves upgrades through a host-side registry).
  */
 export async function checkUpgrades(
   db: Database,
-  arc: ArcPaths, host: HostAdapter
+  arc: ArcPaths,
+  host: HostAdapter,
 ): Promise<UpgradeCheckResult[]> {
   const installed = listSkills(db).filter((s) => s.status === "active");
   const sources = await loadSources(arc.sourcesPath);
