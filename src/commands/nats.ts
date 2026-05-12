@@ -12,10 +12,6 @@ import { generateIdentity } from "./identity.js";
 import {
   ArcNatsCommandError,
   type ArcNatsErrorCode,
-  type AddBotJson,
-  type ReissueBotJson,
-  type RemoveBotJson,
-  type SetupOperatorJson,
   type SetupOperatorBotResult,
   classifyError,
 } from "../lib/json-response.js";

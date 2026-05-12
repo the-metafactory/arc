@@ -116,13 +116,14 @@ export interface SetupOperatorJson extends JsonOkBase {
 /**
  * Emit a single line of JSON to stdout and return. Caller is responsible for
  * setting the process exit code (0 for ok, 1 for !ok).
+ *
+ * Signature is the documented envelope union so a wrong-shaped payload is a
+ * compile error, not a silent contract violation.
  */
-export function emitJson(payload: JsonOkBase | JsonError | Record<string, unknown>): void {
+export function emitJson(
+  payload: AddBotJson | ReissueBotJson | RemoveBotJson | SetupOperatorJson | JsonError,
+): void {
   process.stdout.write(JSON.stringify(payload) + "\n");
-}
-
-export function buildError(code: ArcNatsErrorCode, message: string): JsonError {
-  return { schema: ARC_NATS_SCHEMA, ok: false, error: { code, message } };
 }
 
 /**
