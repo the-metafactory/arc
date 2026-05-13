@@ -194,15 +194,6 @@ export function findMissingHookFiles(
 }
 
 /**
- * Check whether a manifest has any hooks declared (either format).
- */
-export function hasHooks(hooks: HooksDeclaration | undefined): boolean {
-  if (!hooks) return false;
-  if (Array.isArray(hooks)) return hooks.length > 0;
-  return !!(hooks as HooksConfigRef).claude_code?.config;
-}
-
-/**
  * Register package hooks into ~/.claude/settings.json.
  *
  * Reads current settings, merges hook entries, writes back.
