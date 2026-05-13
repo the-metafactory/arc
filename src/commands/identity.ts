@@ -60,7 +60,7 @@ function loadRegistry(): PrincipalRegistryFile {
   if (!existsSync(REGISTRY_PATH)) {
     return { version: 1, principals: [], trusted_hubs: [] };
   }
-  const raw = JSON.parse(readFileSync(REGISTRY_PATH, "utf-8"));
+  const raw = JSON.parse(readFileSync(REGISTRY_PATH, "utf-8")) as Partial<PrincipalRegistryFile>;
   if (raw.version !== 1 || !Array.isArray(raw.principals)) {
     throw new Error(`Invalid registry at ${REGISTRY_PATH}: expected version 1 with principals array`);
   }
@@ -178,14 +178,14 @@ export function importPrincipals(filePath: string): void {
 
   let incoming: PrincipalRegistryFile;
   try {
-    const raw = JSON.parse(readFileSync(filePath, "utf-8"));
+    const raw = JSON.parse(readFileSync(filePath, "utf-8")) as Partial<PrincipalRegistryFile>;
     if (raw.version !== 1 || !Array.isArray(raw.principals)) {
       throw new Error("expected { version: 1, principals: [...] }");
     }
     for (let i = 0; i < raw.principals.length; i++) {
       validatePrincipal(raw.principals[i], i);
     }
-    incoming = raw;
+    incoming = raw as PrincipalRegistryFile;
   } catch (err) {
     console.error(`Invalid principals file: ${err instanceof Error ? err.message : String(err)}`);
     process.exitCode = 1;

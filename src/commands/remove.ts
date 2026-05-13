@@ -22,6 +22,7 @@ import {
 } from "../lib/hosts/registry.js";
 import { removeLaunchdArtifacts } from "../lib/hosts/launchd-install.js";
 import { isDarwinLaunchdHost } from "../lib/hosts/darwin-launchd.js";
+import { errorMessage, isErrno } from "../lib/errors.js";
 
 export interface RemoveResult {
   success: boolean;
@@ -462,9 +463,9 @@ async function removeProvidedFile(
   let stat;
   try {
     stat = await lstat(targetPath);
-  } catch (err: any) {
-    if (err?.code === "ENOENT") return; // already gone, nothing to do
-    console.warn(`  ⚠ provides.files cleanup: cannot stat ${targetPath}: ${err?.message ?? err}`);
+  } catch (err) {
+    if (isErrno(err) && err.code === "ENOENT") return; // already gone, nothing to do
+    console.warn(`  ⚠ provides.files cleanup: cannot stat ${targetPath}: ${errorMessage(err)}`);
     return;
   }
 
@@ -478,8 +479,8 @@ async function removeProvidedFile(
   let actualTarget: string;
   try {
     actualTarget = await readlink(targetPath);
-  } catch (err: any) {
-    console.warn(`  ⚠ provides.files cleanup: readlink failed on ${targetPath}: ${err?.message ?? err}`);
+  } catch (err) {
+    console.warn(`  ⚠ provides.files cleanup: readlink failed on ${targetPath}: ${errorMessage(err)}`);
     return;
   }
 
@@ -492,9 +493,9 @@ async function removeProvidedFile(
 
   try {
     await unlink(targetPath);
-  } catch (err: any) {
-    if (err?.code !== "ENOENT") {
-      console.warn(`  ⚠ provides.files cleanup: unlink failed on ${targetPath}: ${err?.message ?? err}`);
+  } catch (err) {
+    if (isErrno(err) && err.code !== "ENOENT") {
+      console.warn(`  ⚠ provides.files cleanup: unlink failed on ${targetPath}: ${errorMessage(err)}`);
     }
   }
 }
