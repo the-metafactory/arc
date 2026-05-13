@@ -113,6 +113,18 @@ export async function createMockSkillRepo(
     /** provides.files entries to declare in the manifest. Source files
      *  are created on disk so install can symlink them. */
     files?: Array<{ source: string; target: string; content?: string }>;
+    /**
+     * Ordered lifecycle script arrays (arc#140). Each phase is an ordered
+     * list of `{ path, content }`. The helper writes each script to disk
+     * (executable) and the manifest's `lifecycle.<phase>` is rendered as
+     * the array of paths in declared order.
+     */
+    lifecycle?: {
+      preinstall?: Array<{ path: string; content: string }>;
+      postinstall?: Array<{ path: string; content: string }>;
+      preuninstall?: Array<{ path: string; content: string }>;
+      postuninstall?: Array<{ path: string; content: string }>;
+    };
   }
 ): Promise<MockSkillRepo> {
   const repoDir = join(root, `mock-${opts.name}`);
@@ -183,6 +195,17 @@ export async function createMockSkillRepo(
     }
   }
 
+  if (opts.lifecycle) {
+    for (const phase of Object.values(opts.lifecycle)) {
+      if (!phase) continue;
+      for (const script of phase) {
+        const scriptAbsPath = join(repoDir, script.path);
+        await Bun.write(scriptAbsPath, script.content);
+        Bun.spawnSync(["chmod", "+x", scriptAbsPath], { stdout: "pipe", stderr: "pipe" });
+      }
+    }
+  }
+
   // Create arc-manifest.yaml (unless testing without it)
   if (!opts.withoutManifest) {
     const caps = opts.capabilities ?? {};
@@ -219,6 +242,13 @@ export async function createMockSkillRepo(
       ...(opts.scripts ? {
         scripts: Object.fromEntries(
           Object.entries(opts.scripts).map(([hook, s]) => [hook, s.path])
+        ),
+      } : {}),
+      ...(opts.lifecycle ? {
+        lifecycle: Object.fromEntries(
+          Object.entries(opts.lifecycle)
+            .filter(([, arr]) => arr && arr.length > 0)
+            .map(([phase, arr]) => [phase, arr!.map((s) => s.path)]),
         ),
       } : {}),
     };

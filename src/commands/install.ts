@@ -4,7 +4,7 @@ import type { ArcPaths, ArcManifest, ArtifactType, HostAdapter, PackageTier } fr
 import type { Database } from "bun:sqlite";
 import { readManifest, readLibraryArtifacts, assessRisk, formatCapabilities } from "../lib/manifest.js";
 import { recordInstall, getSkill } from "../lib/db.js";
-import { runScript } from "../lib/scripts.js";
+import { runScript, runLifecycleScripts } from "../lib/scripts.js";
 import {
   registerHooks,
   removeHooks,
@@ -247,20 +247,10 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
     }
   }
 
-  // 3b. Run preinstall script if declared
-  if (manifest.scripts?.preinstall) {
-    const preResult = runScript({
-      installPath,
-      scriptPath: manifest.scripts.preinstall,
-      hookName: "preinstall",
-      quiet: opts.yes,
-    });
-    if (!preResult.success && !preResult.skipped) {
-      return {
-        success: false,
-        error: `Preinstall script failed (exit ${preResult.exitCode})`,
-      };
-    }
+  // 3b. Run preinstall script(s) if declared
+  const preinstallResult = runPreinstallPhase(installPath, manifest, opts.yes);
+  if (!preinstallResult.success) {
+    return preinstallResult;
   }
 
   // 4. Create symlinks based on artifact type
@@ -347,28 +337,18 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
   // 6. Run bun install if package.json exists
   installNodeDependencies(installPath);
 
-  // 6b. Run postinstall script if declared
-  if (manifest.scripts?.postinstall) {
-    const postResult = runScript({
-      installPath,
-      scriptPath: manifest.scripts.postinstall,
-      hookName: "postinstall",
-      quiet: opts.yes,
-    });
-    if (!postResult.success && !postResult.skipped) {
-      // #97: postinstall failure leaves the same partial-state shape as the
-      // hook-validation gate (#89) plus registered hooks pointing at a package
-      // the DB has no record of (recordInstall happens AFTER postinstall).
-      // Tear down hook registrations and symlinks before returning so the
-      // user gets a clean failure rather than orphans they have to clean up
-      // by hand.
-      await removeHooks(manifest.name, host.paths.settingsPath);
-      await rollbackArtifactSymlinks(symlinkResult.record);
-      return {
-        success: false,
-        error: `Postinstall script failed (exit ${postResult.exitCode})`,
-      };
-    }
+  // 6b. Run postinstall script(s) if declared
+  const postinstallResult = runPostinstallPhase(installPath, manifest, opts.yes);
+  if (!postinstallResult.success) {
+    // #97: postinstall failure leaves the same partial-state shape as the
+    // hook-validation gate (#89) plus registered hooks pointing at a package
+    // the DB has no record of (recordInstall happens AFTER postinstall).
+    // Tear down hook registrations and symlinks before returning so the
+    // user gets a clean failure rather than orphans they have to clean up
+    // by hand.
+    await removeHooks(manifest.name, host.paths.settingsPath);
+    await rollbackArtifactSymlinks(symlinkResult.record);
+    return postinstallResult;
   }
 
   // 7. Record in database
@@ -528,20 +508,10 @@ export async function installSingleArtifact(
     }
   }
 
-  // Run preinstall script
-  if (manifest.scripts?.preinstall) {
-    const preResult = runScript({
-      installPath: artifactDir,
-      scriptPath: manifest.scripts.preinstall,
-      hookName: "preinstall",
-      quiet: opts.yes,
-    });
-    if (!preResult.success && !preResult.skipped) {
-      return {
-        success: false,
-        error: `Preinstall script failed (exit ${preResult.exitCode})`,
-      };
-    }
+  // Run preinstall script(s)
+  const preinstallResult = runPreinstallPhase(artifactDir, manifest, opts.yes);
+  if (!preinstallResult.success) {
+    return preinstallResult;
   }
 
   // Create symlinks based on artifact type
@@ -618,28 +588,18 @@ export async function installSingleArtifact(
   // Run bun install if package.json exists in artifact dir
   installNodeDependencies(artifactDir);
 
-  // Run postinstall script
-  if (manifest.scripts?.postinstall) {
-    const postResult = runScript({
-      installPath: artifactDir,
-      scriptPath: manifest.scripts.postinstall,
-      hookName: "postinstall",
-      quiet: opts.yes,
-    });
-    if (!postResult.success && !postResult.skipped) {
-      // #97: postinstall failure leaves the same partial-state shape as the
-      // hook-validation gate (#89) plus registered hooks pointing at a package
-      // the DB has no record of (recordInstall happens AFTER postinstall).
-      // Tear down hook registrations and symlinks before returning so the
-      // user gets a clean failure rather than orphans they have to clean up
-      // by hand.
-      await removeHooks(manifest.name, host.paths.settingsPath);
-      await rollbackArtifactSymlinks(symlinkResult.record);
-      return {
-        success: false,
-        error: `Postinstall script failed (exit ${postResult.exitCode})`,
-      };
-    }
+  // Run postinstall script(s)
+  const postinstallResult = runPostinstallPhase(artifactDir, manifest, opts.yes);
+  if (!postinstallResult.success) {
+    // #97: postinstall failure leaves the same partial-state shape as the
+    // hook-validation gate (#89) plus registered hooks pointing at a package
+    // the DB has no record of (recordInstall happens AFTER postinstall).
+    // Tear down hook registrations and symlinks before returning so the
+    // user gets a clean failure rather than orphans they have to clean up
+    // by hand.
+    await removeHooks(manifest.name, host.paths.settingsPath);
+    await rollbackArtifactSymlinks(symlinkResult.record);
+    return postinstallResult;
   }
 
   // Resolve the skill_dir for DB recording
@@ -672,6 +632,101 @@ export async function installSingleArtifact(
     version: manifest.version,
     manifest,
   };
+}
+
+/**
+ * Run the preinstall phase: single-script `scripts.preinstall` first, then
+ * the ordered `lifecycle.preinstall` array (arc#140). Both shapes may be
+ * present on the same manifest; arc runs them in that order.
+ *
+ * Called BEFORE any symlinks are created — a failure here leaves no
+ * partial filesystem state to roll back, so the caller just returns the
+ * error directly.
+ */
+function runPreinstallPhase(
+  installPath: string,
+  manifest: ArcManifest,
+  quiet?: boolean,
+): InstallResult {
+  if (manifest.scripts?.preinstall) {
+    const result = runScript({
+      installPath,
+      scriptPath: manifest.scripts.preinstall,
+      hookName: "preinstall",
+      quiet,
+    });
+    if (!result.success && !result.skipped) {
+      return {
+        success: false,
+        error: `Preinstall script failed (exit ${result.exitCode})`,
+      };
+    }
+  }
+
+  const lifecycle = manifest.lifecycle?.preinstall;
+  if (lifecycle && lifecycle.length > 0) {
+    const result = runLifecycleScripts({
+      installPath,
+      scriptPaths: lifecycle,
+      phase: "preinstall",
+      quiet,
+    });
+    if (!result.success) {
+      return {
+        success: false,
+        error: `Preinstall lifecycle script failed: ${result.failedAt} (exit ${result.steps.at(-1)?.exitCode ?? "?"})`,
+      };
+    }
+  }
+
+  return { success: true };
+}
+
+/**
+ * Run the postinstall phase: single-script `scripts.postinstall` first,
+ * then the ordered `lifecycle.postinstall` array (arc#140). Same ordering
+ * rationale as runPreinstallPhase.
+ *
+ * Called AFTER symlinks + hooks are placed; caller is responsible for
+ * rollback on failure (see install.ts §6b).
+ */
+function runPostinstallPhase(
+  installPath: string,
+  manifest: ArcManifest,
+  quiet?: boolean,
+): InstallResult {
+  if (manifest.scripts?.postinstall) {
+    const result = runScript({
+      installPath,
+      scriptPath: manifest.scripts.postinstall,
+      hookName: "postinstall",
+      quiet,
+    });
+    if (!result.success && !result.skipped) {
+      return {
+        success: false,
+        error: `Postinstall script failed (exit ${result.exitCode})`,
+      };
+    }
+  }
+
+  const lifecycle = manifest.lifecycle?.postinstall;
+  if (lifecycle && lifecycle.length > 0) {
+    const result = runLifecycleScripts({
+      installPath,
+      scriptPaths: lifecycle,
+      phase: "postinstall",
+      quiet,
+    });
+    if (!result.success) {
+      return {
+        success: false,
+        error: `Postinstall lifecycle script failed: ${result.failedAt} (exit ${result.steps.at(-1)?.exitCode ?? "?"})`,
+      };
+    }
+  }
+
+  return { success: true };
 }
 
 /**
