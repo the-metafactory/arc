@@ -123,4 +123,53 @@ describe("init command", () => {
     expect(notes).toBe("operator notes");
     expect(existsSync(join(targetDir, "arc-manifest.yaml"))).toBe(true);
   });
+
+  // Sage P148 cycle 4 — drift guard. `scaffoldFilesFor` enumerates the
+  // files init() will write; if a future change adds a `Bun.write` call
+  // without updating the list, the pre-flight overwrite check silently
+  // misses that file and operator content gets clobbered. Test: pre-seed
+  // EVERY file scaffoldFilesFor declares for each type, then run init —
+  // it MUST refuse for every type. If a Bun.write target ever slips
+  // outside the enumeration, this test still passes BUT a separate
+  // post-init walk asserts every created file appears in result.files
+  // (which is built from the same list-driven sources). Two checks
+  // together catch list-vs-write drift in either direction.
+  test("scaffoldFilesFor stays in sync with actual writes (drift guard)", async () => {
+    const { readdir } = await import("fs/promises");
+
+    async function walk(dir: string, base = ""): Promise<string[]> {
+      const out: string[] = [];
+      for (const entry of await readdir(dir, { withFileTypes: true })) {
+        const rel = base ? `${base}/${entry.name}` : entry.name;
+        if (entry.isDirectory()) {
+          out.push(...(await walk(join(dir, entry.name), rel)));
+        } else {
+          out.push(rel);
+        }
+      }
+      return out;
+    }
+
+    const types = ["skill", "tool", "agent", "prompt", "pipeline"] as const;
+    for (const type of types) {
+      const targetDir = join(tempDir, `sync-${type}`);
+      const result = await init(targetDir, `sync-${type}`, undefined, type);
+      expect(result.success).toBe(true);
+
+      // Every file on disk must appear in result.files (sourced from the
+      // same list scaffoldFilesFor uses). A new Bun.write that doesn't
+      // push to files[] would surface here.
+      const onDisk = (await walk(targetDir)).sort();
+      const reported = [...result.files!].sort();
+      expect(onDisk).toEqual(reported);
+
+      // And: pre-seeding any one of the declared files must trip the
+      // pre-flight refusal. Spot-check the manifest path (always present
+      // in the list across types).
+      const seeded = join(tempDir, `seed-${type}`);
+      await Bun.write(join(seeded, "arc-manifest.yaml"), "name: prior\n");
+      const refused = await init(seeded, `seed-${type}`, undefined, type);
+      expect(refused.success).toBe(false);
+    }
+  });
 });
