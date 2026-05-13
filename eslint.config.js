@@ -94,7 +94,11 @@ export default tseslint.config(
       // Commander-style fluent chains pass method references as args
       // (`.option(handler)`); the rule mis-reads them as `this`-rebinding
       // hazards. Real binding issues still surface via test failures.
-      "@typescript-eslint/unbound-method": "warn",
+      // 100% test-file noise today (mock helpers like `mock(fs.readFile)`
+      // pass bound methods to `mock()`; rule reads them as `this`-leaks).
+      // Off in tests, error in src so future commander-handler patterns
+      // are flagged for explicit `.bind(this)` or arrow-function wrap.
+      "@typescript-eslint/unbound-method": "error",
       // Mirrors myelin#127. `.catch((err: unknown) => …)` is the safe
       // idiom; bare `(err)` defaults to implicit `any`. All 2 arc sites
       // were already _err stubs; just type-annotated.
@@ -148,6 +152,10 @@ export default tseslint.config(
       // in tests. Production stubs (6 sites today) get inline disables
       // or per-file banners. Mirrors myelin#125.
       "@typescript-eslint/no-empty-function": "off",
+      // Mock helpers pass bound class methods (`mock(fs.readFile)`,
+      // `spyOn(obj, "method")`); the rule mis-reads them as `this`
+      // hazards. Real `this`-binding bugs surface as test failures.
+      "@typescript-eslint/unbound-method": "off",
     },
   },
   {
