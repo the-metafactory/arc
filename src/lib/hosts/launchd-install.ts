@@ -58,9 +58,14 @@ export function buildLaunchdTokens(opts: {
  * is preserved verbatim in the output. This lets a bot package use
  * custom markers that its own lifecycle script resolves before
  * `launchctl bootstrap`.
+ *
+ * The marker grammar accepts `[A-Za-z0-9_-]+` so hyphenated token names
+ * (e.g. `{{LOG-DIR}}`, `{{ai-meta-factory}}`) substitute too. Sage P3
+ * review (arc#143): the original `\w` class silently passed hyphenated
+ * markers through unsubstituted even when present in the tokens map.
  */
 export function renderPlist(template: string, tokens: LaunchdTokens): string {
-  return template.replace(/\{\{(\w+)\}\}/g, (match, key: string) => {
+  return template.replace(/\{\{([A-Za-z0-9_-]+)\}\}/g, (match, key: string) => {
     return key in tokens ? tokens[key]! : match;
   });
 }

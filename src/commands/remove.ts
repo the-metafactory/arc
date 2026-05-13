@@ -5,7 +5,6 @@ import type { Database } from "bun:sqlite";
 import type {
   ArcManifest,
   ArcPaths,
-  DarwinLaunchdHostPaths,
   HostAdapter,
   HostId,
 } from "../types.js";
@@ -22,6 +21,7 @@ import {
   resolveHost,
 } from "../lib/hosts/registry.js";
 import { removeLaunchdArtifacts } from "../lib/hosts/launchd-install.js";
+import { isDarwinLaunchdHost } from "../lib/hosts/darwin-launchd.js";
 
 export interface RemoveResult {
   success: boolean;
@@ -151,11 +151,32 @@ async function removePerTarget(opts: {
     const targetHost = resolveHost(targetId, opts.hostOverrides);
 
     if (targetId === "darwin-launchd") {
+      // Sage P3 review (arc#143): type guard instead of blanket cast.
+      if (!isDarwinLaunchdHost(targetHost)) {
+        if (!opts.quiet) {
+          console.warn(
+            `  ⚠ Skipping darwin-launchd remove: adapter did not expose plistDir`,
+          );
+        }
+        continue;
+      }
       await removeLaunchdArtifacts({
-        host: targetHost as HostAdapter & { paths: DarwinLaunchdHostPaths },
+        host: targetHost,
         manifest: opts.manifest,
         quiet: opts.quiet,
       });
+      continue;
+    }
+
+    if (targetId === "linux-systemd") {
+      // arc#140 P6: matched install-side behavior — the adapter exists
+      // but remove dispatch isn't yet wired. Skip with a warning rather
+      // than aborting; the operator can clean up manually.
+      if (!opts.quiet) {
+        console.warn(
+          `  ⚠ Skipping linux-systemd remove: dispatch not yet implemented (arc#140 Phase C)`,
+        );
+      }
       continue;
     }
 

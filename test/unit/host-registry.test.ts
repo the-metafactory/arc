@@ -27,8 +27,11 @@ describe("resolveHost", () => {
     expect(host.id).toBe("darwin-launchd");
   });
 
-  test("rejects linux-systemd (not yet implemented)", () => {
-    expect(() => resolveHost("linux-systemd")).toThrow(/not yet implemented/);
+  test("resolves linux-systemd (P6 — install dispatch follows in Phase C)", () => {
+    const host = resolveHost("linux-systemd", {
+      "linux-systemd": { forcePlatform: "linux" },
+    });
+    expect(host.id).toBe("linux-systemd");
   });
 
   test("threads overrides into the adapter", () => {

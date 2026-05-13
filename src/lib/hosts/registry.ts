@@ -2,6 +2,7 @@ import type { HostAdapter, HostId } from "../../types.js";
 import { createClaudeCodeHost } from "./claude-code.js";
 import { createCortexHost } from "./cortex.js";
 import { createDarwinLaunchdHost } from "./darwin-launchd.js";
+import { createLinuxSystemdHost } from "./linux-systemd.js";
 
 /**
  * Per-host adapter constructor overrides (test isolation).
@@ -17,6 +18,11 @@ export interface HostOverrides {
   cortex?: { configRoot?: string; credsRoot?: string };
   "darwin-launchd"?: {
     plistDir?: string;
+    binDir?: string;
+    forcePlatform?: NodeJS.Platform;
+  };
+  "linux-systemd"?: {
+    unitDir?: string;
     binDir?: string;
     forcePlatform?: NodeJS.Platform;
   };
@@ -45,10 +51,7 @@ export function resolveHost(
     case "darwin-launchd":
       return createDarwinLaunchdHost(overrides?.["darwin-launchd"]);
     case "linux-systemd":
-      throw new Error(
-        `Host adapter 'linux-systemd' is not yet implemented (arc#140 Phase C). ` +
-          `Manifests declaring this target cannot be installed today; install on macOS or wait for the adapter to land.`,
-      );
+      return createLinuxSystemdHost(overrides?.["linux-systemd"]);
     default: {
       const exhaustive: never = id;
       throw new Error(`Unknown host id: ${exhaustive as string}`);
@@ -80,6 +83,15 @@ export function categorizeHost(id: HostId): HostCategory {
     case "darwin-launchd":
     case "linux-systemd":
       return "supervision";
+    default: {
+      // arc#143 review (sage): exhaustiveness guard matching resolveHost().
+      // Adding a new HostId without updating this switch surfaces a
+      // compile error; without this case it would silently default to
+      // the "supervision" bucket (the else leg of orderTargetsForInstall),
+      // violating the install-order invariant with no diagnostic.
+      const exhaustive: never = id;
+      throw new Error(`Unhandled HostId in categorizeHost: ${exhaustive as string}`);
+    }
   }
 }
 
