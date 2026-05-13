@@ -8,7 +8,6 @@ import {
   removeHooks,
   listPackageHooks,
   resolveHooksFromManifest,
-  hasHooks,
   findMissingHookFiles,
 } from "../../src/lib/hooks.js";
 
@@ -419,28 +418,6 @@ describe("resolveHooksFromManifest", () => {
       event: "SessionStart",
       command: `bun ${configDir}/hook.ts`,
     });
-  });
-});
-
-describe("hasHooks", () => {
-  test("returns false for undefined", () => {
-    expect(hasHooks(undefined)).toBe(false);
-  });
-
-  test("returns false for empty array", () => {
-    expect(hasHooks([])).toBe(false);
-  });
-
-  test("returns true for non-empty inline array", () => {
-    expect(hasHooks([{ event: "Stop", command: "/hook.ts" }])).toBe(true);
-  });
-
-  test("returns true for config-file reference", () => {
-    expect(hasHooks({ claude_code: { config: "hooks.json" } })).toBe(true);
-  });
-
-  test("returns false for empty config-file reference", () => {
-    expect(hasHooks({ claude_code: { config: "" } } as any)).toBe(false);
   });
 });
 
