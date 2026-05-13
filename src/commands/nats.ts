@@ -325,7 +325,7 @@ export async function addBot(name: string, opts: AddBotOptions): Promise<AddBotR
 
   nsc(["add", "user", "-a", account, "-n", name]);
 
-  let credsContent = "";
+  let credsContent: string;
   try {
     if (opts.pub) {
       for (const subj of opts.pub.split(",").map((s) => s.trim())) {

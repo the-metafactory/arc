@@ -182,23 +182,23 @@ export async function fetchMetafactoryRegistry(
 
       if (response.status === 401 || response.status === 403) {
         process.stderr.write(`Access denied by ${source.name}. The registry may require authentication for this endpoint.\n`);
-        return readCachedRegistry(cachePath, source);
+        return await readCachedRegistry(cachePath, source);
       }
 
       if (response.status === 429) {
         process.stderr.write(`Rate limited by ${source.name}. Try again later.\n`);
-        return readCachedRegistry(cachePath, source);
+        return await readCachedRegistry(cachePath, source);
       }
 
       if (!response.ok) {
         debugLog(`API error from ${source.name}: ${response.status}`);
-        return readCachedRegistry(cachePath, source);
+        return await readCachedRegistry(cachePath, source);
       }
 
       const body = (await response.json()) as MetafactoryPackageListResponse;
       if (!body.packages || !Array.isArray(body.packages)) {
         debugLog(`Invalid response from ${source.name}: missing packages array`);
-        return readCachedRegistry(cachePath, source);
+        return await readCachedRegistry(cachePath, source);
       }
       allPackages.push(...body.packages);
 

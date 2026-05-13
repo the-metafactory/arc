@@ -76,7 +76,9 @@ export async function withTempDir<T>(
   try {
     return await fn(tempDir);
   } finally {
-    await rm(tempDir, { recursive: true, force: true }).catch(() => {});
+    await rm(tempDir, { recursive: true, force: true }).catch(() => {
+      // best-effort cleanup
+    });
   }
 }
 
@@ -213,7 +215,9 @@ export async function createBundle(
   const { sha256, sizeBytes, fileCount } = await getBundleStats(tarballName);
 
   if (sizeBytes > MAX_PACKAGE_SIZE) {
-    await rm(tarballName).catch(() => {});
+    await rm(tarballName).catch(() => {
+      // best-effort cleanup
+    });
     const sizeMb = (sizeBytes / 1024 / 1024).toFixed(1);
     const hint =
       "If this is a monorepo, pass a package subdirectory (e.g. `arc bundle packages/my-pkg`), " +

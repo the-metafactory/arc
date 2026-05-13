@@ -27,6 +27,9 @@ export function errorMessage(err: unknown): string {
       return Object.prototype.toString.call(err);
     }
   }
+  // After all the narrowing branches above, err must be a primitive
+  // (number, boolean, bigint, symbol, function) — String() is safe.
+  // eslint-disable-next-line @typescript-eslint/no-base-to-string
   return String(err);
 }
 

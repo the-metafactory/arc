@@ -52,7 +52,7 @@ export function resolveInitTarget(opts: {
 
   const name = inCwd ? cwdBasename : arg;
 
-  if (!name || /[\/\\]|\.\./.test(name)) {
+  if (!name || /[/\\]|\.\./.test(name)) {
     return {
       ok: false,
       reason: "invalid-name",

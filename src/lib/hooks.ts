@@ -267,7 +267,6 @@ export function listPackageHooks(
 
   let settings: Settings;
   try {
-    const { readFileSync } = require("fs");
     const raw = readFileSync(settingsPath, "utf-8");
     settings = JSON.parse(raw) as Settings;
   } catch {

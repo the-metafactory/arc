@@ -449,10 +449,12 @@ function buildYaml(obj: any, indent = 0): string {
     } else if (typeof val === "object") {
       out += `${pad}${key}:\n`;
       out += buildYaml(val, indent + 1);
-    } else if (typeof val === "boolean") {
+    } else if (typeof val === "boolean" || typeof val === "number" || typeof val === "string") {
       out += `${pad}${key}: ${val}\n`;
     } else {
-      out += `${pad}${key}: ${val}\n`;
+      // Fallback for unexpected types (bigint, symbol, function); JSON.stringify
+      // gives a sensible "null"/quoted representation.
+      out += `${pad}${key}: ${JSON.stringify(val)}\n`;
     }
   }
 

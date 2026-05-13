@@ -31,11 +31,11 @@ export default tseslint.config(
       //
       // Real concerns but high cost to fix in this PR. Surface in IDE +
       // lint output, don't gate. Tighten in subsequent focused PRs.
-      "@typescript-eslint/restrict-plus-operands": "warn",
-      "no-useless-escape": "warn",
-      "no-useless-assignment": "warn",
+      "@typescript-eslint/restrict-plus-operands": "error",
+      "no-useless-escape": "error",
+      "no-useless-assignment": "error",
       "no-control-regex": "warn",
-      "@typescript-eslint/no-require-imports": "warn",
+      "@typescript-eslint/no-require-imports": "error",
       // Mirrors myelin#127. `throw new Error(msg)` from a catch block
       // should pass `{ cause: err }` to preserve the underlying exception
       // chain for debuggability.
@@ -70,7 +70,7 @@ export default tseslint.config(
       // so genuine "awaiting a sync value" bugs get caught. Mirrors
       // myelin#123.
       "@typescript-eslint/await-thenable": "error",
-      "@typescript-eslint/no-empty-function": "warn",
+      "@typescript-eslint/no-empty-function": "error",
       "@typescript-eslint/no-non-null-assertion": "warn",
       "@typescript-eslint/prefer-nullish-coalescing": "error",
       "@typescript-eslint/no-explicit-any": "warn",
@@ -79,7 +79,7 @@ export default tseslint.config(
       "@typescript-eslint/no-unsafe-call": "warn",
       "@typescript-eslint/no-unsafe-argument": "warn",
       "@typescript-eslint/no-unsafe-return": "warn",
-      "@typescript-eslint/no-base-to-string": "warn",
+      "@typescript-eslint/no-base-to-string": "error",
       // Number / boolean interpolation in template literals is
       // universally understood — `Found ${count} matches` reads
       // cleanly. The rule still fires on `unknown`, `never`, `any`,
@@ -89,8 +89,8 @@ export default tseslint.config(
         "error",
         { allowNumber: true, allowBoolean: true },
       ],
-      "@typescript-eslint/return-await": "warn",
-      "@typescript-eslint/no-unused-expressions": "warn",
+      "@typescript-eslint/return-await": "error",
+      "@typescript-eslint/no-unused-expressions": "error",
       // Commander-style fluent chains pass method references as args
       // (`.option(handler)`); the rule mis-reads them as `this`-rebinding
       // hazards. Real binding issues still surface via test failures.

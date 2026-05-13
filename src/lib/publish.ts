@@ -31,8 +31,13 @@ function formatServerError(err: unknown): string | undefined {
     const obj = err as { message?: unknown; error?: unknown };
     if (typeof obj.message === "string") return obj.message;
     if (typeof obj.error === "string") return obj.error;
-    try { return JSON.stringify(err); } catch { return String(err); }
+    try { return JSON.stringify(err); } catch {
+      // eslint-disable-next-line @typescript-eslint/no-base-to-string
+      return String(err);
+    }
   }
+  // After narrowing above, err is a primitive — String() is safe.
+  // eslint-disable-next-line @typescript-eslint/no-base-to-string
   return String(err);
 }
 

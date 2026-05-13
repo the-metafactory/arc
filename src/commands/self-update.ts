@@ -1,3 +1,4 @@
+import { readFileSync } from "fs";
 import { join } from "path";
 
 export interface SelfUpdateResult {
@@ -120,7 +121,7 @@ export function checkSelfUpdate(): SelfUpdateCheck {
 
   let currentVersion: string;
   try {
-    const raw = require(pkgJsonPath);
+    const raw = JSON.parse(readFileSync(pkgJsonPath, "utf8")) as { version: string };
     currentVersion = raw.version;
   } catch {
     return { currentVersion: "unknown", latestVersion: null, updateAvailable: false };

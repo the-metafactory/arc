@@ -180,7 +180,7 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
   }
 
   // 2. Read manifest
-  let manifest: ArcManifest | null = null;
+  let manifest: ArcManifest | null;
   try {
     manifest = await readManifest(installPath);
   } catch (err) {

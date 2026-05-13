@@ -97,8 +97,7 @@ import { homedir } from "os";
 import { join } from "path";
 import { parseLibraryRef } from "./lib/artifact-installer.js";
 import { errorMessage } from "./lib/errors.js";
-
-const pkg = require("../package.json");
+import pkg from "../package.json" with { type: "json" };
 
 const program = new Command();
 
@@ -205,7 +204,9 @@ program
         console.error(`  Expected: ${verify.expected}`);
         console.error(`  Actual:   ${verify.actual}`);
         console.error(`This could indicate a corrupted download or compromised package.`);
-        await Bun.file(download.tempPath).exists() && Bun.spawnSync(["rm", "-f", download.tempPath]);
+        if (await Bun.file(download.tempPath).exists()) {
+          Bun.spawnSync(["rm", "-f", download.tempPath]);
+        }
         process.exit(1);
       }
       console.log(`SHA-256 verified`);
@@ -236,7 +237,9 @@ program
         } else {
           console.error(`This could indicate a compromised registry or a tampered manifest.`);
         }
-        await Bun.file(download.tempPath).exists() && Bun.spawnSync(["rm", "-f", download.tempPath]);
+        if (await Bun.file(download.tempPath).exists()) {
+          Bun.spawnSync(["rm", "-f", download.tempPath]);
+        }
         process.exit(1);
       }
       if (sigResult.verified === true) {
@@ -261,7 +264,9 @@ program
       if (sigstoreResult.verified === false) {
         console.error(`Sigstore verification failed: ${sigstoreResult.reason}`);
         console.error(`This could indicate a tampered artifact or an unexpected signer.`);
-        await Bun.file(download.tempPath).exists() && Bun.spawnSync(["rm", "-f", download.tempPath]);
+        if (await Bun.file(download.tempPath).exists()) {
+          Bun.spawnSync(["rm", "-f", download.tempPath]);
+        }
         process.exit(1);
       }
       if (sigstoreResult.verified === true) {

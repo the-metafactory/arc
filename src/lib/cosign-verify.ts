@@ -112,6 +112,8 @@ export async function verifyPackageSigstore(
     }
     return { verified: false, reason: result.error ?? "cosign verification failed" };
   } finally {
-    await unlink(dl.path).catch(() => {});
+    await unlink(dl.path).catch(() => {
+      // best-effort cleanup
+    });
   }
 }

@@ -564,7 +564,7 @@ describe("findMissingHookFiles", () => {
     // is an output sink, not a required input file. Validation must skip it.
     const handler = join(tmpDir, "ok.ts");
     await writeFile(handler, "// ok\n");
-    const missingSink = "/tmp/arc-test-redirect-" + Date.now() + ".log";
+    const missingSink = `/tmp/arc-test-redirect-${Date.now()}.log`;
     const issues = findMissingHookFiles([
       { event: "Stop", command: `${handler} > ${missingSink}` },
       { event: "Stop", command: `${handler} 2> ${missingSink}` },
