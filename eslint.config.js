@@ -133,6 +133,17 @@ export default tseslint.config(
       // Mirrors myelin#123.
       "@typescript-eslint/no-confusing-void-expression": "off",
       "@typescript-eslint/await-thenable": "off",
+      // Tests routinely defensive-check values that the production
+      // types claim are non-nullable, because mocks structurally
+      // typed against an interface may not honor the type's promise.
+      // `expect(maybeX).toBeDefined()` and similar guards are
+      // intentional in test code. Mirrors myelin#124.
+      "@typescript-eslint/no-unnecessary-condition": "off",
+      // Empty mock methods that satisfy an interface contract without
+      // behavior (e.g., `close() {}` on a test transport) are routine
+      // in tests. Production stubs (6 sites today) get inline disables
+      // or per-file banners. Mirrors myelin#125.
+      "@typescript-eslint/no-empty-function": "off",
     },
   },
   {

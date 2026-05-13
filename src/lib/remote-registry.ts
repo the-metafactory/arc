@@ -17,6 +17,33 @@ function cacheFileName(source: RegistrySource): string {
   return `${source.name}.yaml`;
 }
 
+/**
+ * Normalize a YAML-parsed registry document into RegistryConfig shape.
+ * Returns `null` if the document doesn't have the required `registry`
+ * key, otherwise fills every optional sub-array with `[]` so callers
+ * can read them without defensive guards.
+ *
+ * Centralizes the YAML-parse boundary so the `parsed?.registry` /
+ * `??= []` defensive pattern lives in one place rather than spreading
+ * across every fetch path (16 no-unnecessary-condition warnings on the
+ * pre-extract code surface).
+ */
+function normalizeRegistry(parsed: unknown): RegistryConfig | null {
+  if (!parsed || typeof parsed !== "object") return null;
+  // The cast nests Partial into the sub-fields so the `??= []` assignments
+  // below compile against an actually-nullable shape. RegistryConfig's
+  // declared shape lies about post-parse: YAML may omit any array.
+  const r = parsed as { registry?: Partial<RegistryConfig["registry"]> };
+  if (!r.registry || typeof r.registry !== "object") return null;
+  r.registry.skills ??= [];
+  r.registry.agents ??= [];
+  r.registry.prompts ??= [];
+  r.registry.tools ??= [];
+  r.registry.components ??= [];
+  r.registry.rules ??= [];
+  return r as RegistryConfig;
+}
+
 async function isCacheFresh(
   cachePath: string,
   source: RegistrySource
@@ -53,15 +80,7 @@ export async function fetchRemoteRegistry(
     const filePath = source.url.replace("file://", "");
     try {
       const content = await readFile(filePath, "utf-8");
-      const parsed = YAML.parse(content) as RegistryConfig;
-      if (!parsed?.registry) return null;
-      parsed.registry.skills ??= [];
-      parsed.registry.agents ??= [];
-      parsed.registry.prompts ??= [];
-      parsed.registry.tools ??= [];
-      parsed.registry.components ??= [];
-      parsed.registry.rules ??= [];
-      return parsed;
+      return normalizeRegistry(YAML.parse(content));
     } catch (err) {
       process.stderr.write(`Warning: failed to read local source "${source.name}": ${filePath}: ${errorMessage(err)}\n`);
       return null;
@@ -74,8 +93,8 @@ export async function fetchRemoteRegistry(
   if (!forceRefresh && (await isCacheFresh(cachePath, source))) {
     try {
       const content = await readFile(cached, "utf-8");
-      const parsed = YAML.parse(content) as RegistryConfig;
-      if (parsed?.registry) return parsed;
+      const parsed = normalizeRegistry(YAML.parse(content));
+      if (parsed) return parsed;
     } catch {
       // Cache corrupt, fetch fresh
     }
@@ -125,15 +144,8 @@ export async function fetchRemoteRegistry(
     }
 
     const text = await response.text();
-    const parsed = YAML.parse(text) as RegistryConfig;
-
-    if (!parsed?.registry) return null;
-
-    parsed.registry.skills ??= [];
-    parsed.registry.agents ??= [];
-    parsed.registry.prompts ??= [];
-    parsed.registry.tools ??= [];
-    parsed.registry.components ??= [];
+    const parsed = normalizeRegistry(YAML.parse(text));
+    if (!parsed) return null;
 
     // Cache the result
     if (!existsSync(cachePath)) {
@@ -150,8 +162,8 @@ export async function fetchRemoteRegistry(
     if (existsSync(cached)) {
       try {
         const content = await readFile(cached, "utf-8");
-        const parsed = YAML.parse(content) as RegistryConfig;
-        if (parsed?.registry) {
+        const parsed = normalizeRegistry(YAML.parse(content));
+        if (parsed) {
           process.stderr.write(`   Using stale cache for "${source.name}"\n`);
           return parsed;
         }
