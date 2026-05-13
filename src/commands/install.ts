@@ -1,6 +1,14 @@
 import { join } from "path";
 import { existsSync } from "fs";
-import type { ArcPaths, ArcManifest, ArtifactType, HostAdapter, PackageTier } from "../types.js";
+import type {
+  ArcPaths,
+  ArcManifest,
+  ArtifactType,
+  DarwinLaunchdHostPaths,
+  HostAdapter,
+  HostId,
+  PackageTier,
+} from "../types.js";
 import type { Database } from "bun:sqlite";
 import { readManifest, readLibraryArtifacts, assessRisk, formatCapabilities } from "../lib/manifest.js";
 import { recordInstall, getSkill } from "../lib/db.js";
@@ -12,6 +20,7 @@ import {
   findMissingHookFiles,
 } from "../lib/hooks.js";
 import {
+  type ArtifactSymlinkRecord,
   createArtifactSymlinks,
   resolveArtifactSourceDir,
   installNodeDependencies,
@@ -19,6 +28,16 @@ import {
 } from "../lib/artifact-installer.js";
 import { wireExtensions } from "../lib/extensions.js";
 import { extractRepoName } from "../lib/repo-name.js";
+import {
+  type HostOverrides,
+  orderTargetsForInstall,
+  resolveHost,
+} from "../lib/hosts/registry.js";
+import {
+  type LaunchdInstallRecord,
+  installLaunchdArtifacts,
+  rollbackLaunchdArtifacts,
+} from "../lib/hosts/launchd-install.js";
 
 export interface InstallOptions {
   /** arc's own state paths (configRoot, dbPath, reposDir, …). Host-independent. */
@@ -46,6 +65,15 @@ export interface InstallOptions {
   preExtractedPath?: string;
   /** Pinned version — checkout this git tag after clone (e.g., "1.2.0" tries v1.2.0 then 1.2.0) */
   pinnedVersion?: string;
+  /**
+   * Per-host adapter overrides for multi-target installs (arc#140 P3).
+   *
+   * When the package's manifest declares `targets:`, arc resolves each
+   * declared HostId through `resolveHost()`. Tests pass overrides here
+   * to redirect default paths (`~/.config/cortex`, `~/Library/LaunchAgents`)
+   * to sandboxed temp dirs. Production calls leave this absent.
+   */
+  hostOverrides?: HostOverrides;
 }
 
 export interface InstallResult {
@@ -253,25 +281,51 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
     return preinstallResult;
   }
 
-  // 4. Create symlinks based on artifact type
-  const symlinkResult = await createArtifactSymlinks({
-    type: manifest.type,
-    manifest,
-    arc,
-    host,
-    installDir: installPath,
-    consumerDir: opts.consumerDir,
-    quiet: opts.yes,
-  });
-  if (symlinkResult.filesMissingSource.length) {
-    const detail = symlinkResult.filesMissingSource
-      .map((f) => `  - ${f.source} -> ${f.target}`)
-      .join("\n");
-    return {
-      success: false,
-      error:
-        `Manifest declares provides.files entries whose source does not exist in the package:\n${detail}`,
-    };
+  // 4. Create symlinks based on artifact type.
+  //
+  // Two paths:
+  //   - manifest.targets present → arc#140 P3 multi-target dispatch:
+  //     iterate declared targets in install order (cortex/claude-code first,
+  //     OS-supervision hosts last), call createArtifactSymlinks per target
+  //     or installLaunchdArtifacts for darwin-launchd.
+  //   - manifest.targets absent → existing single-host flow against opts.host.
+  let symlinkResult: { record: ArtifactSymlinkRecord; filesMissingSource: Array<{ source: string; target: string }> };
+  let launchdRecords: LaunchdInstallRecord[] = [];
+  if (manifest.targets && manifest.targets.length > 0) {
+    const multi = await installPerTarget({
+      targets: manifest.targets,
+      manifest,
+      arc,
+      installPath,
+      consumerDir: opts.consumerDir,
+      quiet: opts.yes,
+      hostOverrides: opts.hostOverrides,
+    });
+    if ("error" in multi) {
+      return { success: false, error: multi.error };
+    }
+    symlinkResult = { record: multi.symlinks, filesMissingSource: [] };
+    launchdRecords = multi.launchd;
+  } else {
+    symlinkResult = await createArtifactSymlinks({
+      type: manifest.type,
+      manifest,
+      arc,
+      host,
+      installDir: installPath,
+      consumerDir: opts.consumerDir,
+      quiet: opts.yes,
+    });
+    if (symlinkResult.filesMissingSource.length) {
+      const detail = symlinkResult.filesMissingSource
+        .map((f) => `  - ${f.source} -> ${f.target}`)
+        .join("\n");
+      return {
+        success: false,
+        error:
+          `Manifest declares provides.files entries whose source does not exist in the package:\n${detail}`,
+      };
+    }
   }
 
   // 5b. Register hooks (if declared, with consent gating).
@@ -296,7 +350,12 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
       // #89: roll back any symlinks/shims createArtifactSymlinks placed before
       // we hit this gate, so the install fails clean rather than leaving
       // orphan entries under ~/.claude/{skills,bin,...} for the user to clean.
+      // arc#140 P3: also unwind any launchd-side state placed by multi-target
+      // dispatch (plist + binary symlink).
       await rollbackArtifactSymlinks(symlinkResult.record);
+      for (const rec of launchdRecords) {
+        await rollbackLaunchdArtifacts(rec);
+      }
       return {
         success: false,
         error:
@@ -343,11 +402,14 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
     // #97: postinstall failure leaves the same partial-state shape as the
     // hook-validation gate (#89) plus registered hooks pointing at a package
     // the DB has no record of (recordInstall happens AFTER postinstall).
-    // Tear down hook registrations and symlinks before returning so the
-    // user gets a clean failure rather than orphans they have to clean up
-    // by hand.
+    // Tear down hook registrations, symlinks, AND any launchd-side state
+    // (arc#140 P3) before returning so the user gets a clean failure
+    // rather than orphans they have to clean up by hand.
     await removeHooks(manifest.name, host.paths.settingsPath);
     await rollbackArtifactSymlinks(symlinkResult.record);
+    for (const rec of launchdRecords) {
+      await rollbackLaunchdArtifacts(rec);
+    }
     return postinstallResult;
   }
 
@@ -632,6 +694,114 @@ export async function installSingleArtifact(
     version: manifest.version,
     manifest,
   };
+}
+
+/**
+ * Multi-target install dispatch (arc#140 P3).
+ *
+ * When a manifest declares `targets:`, arc lands the artifact's per-target
+ * pieces in the order required by cortex `docs/design-arc-agent-bots.md`
+ * §3.2 — registry hosts (cortex, claude-code) FIRST, then OS-supervision
+ * hosts (darwin-launchd, linux-systemd). The daemon needs the fragment +
+ * NATS creds in place BEFORE `launchctl bootstrap` runs.
+ *
+ * Returns an aggregated record that combines:
+ *   - all symlinks created across registry hosts (one merged
+ *     ArtifactSymlinkRecord — same rollback path as the single-host case
+ *     since the existing `rollbackArtifactSymlinks` walks the list)
+ *   - per-host LaunchdInstallRecords (one per supervision target) so the
+ *     downstream postinstall-failure or hook-gate-failure path can also
+ *     roll back the launchd side.
+ *
+ * On `provides.files` validation failure or launchd-side install failure
+ * inside the loop, this function rolls back ALL accumulated state before
+ * returning so the caller never sees partial multi-target state.
+ *
+ * Hooks registration (`provides.hooks`) is the caller's responsibility —
+ * arc#140 P3 keeps hooks on the existing `opts.host` (typically claude-code),
+ * not driven by `manifest.targets`. A future P4 may revisit if a host
+ * other than claude-code needs settings-json-style hooks.
+ */
+interface MultiTargetInstallResult {
+  symlinks: ArtifactSymlinkRecord;
+  launchd: LaunchdInstallRecord[];
+}
+
+async function installPerTarget(opts: {
+  targets: HostId[];
+  manifest: ArcManifest;
+  arc: ArcPaths;
+  installPath: string;
+  consumerDir?: string;
+  quiet?: boolean;
+  hostOverrides?: HostOverrides;
+}): Promise<MultiTargetInstallResult | { error: string }> {
+  const ordered = orderTargetsForInstall(opts.targets);
+  const merged: ArtifactSymlinkRecord = {
+    symlinks: [],
+    shims: { dir: opts.arc.shimDir, names: [] },
+  };
+  const launchd: LaunchdInstallRecord[] = [];
+
+  const rollbackAll = async () => {
+    await rollbackArtifactSymlinks(merged);
+    for (const r of launchd) {
+      await rollbackLaunchdArtifacts(r);
+    }
+  };
+
+  for (const targetId of ordered) {
+    let targetHost;
+    try {
+      targetHost = resolveHost(targetId, opts.hostOverrides);
+    } catch (err: any) {
+      await rollbackAll();
+      return { error: err?.message ?? `Failed to resolve host '${targetId}'` };
+    }
+
+    if (targetId === "darwin-launchd") {
+      try {
+        const rec = await installLaunchdArtifacts({
+          host: targetHost as HostAdapter & { paths: DarwinLaunchdHostPaths },
+          manifest: opts.manifest,
+          installDir: opts.installPath,
+          quiet: opts.quiet,
+        });
+        launchd.push(rec);
+      } catch (err: any) {
+        await rollbackAll();
+        return {
+          error: `darwin-launchd install failed: ${err?.message ?? err}`,
+        };
+      }
+      continue;
+    }
+
+    // registry hosts (cortex, claude-code) take the existing symlink path
+    const r = await createArtifactSymlinks({
+      type: opts.manifest.type,
+      manifest: opts.manifest,
+      arc: opts.arc,
+      host: targetHost,
+      installDir: opts.installPath,
+      consumerDir: opts.consumerDir,
+      quiet: opts.quiet,
+    });
+    if (r.filesMissingSource.length) {
+      const detail = r.filesMissingSource
+        .map((f) => `  - ${f.source} -> ${f.target}`)
+        .join("\n");
+      await rollbackAll();
+      return {
+        error:
+          `[${targetId}] provides.files entries whose source does not exist in the package:\n${detail}`,
+      };
+    }
+    merged.symlinks.push(...r.record.symlinks);
+    merged.shims.names.push(...r.record.shims.names);
+  }
+
+  return { symlinks: merged, launchd };
 }
 
 /**
