@@ -42,7 +42,7 @@ function fakeAgentManifest(overrides: Partial<ArcManifest> = {}): ArcManifest {
     version: "0.1.0",
     type: "agent",
     ...overrides,
-  } as ArcManifest;
+  };
 }
 
 describe("renderPlist", () => {

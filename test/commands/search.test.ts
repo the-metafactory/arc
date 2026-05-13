@@ -201,7 +201,7 @@ describe("searchAcrossSources", () => {
     };
     // Suppress stderr from fetchRemoteRegistry warnings
     const originalWrite = process.stderr.write;
-    process.stderr.write = (() => true) as any;
+    process.stderr.write = (() => true);
     try {
       const result = await searchAcrossSources(config, env.arc.cachePath);
       expect(result.warnings.length).toBe(1);
@@ -229,7 +229,7 @@ describe("searchAcrossSources", () => {
 
     // Suppress stderr from fetchRemoteRegistry warnings
     const originalWrite = process.stderr.write;
-    process.stderr.write = (() => true) as any;
+    process.stderr.write = (() => true);
     try {
       const result = await searchAcrossSources(config, env.arc.cachePath);
       expect(result.results.length).toBe(1);

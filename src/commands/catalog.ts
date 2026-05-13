@@ -19,7 +19,7 @@ import {
 import { resolveSource } from "../lib/source-resolver.js";
 import { readManifest } from "../lib/manifest.js";
 import { recordInstall, getSkill } from "../lib/db.js";
-import { createSymlink, createCliShim, extractAllCliInfo } from "../lib/symlinks.js";
+import { createSymlink, createCliShim } from "../lib/symlinks.js";
 
 // ── Result types ──────────────────────────────────────────────
 
@@ -31,7 +31,7 @@ export interface CatalogListResult {
 
 export interface CatalogSearchResult {
   success: boolean;
-  results?: Array<{ entry: CatalogEntry; artifactType: ArtifactType }>;
+  results?: { entry: CatalogEntry; artifactType: ArtifactType }[];
   error?: string;
 }
 
@@ -50,7 +50,7 @@ export interface CatalogRemoveResult {
 
 export interface CatalogUseResult {
   success: boolean;
-  installed?: Array<{ name: string; artifactType: ArtifactType }>;
+  installed?: { name: string; artifactType: ArtifactType }[];
   error?: string;
 }
 
@@ -62,7 +62,7 @@ export interface CatalogPushResult {
 
 export interface CatalogSyncResult {
   success: boolean;
-  synced?: Array<{ name: string; status: "ok" | "failed"; error?: string }>;
+  synced?: { name: string; status: "ok" | "failed"; error?: string }[];
   error?: string;
 }
 
@@ -170,14 +170,14 @@ export async function catalogUse(
   }
 
   // Resolve dependency tree
-  let ordered: Array<{ entry: CatalogEntry; artifactType: ArtifactType }>;
+  let ordered: { entry: CatalogEntry; artifactType: ArtifactType }[];
   try {
     ordered = resolveDependencies(config, name);
   } catch (err: any) {
     return { success: false, error: err.message };
   }
 
-  const installed: Array<{ name: string; artifactType: ArtifactType }> = [];
+  const installed: { name: string; artifactType: ArtifactType }[] = [];
 
   for (const { entry, artifactType } of ordered) {
     const result = await installEntry(arc, host, db, entry, artifactType, config);
@@ -214,7 +214,7 @@ export async function catalogSync(
     return { success: true, synced: [] };
   }
 
-  const synced: Array<{ name: string; status: "ok" | "failed"; error?: string }> = [];
+  const synced: { name: string; status: "ok" | "failed"; error?: string }[] = [];
 
   for (const item of installedItems) {
     const result = await installEntry(
@@ -383,7 +383,7 @@ export async function catalogPush(
  */
 export async function catalogPushCatalog(
   arc: ArcPaths,
-  host: HostAdapter
+  _host: HostAdapter
 ): Promise<{ success: boolean; error?: string }> {
   const catalogDir = join(arc.catalogPath, "..");
 

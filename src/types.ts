@@ -88,7 +88,7 @@ export interface Capabilities {
     read?: string[];
     write?: string[];
   };
-  network?: Array<{ domain: string; reason: string }>;
+  network?: { domain: string; reason: string }[];
   bash?: {
     allowed: boolean;
     restricted_to?: string[];
@@ -145,9 +145,9 @@ export interface RulesTemplate {
 /** Rules config schema (claude-md.yaml in consumer repo) */
 export interface RulesConfig {
   template: string;
-  generate?: Array<{ format: string }>;
-  sections?: Array<{ position: string; file: string }>;
-  extra_labels?: Array<{ name: string }>;
+  generate?: { format: string }[];
+  sections?: { position: string; file: string }[];
+  extra_labels?: { name: string }[];
   /** Placeholder values — any key not in the above is a placeholder */
   [key: string]: unknown;
 }
@@ -163,7 +163,15 @@ export interface RulesConfig {
  * the dashboard can render an accurate provenance badge.
  */
 export interface AgentRuntime {
-  substrate: "claude-code" | "codex" | "pi-dev" | "custom-binary" | string;
+  // The `& {}` trick preserves autocomplete for the known literals while
+  // still accepting arbitrary strings (custom substrate names). Without it,
+  // the union collapses to `string` and tooling loses the known-literal hints.
+  substrate:
+    | "claude-code"
+    | "codex"
+    | "pi-dev"
+    | "custom-binary"
+    | (string & {});
   mode: "in-process" | "standalone";
   capabilities?: string[];
 }
@@ -208,19 +216,19 @@ export interface LifecycleScripts {
 }
 
 /** Inline hook array format (e.g. Grove) */
-export type InlineHook = {
+export interface InlineHook {
   event: string;
   command: string;
   matcher?: string;
-};
+}
 
 /** Config-file hook format (e.g. Miner) — references a JSON file */
-export type HooksConfigRef = {
+export interface HooksConfigRef {
   claude_code: {
     config: string;
     description?: string;
   };
-};
+}
 
 /** Union of both hook declaration formats in arc-manifest.yaml */
 export type HooksDeclaration = InlineHook[] | HooksConfigRef;
@@ -273,15 +281,15 @@ export interface ArcManifest {
     github: string;
     verified?: boolean;
   };
-  authors?: Array<{
+  authors?: {
     name: string;
     github: string;
     verified?: boolean;
-  }>;
+  }[];
   provides?: {
     skill?: SkillTrigger[];
     cli?: CliProvider[];
-    files?: Array<{ source: string; target: string }>;
+    files?: { source: string; target: string }[];
     templates?: RulesTemplate[];
     hooks?: HooksDeclaration;
     /**

@@ -1,6 +1,6 @@
-import { join, dirname, basename } from "path";
+import { join } from "path";
 import { existsSync, readdirSync, lstatSync, readlinkSync } from "fs";
-import { mkdir, readdir } from "fs/promises";
+import { mkdir } from "fs/promises";
 import type { Database } from "bun:sqlite";
 import { listSkills } from "../lib/db.js";
 import { createSymlink, isValidSymlink, getSymlinkTarget } from "../lib/symlinks.js";
@@ -97,16 +97,16 @@ export async function upgradeCore(
   let previousVersion: string | undefined;
   const currentTarget = await getSymlinkTarget(config.claudeSymlink);
   if (currentTarget) {
-    const match = currentTarget.match(/Releases\/(v[\d.]+)\//);
+    const match = /Releases\/(v[\d.]+)\//.exec(currentTarget);
     if (match) previousVersion = match[1];
   }
 
   // 2. Create persistent symlinks
-  const persistentLinks: Array<{
+  const persistentLinks: {
     name: string;
     linkPath: string;
     target: string;
-  }> = [
+  }[] = [
     {
       name: ".env",
       linkPath: join(newReleaseDir, ".env"),
@@ -420,9 +420,9 @@ async function carryForwardConfigSymlinks(
  */
 async function validate(
   releaseDir: string,
-  config: UpgradeConfig
-): Promise<Array<{ check: string; detail: string }>> {
-  const failures: Array<{ check: string; detail: string }> = [];
+  _config: UpgradeConfig
+): Promise<{ check: string; detail: string }[]> {
+  const failures: { check: string; detail: string }[] = [];
 
   // Check core persistent symlinks
   const checks = [

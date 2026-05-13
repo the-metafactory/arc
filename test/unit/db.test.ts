@@ -43,7 +43,7 @@ describe("Database", () => {
       .prepare(
         "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
       )
-      .all() as Array<{ name: string }>;
+      .all() as { name: string }[];
 
     const names = tables.map((t) => t.name);
     expect(names).toContain("skills");

@@ -66,7 +66,7 @@ export function buildLaunchdTokens(opts: {
  */
 export function renderPlist(template: string, tokens: LaunchdTokens): string {
   return template.replace(/\{\{([A-Za-z0-9_-]+)\}\}/g, (match, key: string) => {
-    return key in tokens ? tokens[key]! : match;
+    return key in tokens ? tokens[key] : match;
   });
 }
 

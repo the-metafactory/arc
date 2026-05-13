@@ -67,7 +67,7 @@ export function validateSource(source: RegistrySource): { valid: boolean; error?
   const type = getSourceType(source);
 
   // Validate type value
-  if (source.type && !VALID_SOURCE_TYPES.includes(source.type as SourceType)) {
+  if (source.type && !VALID_SOURCE_TYPES.includes(source.type)) {
     return { valid: false, error: `Invalid source type "${source.type}". Valid types: ${VALID_SOURCE_TYPES.join(", ")}` };
   }
 

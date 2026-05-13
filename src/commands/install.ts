@@ -123,7 +123,7 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
     // Check if already installed in DB (by repo name or by scanning all skills)
     const allSkills = db
       .prepare("SELECT * FROM skills")
-      .all() as Array<{ name: string; status: string; repo_url: string; library_name: string | null }>;
+      .all() as { name: string; status: string; repo_url: string; library_name: string | null }[];
 
     const existingByUrl = allSkills.find((s) => s.repo_url === repoUrl && !s.library_name);
     if (existingByUrl) {
@@ -217,7 +217,7 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
         .prepare("SELECT name, status FROM skills WHERE name = ?")
         .get(dep.name) as { name: string; status: string } | null;
 
-      if (existing && existing.status === "active") {
+      if (existing?.status === "active") {
         continue; // Already installed
       }
 
@@ -289,7 +289,7 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
   //     OS-supervision hosts last), call createArtifactSymlinks per target
   //     or installLaunchdArtifacts for darwin-launchd.
   //   - manifest.targets absent → existing single-host flow against opts.host.
-  let symlinkResult: { record: ArtifactSymlinkRecord; filesMissingSource: Array<{ source: string; target: string }> };
+  let symlinkResult: { record: ArtifactSymlinkRecord; filesMissingSource: { source: string; target: string }[] };
   let launchdRecords: LaunchdInstallRecord[] = [];
   if (manifest.targets && manifest.targets.length > 0) {
     const multi = await installPerTarget({
@@ -502,7 +502,7 @@ async function installLibrary(
   for (const { entry, manifest: artifactManifest } of artifactEntries) {
     // Check if this specific artifact is already installed
     const existing = getSkill(db, artifactManifest.name);
-    if (existing && existing.status === "active") {
+    if (existing?.status === "active") {
       if (!opts.yes) {
         console.log(`  ⏩ ${artifactManifest.name} already installed, skipping`);
       }
@@ -992,7 +992,7 @@ function checkoutVersionTag(
 async function promptHookConsent(
   packageName: string,
   tier: string,
-  hooks: Array<{ event: string; command: string; matcher?: string }>,
+  hooks: { event: string; command: string; matcher?: string }[],
   autoApprove?: boolean,
 ): Promise<boolean> {
   // Auto-approve for --yes flag or trusted tiers

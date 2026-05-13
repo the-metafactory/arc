@@ -100,7 +100,7 @@ export async function verifyRegistrySignature(
     const pubBuf = pubBytes.buffer.slice(pubBytes.byteOffset, pubBytes.byteOffset + pubBytes.byteLength) as ArrayBuffer;
     const sigBuf = sigBytes.buffer.slice(sigBytes.byteOffset, sigBytes.byteOffset + sigBytes.byteLength) as ArrayBuffer;
     const msgBytes = new TextEncoder().encode(manifestCanonical);
-    const msgBuf = msgBytes.buffer.slice(msgBytes.byteOffset, msgBytes.byteOffset + msgBytes.byteLength) as ArrayBuffer;
+    const msgBuf = msgBytes.buffer.slice(msgBytes.byteOffset, msgBytes.byteOffset + msgBytes.byteLength);
 
     const key = await crypto.subtle.importKey(
       "raw",

@@ -557,9 +557,9 @@ describe("install provides.files (issue #84)", () => {
   async function buildRepoWithProvides(opts: {
     name: string;
     extraFiles?: Record<string, string>;
-    providesFiles?: Array<{ source: string; target: string }>;
-    providesHooks?: Array<{ event: string; command: string }>;
-    providesCli?: Array<{ command: string; name: string }>;
+    providesFiles?: { source: string; target: string }[];
+    providesHooks?: { event: string; command: string }[];
+    providesCli?: { command: string; name: string }[];
     postinstall?: { path: string; content: string };
   }): Promise<string> {
     const repoDir = join(env.root, `mock-${opts.name}`);

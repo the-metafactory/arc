@@ -91,7 +91,7 @@ async function generateSingleRule(
   let templateContent: string;
   try {
     templateContent = await readFile(templatePath, "utf-8");
-  } catch (err: any) {
+  } catch (_err: any) {
     return { target, success: false, error: `Template not found: ${tmpl.source}` };
   }
 
@@ -151,7 +151,7 @@ function substitutePlaceholders(template: string, config: RulesConfig): string {
  */
 async function injectSections(
   template: string,
-  sections: Array<{ position: string; file: string }>,
+  sections: { position: string; file: string }[],
   consumerDir: string,
 ): Promise<string> {
   // Group sections by position
@@ -163,7 +163,7 @@ async function injectSections(
     try {
       const content = await readFile(join(consumerDir, section.file), "utf-8");
       byPosition.get(pos)!.push(content.trimEnd());
-    } catch (err: any) {
+    } catch (_err: any) {
       // Section file missing — skip with warning comment
       byPosition.get(pos)!.push(`<!-- Warning: section file not found: ${section.file} -->`);
     }

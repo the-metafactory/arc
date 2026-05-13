@@ -47,7 +47,7 @@ function makeManifest(overrides?: Partial<ArcManifest>): ArcManifest {
     type: "skill",
     description: "A test",
     ...overrides,
-  } as ArcManifest;
+  };
 }
 
 // ── extractReadme ────────────────────────────────────────────
@@ -326,7 +326,7 @@ describe("toServerManifest — network capability coercion", () => {
     // Simulates a manifest that bypassed readManifest normalisation.
     const m = makeManifest({
       capabilities: {
-        network: ["github.com", "agentskills.io"] as unknown as Array<{ domain: string; reason: string }>,
+        network: ["github.com", "agentskills.io"] as unknown as { domain: string; reason: string }[],
       },
     });
     const server = toServerManifest(m, "test");
@@ -345,11 +345,11 @@ describe("toServerManifest — network capability coercion", () => {
           null,
           undefined,
           42,
-        ] as unknown as Array<{ domain: string; reason: string }>,
+        ] as unknown as { domain: string; reason: string }[],
       },
     });
     const server = toServerManifest(m, "test");
-    const netCaps = (server.capabilities as any).network as Array<{ domain: unknown }>;
+    const netCaps = (server.capabilities as any).network as { domain: unknown }[];
     for (const entry of netCaps) {
       expect(typeof entry.domain).toBe("string");
       expect(entry.domain).not.toBe("");

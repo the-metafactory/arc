@@ -151,7 +151,7 @@ export function detectAccount(): string {
   }
   // Fallback: parse nsc env output (env writes to stderr)
   const output = nscWithStderr(["env"]);
-  const match = output.match(/Current Account\s+\|[^|]*\|\s+(\S+)/);
+  const match = /Current Account\s+\|[^|]*\|\s+(\S+)/.exec(output);
   if (match) return match[1];
   throw new ArcNatsCommandError(
     "ACCOUNT_NOT_FOUND",
@@ -174,7 +174,7 @@ function defaultCredsPath(name: string): string {
  * envelope's `jwt` field will be empty).
  */
 function extractJwt(credsContent: string): string {
-  const match = credsContent.match(/-----BEGIN NATS USER JWT-----\s*([\s\S]*?)\s*-----END NATS USER JWT-----/);
+  const match = /-----BEGIN NATS USER JWT-----\s*([\s\S]*?)\s*-----END NATS USER JWT-----/.exec(credsContent);
   if (!match) return "";
   return match[1].replace(/\s+/g, "");
 }

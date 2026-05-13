@@ -273,7 +273,7 @@ function errorResult(error: string): InfoResult {
  */
 async function fetchReleaseNotesFromUrl(repoUrl: string, version: string): Promise<string | null> {
   const tag = `v${version}`;
-  const ghMatch = repoUrl.match(/github\.com[:/]([^/]+)\/([^/.]+)/);
+  const ghMatch = /github\.com[:/]([^/]+)\/([^/.]+)/.exec(repoUrl);
   if (!ghMatch) return null;
 
   const nwo = `${ghMatch[1]}/${ghMatch[2]}`;

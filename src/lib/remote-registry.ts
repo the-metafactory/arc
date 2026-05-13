@@ -7,11 +7,8 @@ import type {
   RegistrySource,
   SourcesConfig,
   SourcedSearchResult,
-  ArtifactType,
-  RegistryEntry,
-  PackageTier,
 } from "../types.js";
-import { loadRegistry, searchRegistry, findRegistryEntry } from "./registry.js";
+import { searchRegistry, findRegistryEntry } from "./registry.js";
 
 const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
 
@@ -96,7 +93,7 @@ export async function fetchRemoteRegistry(
     const rewritten = rewriteRawToContentsApi(source.url);
     if (rewritten) {
       fetchUrl = rewritten;
-      headers["Accept"] = "application/vnd.github.raw";
+      headers.Accept = "application/vnd.github.raw";
       headers["X-GitHub-Api-Version"] = "2022-11-28";
     }
 
@@ -104,7 +101,7 @@ export async function fetchRemoteRegistry(
     if (fetchUrl.includes("github")) {
       const token = process.env.GITHUB_TOKEN ?? getGhToken();
       if (token) {
-        headers["Authorization"] = `Bearer ${token}`;
+        headers.Authorization = `Bearer ${token}`;
       }
     }
 
@@ -217,7 +214,7 @@ export async function findInAllSources(
       artifactType: found.artifactType,
       sourceName: source.name,
       sourceTier: source.tier,
-    } as SourcedSearchResult;
+    };
   });
 
   const results = await Promise.all(fetches);
@@ -230,9 +227,9 @@ export async function findInAllSources(
 export async function updateAllSources(
   sources: SourcesConfig,
   cachePath: string
-): Promise<Array<{ name: string; status: "ok" | "failed"; count?: number }>> {
+): Promise<{ name: string; status: "ok" | "failed"; count?: number }[]> {
   const enabledSources = sources.sources.filter((s) => s.enabled);
-  const results: Array<{ name: string; status: "ok" | "failed"; count?: number }> = [];
+  const results: { name: string; status: "ok" | "failed"; count?: number }[] = [];
 
   for (const source of enabledSources) {
     const registry = await fetchRemoteRegistry(source, cachePath, true);
@@ -296,12 +293,10 @@ export function formatSourcedSearch(results: SourcedSearchResult[]): string {
  * the response body is the raw file content (same shape as the raw URL).
  */
 export function rewriteRawToContentsApi(url: string): string | null {
-  const match = url.match(
-    /^https:\/\/raw\.githubusercontent\.com\/([^/]+)\/([^/]+)\/([^/]+)\/(.+)$/,
-  );
+  const match = /^https:\/\/raw\.githubusercontent\.com\/([^/]+)\/([^/]+)\/([^/]+)\/(.+)$/.exec(url);
   if (!match) return null;
   const [, owner, repo, ref, path] = match;
-  return `https://api.github.com/repos/${owner}/${repo}/contents/${path}?ref=${encodeURIComponent(ref!)}`;
+  return `https://api.github.com/repos/${owner}/${repo}/contents/${path}?ref=${encodeURIComponent(ref)}`;
 }
 
 /** Try to get GitHub token from gh CLI auth */

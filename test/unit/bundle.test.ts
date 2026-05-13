@@ -154,7 +154,7 @@ describe("validateForPublish", () => {
       version: "1.0.0",
       type: "skill",
       description: "A test skill",
-    } as ArcManifest);
+    });
     expect(result.valid).toBe(true);
     expect(result.errors).toHaveLength(0);
   });
@@ -173,7 +173,7 @@ describe("validateForPublish", () => {
       name: "My Skill!",
       version: "1.0.0",
       type: "skill",
-    } as ArcManifest);
+    });
     expect(result.valid).toBe(false);
     expect(result.errors.some((e) => e.includes("name"))).toBe(true);
   });
@@ -192,7 +192,7 @@ describe("validateForPublish", () => {
       name: "my-skill",
       version: "not-semver",
       type: "skill",
-    } as ArcManifest);
+    });
     expect(result.valid).toBe(false);
     expect(result.errors.some((e) => e.includes("semver"))).toBe(true);
   });
@@ -202,7 +202,7 @@ describe("validateForPublish", () => {
       name: "my-skill",
       version: "1.0.0",
       type: "skill",
-    } as ArcManifest);
+    });
     expect(result.valid).toBe(true);
     expect(result.warnings.some((w) => w.includes("description"))).toBe(true);
   });
@@ -212,7 +212,7 @@ describe("validateForPublish", () => {
       name: "my-skill",
       version: "1.0.0",
       type: "invalid" as any,
-    } as ArcManifest);
+    });
     expect(result.valid).toBe(false);
     expect(result.errors.some((e) => e.includes("type"))).toBe(true);
   });

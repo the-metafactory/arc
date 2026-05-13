@@ -50,8 +50,8 @@ const hostOverrides = () => ({
 async function makeStandaloneBotRepo(opts: {
   name: string;
   lifecycle?: {
-    preuninstall?: Array<{ path: string; content: string }>;
-    postuninstall?: Array<{ path: string; content: string }>;
+    preuninstall?: { path: string; content: string }[];
+    postuninstall?: { path: string; content: string }[];
   };
 }): Promise<{ url: string }> {
   const repoDir = join(env.root, `mock-${opts.name}`);
@@ -85,7 +85,7 @@ async function makeStandaloneBotRepo(opts: {
     ? `lifecycle:
 ${Object.entries(opts.lifecycle)
   .filter(([, arr]) => arr && arr.length > 0)
-  .map(([phase, arr]) => `  ${phase}:\n${arr!.map((s) => `    - ${s.path}`).join("\n")}`)
+  .map(([phase, arr]) => `  ${phase}:\n${arr.map((s) => `    - ${s.path}`).join("\n")}`)
   .join("\n")}
 `
     : "";

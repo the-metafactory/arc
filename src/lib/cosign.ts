@@ -90,8 +90,8 @@ export async function fetchCosignBinary(): Promise<{ path?: string; error?: stri
     const checksumText = await checksumResp.text();
     let expectedHash: string | undefined;
     for (const line of checksumText.split("\n")) {
-      const match = line.match(/^([a-f0-9]{64})\s+(.+)$/);
-      if (match && match[2].trim() === platform.binaryName) {
+      const match = /^([a-f0-9]{64})\s+(.+)$/.exec(line);
+      if (match?.[2].trim() === platform.binaryName) {
         expectedHash = match[1];
         break;
       }

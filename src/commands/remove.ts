@@ -319,7 +319,7 @@ export async function remove(
 
   // Multi-target path (arc#140 P5): walk targets in reverse install order.
   // No-op when manifest is missing (we still try to clean DB/repo below).
-  if (manifest && manifest.targets && manifest.targets.length > 0) {
+  if (manifest?.targets && manifest.targets.length > 0) {
     await removePerTarget({
       targets: manifest.targets,
       manifest,

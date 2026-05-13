@@ -21,12 +21,12 @@ export function parsePackageRef(input: string): PackageRef | null {
   if (input.startsWith("http") || input.startsWith("git@") || input.startsWith("file://")) return null;
   if (input.startsWith("./") || input.startsWith("/") || input.startsWith("~")) return null;
 
-  const match = input.match(PACKAGE_REF_RE);
+  const match = PACKAGE_REF_RE.exec(input);
   if (!match) return null;
 
   return {
-    scope: match[1]!,
-    name: match[2]!,
+    scope: match[1],
+    name: match[2],
     version: match[3] || undefined,
   };
 }
@@ -335,7 +335,7 @@ export async function downloadPackage(
   const tempPath = join(tempDir, `arc-download-${Date.now()}.tar.gz`);
 
   const headers: Record<string, string> = {};
-  if (source && source.token && getSourceType(source) === "metafactory") {
+  if (source?.token && getSourceType(source) === "metafactory") {
     headers.Authorization = `Bearer ${source.token}`;
   }
 

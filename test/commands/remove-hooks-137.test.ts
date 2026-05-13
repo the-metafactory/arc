@@ -127,14 +127,14 @@ describe("arc#137 — remove cleans hooks even when manifest is unreadable", () 
 
     // Sanity: entry present before remove
     const before = await readSettings();
-    const beforeEntries = (before.hooks?.SessionStart ?? []) as Array<{ _pai_pkg?: string }>;
+    const beforeEntries = (before.hooks?.SessionStart ?? []) as { _pai_pkg?: string }[];
     expect(beforeEntries.some((h) => h._pai_pkg === name)).toBe(true);
 
     const result = await remove(env.db, env.arc, env.host, name, { yes: true });
     expect(result.success).toBe(true);
 
     const after = await readSettings();
-    const afterEntries = (after.hooks?.SessionStart ?? []) as Array<{ _pai_pkg?: string }>;
+    const afterEntries = (after.hooks?.SessionStart ?? []) as { _pai_pkg?: string }[];
     expect(afterEntries.some((h) => h._pai_pkg === name)).toBe(false);
     // Unrelated package untouched
     expect(afterEntries.some((h) => h._pai_pkg === "OtherPackage")).toBe(true);
@@ -156,7 +156,7 @@ describe("arc#137 — remove cleans hooks even when manifest is unreadable", () 
     // Pre-fix this would still contain the BetaSkill entry — null manifest
     // short-circuited the removeHooks call.
     const after = await readSettings();
-    const afterEntries = (after.hooks?.SessionStart ?? []) as Array<{ _pai_pkg?: string }>;
+    const afterEntries = (after.hooks?.SessionStart ?? []) as { _pai_pkg?: string }[];
     expect(afterEntries.some((h) => h._pai_pkg === name)).toBe(false);
     expect(afterEntries.some((h) => h._pai_pkg === "OtherPackage")).toBe(true);
   });
@@ -174,7 +174,7 @@ describe("arc#137 — remove cleans hooks even when manifest is unreadable", () 
     expect(result.success).toBe(true);
 
     const after = await readSettings();
-    const afterEntries = (after.hooks?.SessionStart ?? []) as Array<{ _pai_pkg?: string }>;
+    const afterEntries = (after.hooks?.SessionStart ?? []) as { _pai_pkg?: string }[];
     expect(afterEntries.some((h) => h._pai_pkg === name)).toBe(false);
     expect(afterEntries.some((h) => h._pai_pkg === "OtherPackage")).toBe(true);
   });
@@ -201,7 +201,7 @@ describe("arc#137 — remove cleans hooks even when manifest is unreadable", () 
     expect(result.success).toBe(true);
 
     const after = await readSettings();
-    const afterEntries = (after.hooks?.SessionStart ?? []) as Array<{ _pai_pkg?: string }>;
+    const afterEntries = (after.hooks?.SessionStart ?? []) as { _pai_pkg?: string }[];
     expect(afterEntries.length).toBe(1);
     expect(afterEntries[0]._pai_pkg).toBe("OtherPackage");
   });

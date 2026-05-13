@@ -83,11 +83,11 @@ export function findEntry(
 export function searchCatalog(
   config: CatalogConfig,
   keyword: string
-): Array<{ entry: CatalogEntry; artifactType: ArtifactType }> {
+): { entry: CatalogEntry; artifactType: ArtifactType }[] {
   const lower = keyword.toLowerCase();
-  const results: Array<{ entry: CatalogEntry; artifactType: ArtifactType }> = [];
+  const results: { entry: CatalogEntry; artifactType: ArtifactType }[] = [];
 
-  const sections: Array<{ entries: CatalogEntry[]; type: ArtifactType }> = [
+  const sections: { entries: CatalogEntry[]; type: ArtifactType }[] = [
     { entries: config.catalog.skills, type: "skill" },
     { entries: config.catalog.agents, type: "agent" },
     { entries: config.catalog.prompts, type: "prompt" },
@@ -125,7 +125,7 @@ export function listCatalog(
 ): CatalogListItem[] {
   const items: CatalogListItem[] = [];
 
-  const sections: Array<{ entries: CatalogEntry[]; type: ArtifactType }> = [
+  const sections: { entries: CatalogEntry[]; type: ArtifactType }[] = [
     { entries: config.catalog.skills, type: "skill" },
     { entries: config.catalog.agents, type: "agent" },
     { entries: config.catalog.prompts, type: "prompt" },
@@ -204,8 +204,8 @@ export function removeEntry(
 export function resolveDependencies(
   config: CatalogConfig,
   entryName: string,
-  visited: Set<string> = new Set()
-): Array<{ entry: CatalogEntry; artifactType: ArtifactType }> {
+  visited = new Set<string>()
+): { entry: CatalogEntry; artifactType: ArtifactType }[] {
   if (visited.has(entryName)) {
     throw new Error(`Circular dependency detected: ${entryName}`);
   }
@@ -216,7 +216,7 @@ export function resolveDependencies(
     throw new Error(`Entry "${entryName}" not found in catalog`);
   }
 
-  const result: Array<{ entry: CatalogEntry; artifactType: ArtifactType }> = [];
+  const result: { entry: CatalogEntry; artifactType: ArtifactType }[] = [];
 
   if (found.entry.requires?.length) {
     for (const ref of found.entry.requires) {

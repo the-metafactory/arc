@@ -83,11 +83,11 @@ export interface RunLifecycleResult {
   /** Phase name, echoed for caller convenience. */
   phase: string;
   /** Per-script results in declared order. Empty when scriptPaths is empty. */
-  steps: Array<{
+  steps: {
     scriptPath: string;
     exitCode: number | null;
     skipped: boolean;
-  }>;
+  }[];
   /** The script that failed, if any — last entry of `steps` when !success. */
   failedAt?: string;
 }

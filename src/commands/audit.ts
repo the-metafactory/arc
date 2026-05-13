@@ -1,6 +1,6 @@
 import type { Database } from "bun:sqlite";
 import { listSkills, getAllActiveCapabilities } from "../lib/db.js";
-import type { AuditWarning, CapabilityRecord, RiskLevel } from "../types.js";
+import type { AuditWarning, CapabilityRecord } from "../types.js";
 
 export interface AuditResult {
   totalSkills: number;
@@ -152,7 +152,6 @@ export function formatAudit(result: AuditResult, verbose = false): string {
     lines.push(``);
     lines.push(`Per-skill capabilities:`);
     for (const [name, caps] of result.bySkill) {
-      const types = caps.map((c) => c.type);
       const summary: string[] = [];
       const reads = caps.filter((c) => c.type === "fs_read").length;
       const writes = caps.filter((c) => c.type === "fs_write").length;

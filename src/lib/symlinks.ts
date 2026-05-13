@@ -1,4 +1,4 @@
-import { symlink, unlink, readlink, lstat, mkdir, writeFile, chmod, rename } from "fs/promises";
+import { symlink, unlink, readlink, lstat, mkdir, writeFile, rename } from "fs/promises";
 import { join, dirname, basename } from "path";
 import type { ArcManifest } from "../types.js";
 
@@ -103,7 +103,7 @@ export function extractCliInfo(
  */
 export function extractAllCliInfo(
   manifest: ArcManifest
-): Array<{ binName: string; scriptPath: string; command: string }> {
+): { binName: string; scriptPath: string; command: string }[] {
   if (!manifest.provides?.cli?.length) return [];
 
   return manifest.provides.cli.map((cli) => {

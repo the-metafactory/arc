@@ -146,7 +146,7 @@ describe("removeBot — server-side revocation", () => {
     const errSpy = mock(() => undefined);
     const origExit = process.exit;
     const origErr = console.error;
-    process.exit = exitSpy as unknown as typeof process.exit;
+    process.exit = exitSpy;
     console.error = errSpy;
 
     try {
@@ -181,7 +181,7 @@ describe("removeBot — server-side revocation", () => {
     const exitSpy = mock(() => { throw new Error("process.exit called"); });
     const origExit = process.exit;
     const origErr = console.error;
-    process.exit = exitSpy as unknown as typeof process.exit;
+    process.exit = exitSpy;
     console.error = mock(() => undefined);
 
     try {
@@ -257,7 +257,7 @@ describe("reissueBot — server-side revocation of OLD pubkey", () => {
     const exitSpy = mock(() => { throw new Error("process.exit called"); });
     const origExit = process.exit;
     const origErr = console.error;
-    process.exit = exitSpy as unknown as typeof process.exit;
+    process.exit = exitSpy;
     console.error = mock(() => undefined);
 
     try {
@@ -297,7 +297,7 @@ describe("reissueBot — server-side revocation of OLD pubkey", () => {
     const exitSpy = mock(() => { throw new Error("process.exit called"); });
     const origExit = process.exit;
     const origErr = console.error;
-    process.exit = exitSpy as unknown as typeof process.exit;
+    process.exit = exitSpy;
     console.error = mock(() => undefined);
 
     try {
@@ -371,7 +371,7 @@ describe("getUserPubKey — error surface", () => {
     const exitSpy = mock(() => { throw new Error("process.exit called"); });
     const origExit = process.exit;
     const origErr = console.error;
-    process.exit = exitSpy as unknown as typeof process.exit;
+    process.exit = exitSpy;
     console.error = mock(() => undefined);
 
     try {
@@ -399,7 +399,7 @@ describe("getUserPubKey — error surface", () => {
     const exitSpy = mock(() => { throw new Error("process.exit called"); });
     const origExit = process.exit;
     const origErr = console.error;
-    process.exit = exitSpy as unknown as typeof process.exit;
+    process.exit = exitSpy;
     console.error = mock(() => undefined);
 
     try {

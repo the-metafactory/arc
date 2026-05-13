@@ -43,7 +43,7 @@ export async function readManifest(
   // skills/tools/prompts must continue to fail at the root if missing.
   const agentDir = join(dir, "agent");
   const agentResult = await readManifestFromDir(agentDir);
-  if (agentResult && agentResult.type === "agent") {
+  if (agentResult?.type === "agent") {
     return agentResult;
   }
   return null;
@@ -153,7 +153,7 @@ export function normalizeCapabilities(manifest: ArcManifest, filename: string): 
 
   const shorthand: string[] = [];
   const invalid: unknown[] = [];
-  const normalized: Array<{ domain: string; reason: string }> = [];
+  const normalized: { domain: string; reason: string }[] = [];
 
   for (const entry of caps.network as unknown[]) {
     if (typeof entry === "string") shorthand.push(entry);
@@ -222,12 +222,12 @@ export function validateTargets(manifest: ArcManifest, filename: string): void {
         `Invalid ${filename}: unknown target host '${entry}'. Known: ${KNOWN_HOST_IDS.join(", ")}`,
       );
     }
-    if (seen.has(entry as HostId)) {
+    if (seen.has(entry)) {
       throw new Error(
         `Invalid ${filename}: duplicate target '${entry}' in 'targets'`,
       );
     }
-    seen.add(entry as HostId);
+    seen.add(entry);
   }
 }
 
@@ -348,12 +348,12 @@ function validateLibraryManifest(parsed: ArcManifest, filename: string): void {
 export async function readLibraryArtifacts(
   libraryDir: string,
   manifest: ArcManifest,
-): Promise<Array<{ entry: import("../types.js").LibraryArtifactEntry; manifest: ArcManifest }>> {
+): Promise<{ entry: import("../types.js").LibraryArtifactEntry; manifest: ArcManifest }[]> {
   if (manifest.type !== "library" || !manifest.artifacts) {
     return [];
   }
 
-  const results: Array<{ entry: import("../types.js").LibraryArtifactEntry; manifest: ArcManifest }> = [];
+  const results: { entry: import("../types.js").LibraryArtifactEntry; manifest: ArcManifest }[] = [];
 
   for (const entry of manifest.artifacts) {
     const artifactDir = join(libraryDir, entry.path);

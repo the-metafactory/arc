@@ -10,19 +10,17 @@ import { existsSync, readFileSync } from "fs";
 import { mkdir } from "fs/promises";
 import { homedir } from "os";
 import { dirname, join } from "path";
-import type { HooksDeclaration, InlineHook, HooksConfigRef } from "../types.js";
+import type { HooksDeclaration, InlineHook } from "../types.js";
 
 /** A single hook entry in settings.json's hooks.<event> array */
 interface SettingsHookGroup {
   _pai_pkg?: string;
   matcher?: string;
-  hooks: Array<{ type: string; command: string }>;
+  hooks: { type: string; command: string }[];
 }
 
 /** The hooks section of settings.json */
-interface SettingsHooks {
-  [event: string]: SettingsHookGroup[];
-}
+type SettingsHooks = Record<string, SettingsHookGroup[]>;
 
 /** Minimal settings.json structure (preserves unknown fields) */
 interface Settings {
@@ -86,12 +84,12 @@ export function resolveHooksFromManifest(
   }
 
   // Format 2: config-file reference
-  const configRef = hooks as HooksConfigRef;
+  const configRef = hooks;
   if (!configRef.claude_code?.config) return null;
 
   const configPath = join(installPath, configRef.claude_code.config);
 
-  let configData: Record<string, Array<{ type?: string; command: string }>>;
+  let configData: Record<string, { type?: string; command: string }[]>;
   try {
     const raw = readFileSync(configPath, "utf-8");
     const parsed = JSON.parse(raw);
@@ -171,8 +169,8 @@ function resolveCommandPaths(
  */
 export function findMissingHookFiles(
   hooks: InlineHook[],
-): Array<{ event: string; command: string; missingPath: string }> {
-  const issues: Array<{ event: string; command: string; missingPath: string }> = [];
+): { event: string; command: string; missingPath: string }[] {
+  const issues: { event: string; command: string; missingPath: string }[] = [];
   // Tokens that direct shell I/O — the next path-like token is an output
   // destination, not a required file. ">>" / "<<" are caught by .startsWith.
   const REDIRECT_OPS = new Set([">", ">>", "<", "<<", "|", "&>", "2>", "2>>", "1>"]);
@@ -184,7 +182,7 @@ export function findMissingHookFiles(
         continue;
       }
       const stripped = tokens[i].replace(/^['"]|['"]$/g, "");
-      if (!stripped || !stripped.startsWith("/")) continue;
+      if (!stripped?.startsWith("/")) continue;
       if (!existsSync(stripped)) {
         issues.push({ event: hook.event, command: hook.command, missingPath: stripped });
       }
@@ -202,7 +200,7 @@ export function findMissingHookFiles(
  */
 export async function registerHooks(
   packageName: string,
-  hooks: Array<{ event: string; command: string; matcher?: string }>,
+  hooks: { event: string; command: string; matcher?: string }[],
   settingsPath: string,
 ): Promise<void> {
   const settings = await readSettings(settingsPath);
@@ -266,7 +264,7 @@ export async function removeHooks(
 export function listPackageHooks(
   packageName: string,
   settingsPath: string,
-): Array<{ event: string; command: string }> {
+): { event: string; command: string }[] {
   if (!existsSync(settingsPath)) return [];
 
   let settings: Settings;
@@ -280,7 +278,7 @@ export function listPackageHooks(
 
   if (!settings.hooks) return [];
 
-  const results: Array<{ event: string; command: string }> = [];
+  const results: { event: string; command: string }[] = [];
 
   for (const [event, entries] of Object.entries(settings.hooks)) {
     for (const entry of entries) {

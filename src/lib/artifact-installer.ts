@@ -77,8 +77,8 @@ export async function createArtifactSymlinks(opts: {
   consumerDir?: string;
   quiet?: boolean;
 }): Promise<{
-  filesCreated: Array<{ source: string; target: string }>;
-  filesMissingSource: Array<{ source: string; target: string }>;
+  filesCreated: { source: string; target: string }[];
+  filesMissingSource: { source: string; target: string }[];
   record: ArtifactSymlinkRecord;
 }> {
   const { type, manifest, arc, host, installDir, quiet } = opts;
@@ -99,7 +99,7 @@ export async function createArtifactSymlinks(opts: {
   // (manifest typo, repo drift) is now stopped with zero filesystem mutation,
   // so install can return cleanly without producing orphan symlinks.
   const declaredFiles = manifest.provides?.files ?? [];
-  const filesMissingSource: Array<{ source: string; target: string }> = [];
+  const filesMissingSource: { source: string; target: string }[] = [];
   for (const file of declaredFiles) {
     const sourcePath = join(installDir, file.source);
     if (!existsSync(sourcePath)) {
@@ -270,7 +270,7 @@ export async function createArtifactSymlinks(opts: {
   // multi-artifact package using a different primary type. See issue #84.
   // The pre-validation pass above guarantees every source exists by the time
   // we get here, so we can fearlessly create symlinks without partial-state risk.
-  const filesCreated: Array<{ source: string; target: string }> = [];
+  const filesCreated: { source: string; target: string }[] = [];
   for (const file of declaredFiles) {
     const sourcePath = join(installDir, file.source);
     const targetPath = file.target.replace(/^~/, homedir());

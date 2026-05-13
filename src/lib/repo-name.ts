@@ -14,7 +14,7 @@ export function extractRepoName(url: string): string {
   }
   // SSH: git@github.com:user/repo.git
   else {
-    const sshMatch = url.match(/[:\/]([^\/]+)\.git$/);
+    const sshMatch = /[:\/]([^\/]+)\.git$/.exec(url);
     if (sshMatch) {
       name = sshMatch[1];
     } else {

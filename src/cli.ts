@@ -182,7 +182,7 @@ program
         // exit code so scripts can tell deliberate-removal apart from
         // missing/network failures.
         if (download.quarantine) {
-          const colorEnabled = process.stderr.isTTY === true;
+          const colorEnabled = process.stderr.isTTY;
           for (const line of formatQuarantineMessage(
             formatPackageRef(pkgRef),
             download.quarantine,
@@ -535,7 +535,7 @@ program
     } else {
       // name is guaranteed non-null here — commander validates required args for single-package paths
       const libRef = parseLibraryRef(name!);
-      let upgradeName = libRef?.artifactName ?? name!;
+      const upgradeName = libRef?.artifactName ?? name!;
       let isLibraryUpgrade = false;
 
       if (!libRef?.artifactName) {
