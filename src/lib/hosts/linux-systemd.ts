@@ -19,14 +19,17 @@ import type {
  * `provides.systemdUnit` for linux), and arc renders + loads the
  * appropriate one."
  *
- * Detection rule:
+ * Detection rule (matches darwin-launchd's file-presence approach):
  *   1. `platform() === "linux"`.
- *   2. `~/.config/systemd/user` either exists already or its parent
- *      (`~/.config/systemd`) is writable. `systemctl --user`
- *      auto-creates the user dir on first unit registration, so absence
- *      is not a hard "this host doesn't exist" — but we still gate on
- *      the parent so a stripped container without systemd registers as
- *      undetected.
+ *   2. `~/.config/systemd/user` exists.
+ *
+ * A user who has run `systemctl --user` at least once will have this
+ * directory present. A stripped container without systemd auto-fails
+ * the second check and registers as undetected. We do not stat
+ * `systemctl` on PATH for the same reason darwin-launchd skips
+ * `launchctl` — the binary is part of the base systemd install, and a
+ * sysadmin-stripped layout is exotic enough to defer to install-time
+ * error surfacing.
  *
  * Install/remove dispatch (rendering `provides.systemdUnit`, copying
  * `provides.binary`, `systemctl --user enable --now`) is NOT in this
