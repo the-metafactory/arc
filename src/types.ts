@@ -623,6 +623,30 @@ export interface CortexPaths {
 export type CortexHostPaths = HostPaths & CortexPaths;
 
 /**
+ * darwin-launchd-host-only path extensions. Standalone-bot daemons land
+ * their plist into the user's `~/Library/LaunchAgents/` directory; arc
+ * uses `plistDir` instead of overloading the base `settingsPath` because
+ * the plist directory is a *collection*, not a single config file. The
+ * binary lands in the base `binDir` field.
+ *
+ * Same pattern as `CortexPaths` — not promoted to `HostPaths` because no
+ * other adapter has a comparable concept (cortex's `personasDir`,
+ * `credsDir`; launchd's `plistDir`).
+ *
+ * See cortex `docs/design-arc-agent-bots.md` §3.2 and arc#140 P2.
+ */
+export interface LaunchdPaths {
+  /** macOS user LaunchAgents directory (~/Library/LaunchAgents/). */
+  plistDir: string;
+}
+
+/**
+ * darwin-launchd host's concrete `paths` shape. Use this when you've
+ * already narrowed `host.id === "darwin-launchd"`.
+ */
+export type DarwinLaunchdHostPaths = HostPaths & LaunchdPaths;
+
+/**
  * Host adapter — describes one agentic backend (Claude Code, Codex CLI, Cursor, …).
  *
  * Phase 1 (this PR): interface + Claude-Code default implementation. No dispatch yet.
