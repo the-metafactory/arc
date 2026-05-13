@@ -647,6 +647,25 @@ export interface LaunchdPaths {
 export type DarwinLaunchdHostPaths = HostPaths & LaunchdPaths;
 
 /**
+ * linux-systemd-host-only path extensions. Sister to LaunchdPaths for the
+ * macOS / Linux OS-supervision split. Standalone-bot daemons land their
+ * unit file into the user-scope systemd directory (`~/.config/systemd/user/`).
+ *
+ * See cortex `docs/design-arc-agent-bots.md` §3.2 platform note and
+ * arc#140 P6.
+ */
+export interface SystemdPaths {
+  /** Linux user systemd directory (~/.config/systemd/user/). */
+  unitDir: string;
+}
+
+/**
+ * linux-systemd host's concrete `paths` shape. Use this when you've
+ * already narrowed `host.id === "linux-systemd"`.
+ */
+export type LinuxSystemdHostPaths = HostPaths & SystemdPaths;
+
+/**
  * Host adapter — describes one agentic backend (Claude Code, Codex CLI, Cursor, …).
  *
  * Phase 1 (this PR): interface + Claude-Code default implementation. No dispatch yet.

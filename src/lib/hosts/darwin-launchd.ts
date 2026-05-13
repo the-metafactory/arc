@@ -94,3 +94,21 @@ export function createDarwinLaunchdHost(
     supports: (type: ArtifactType) => type === "agent" || type === "tool",
   };
 }
+
+/**
+ * Type guard for the darwin-launchd host's narrowed paths shape.
+ *
+ * Use this in multi-target dispatch instead of a blanket `as` cast —
+ * if `createDarwinLaunchdHost()` is ever refactored to drop the
+ * `plistDir` extension, this guard fails fast at runtime with a clear
+ * message instead of letting a downstream `.paths.plistDir` access
+ * surface as `undefined`. Sage P3 review (arc#143).
+ */
+export function isDarwinLaunchdHost(
+  host: HostAdapter,
+): host is HostAdapter & { paths: DarwinLaunchdHostPaths } {
+  return (
+    host.id === "darwin-launchd" &&
+    typeof (host.paths as Partial<DarwinLaunchdHostPaths>).plistDir === "string"
+  );
+}

@@ -4,7 +4,6 @@ import type {
   ArcPaths,
   ArcManifest,
   ArtifactType,
-  DarwinLaunchdHostPaths,
   HostAdapter,
   HostId,
   PackageTier,
@@ -38,6 +37,7 @@ import {
   installLaunchdArtifacts,
   rollbackLaunchdArtifacts,
 } from "../lib/hosts/launchd-install.js";
+import { isDarwinLaunchdHost } from "../lib/hosts/darwin-launchd.js";
 
 export interface InstallOptions {
   /** arc's own state paths (configRoot, dbPath, reposDir, …). Host-independent. */
@@ -760,9 +760,19 @@ async function installPerTarget(opts: {
     }
 
     if (targetId === "darwin-launchd") {
+      // Sage P3 review (arc#143): type guard replaces a blanket `as` cast
+      // so a future refactor that drops the plistDir extension surfaces
+      // here instead of at runtime when host.paths.plistDir is undefined.
+      if (!isDarwinLaunchdHost(targetHost)) {
+        await rollbackAll();
+        return {
+          error:
+            `Internal error: 'darwin-launchd' resolved to a host adapter without launchd paths`,
+        };
+      }
       try {
         const rec = await installLaunchdArtifacts({
-          host: targetHost as HostAdapter & { paths: DarwinLaunchdHostPaths },
+          host: targetHost,
           manifest: opts.manifest,
           installDir: opts.installPath,
           quiet: opts.quiet,
@@ -775,6 +785,22 @@ async function installPerTarget(opts: {
         };
       }
       continue;
+    }
+
+    if (targetId === "linux-systemd") {
+      // arc#140 P6: the adapter surface exists so `targets: [..., linux-systemd]`
+      // manifests parse cleanly, but rendering the systemd unit + binary
+      // install lands "once the first Linux host enters the deployment
+      // topology" per cortex `docs/design-arc-agent-bots.md` §3.2 / §11
+      // Phase C.3. Fail clearly so an operator on macOS doesn't see a
+      // silent half-install when a manifest happens to declare both
+      // darwin-launchd AND linux-systemd targets.
+      await rollbackAll();
+      return {
+        error:
+          `Target 'linux-systemd' is recognized but its install dispatch is not yet implemented (arc#140 Phase C). ` +
+          `Install on macOS, or wait for the linux-systemd install path to land.`,
+      };
     }
 
     // registry hosts (cortex, claude-code) take the existing symlink path
