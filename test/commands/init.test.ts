@@ -87,4 +87,13 @@ describe("init command", () => {
     expect(result.success).toBe(false);
     expect(result.error).toContain("arc-manifest.yaml already exists");
   });
+
+  test("rejects when target path is an existing file (sage P148 cycle 2)", async () => {
+    const targetDir = join(tempDir, "file-not-dir");
+    await Bun.write(targetDir, "not a directory");
+
+    const result = await init(targetDir, "MySkill");
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("not a directory");
+  });
 });

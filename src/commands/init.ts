@@ -1,5 +1,5 @@
 import { basename, join } from "path";
-import { existsSync } from "fs";
+import { existsSync, lstatSync } from "fs";
 import { mkdir } from "fs/promises";
 
 export type ArtifactInitType = "skill" | "tool" | "agent" | "prompt" | "pipeline";
@@ -95,6 +95,16 @@ export async function init(
   author?: string,
   type: ArtifactInitType = "skill"
 ): Promise<InitResult> {
+  // Sage P148 cycle 2: refuse when targetDir is an existing non-directory
+  // (regular file, symlink to file). `mkdir({recursive: true})` would
+  // throw `EEXIST` mid-scaffold, partially written. Surface a clean
+  // error first.
+  if (existsSync(targetDir) && !lstatSync(targetDir).isDirectory()) {
+    return {
+      success: false,
+      error: `${targetDir} exists and is not a directory`,
+    };
+  }
   // Refuse only if a manifest already lives at the target — the
   // unambiguous signal that the directory is already an arc package.
   // Other files (a fresh git clone with only .git/, an empty package.json
