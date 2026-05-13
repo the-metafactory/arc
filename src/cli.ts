@@ -609,8 +609,8 @@ program
         cwd: process.cwd(),
         dirOverride: opts.dir,
       });
-      if (!resolved) {
-        console.error(`\n❌ Invalid name. Name must not contain path separators or "..".`);
+      if ("reason" in resolved) {
+        console.error(`\n❌ ${resolved.detail}`);
         process.exit(1);
       }
 

@@ -5,54 +5,70 @@ import { mkdir } from "fs/promises";
 export type ArtifactInitType = "skill" | "tool" | "agent" | "prompt" | "pipeline";
 
 /**
- * Resolve `arc init`'s `[name]` arg + cwd into a `{name, targetDir, inPlace}`
- * tuple — pure function so it can be unit-tested without spawning the CLI.
+ * Resolve `arc init`'s `[name]` arg + cwd into a `{name, targetDir}` tuple
+ * — pure function so it can be unit-tested without spawning the CLI.
  *
  * arc#107 semantics:
- *   - argless or `.` → in-place, name = basename(cwd)
- *   - `<name>` matching basename(cwd) → in-place, name = <name>
- *   - `<name>` different → ./<name>/ (no `arc-<type>-` prefix)
- *   - explicit `dir` (CLI `--dir`) always wins for targetDir
+ *   - argless OR `.` OR `<name>` matching basename(cwd) → scaffold in cwd
+ *   - `<name>` different from basename(cwd) → ./<name>/ (no `arc-<type>-` prefix)
+ *   - explicit `dirOverride` (CLI `--dir`) always wins for targetDir
  *
- * Returns `null` when the resolved name would be invalid (path separators,
- * `..`, or empty after trimming). The caller surfaces the error to stderr.
+ * Returns `null` when the resolved name OR a `--dir` override would be
+ * invalid (path separators in name, `..` traversal, empty name). The
+ * caller surfaces the error to stderr.
  */
 export interface ResolvedInitTarget {
   name: string;
   targetDir: string;
-  inPlace: boolean;
+}
+
+export interface ResolveInitFailure {
+  reason: "invalid-name" | "invalid-dir";
+  detail: string;
 }
 
 export function resolveInitTarget(opts: {
   argName?: string;
   cwd: string;
   dirOverride?: string;
-}): ResolvedInitTarget | null {
+}): ResolvedInitTarget | ResolveInitFailure {
   const cwdBasename = basename(opts.cwd);
   const arg = opts.argName?.trim();
 
+  // Resolve the name first.
   let name: string;
-  let inPlace: boolean;
-  let targetDir: string;
-
   if (!arg || arg === ".") {
     name = cwdBasename;
-    inPlace = true;
-    targetDir = opts.dirOverride ?? opts.cwd;
-  } else if (arg === cwdBasename) {
-    name = arg;
-    inPlace = true;
-    targetDir = opts.dirOverride ?? opts.cwd;
   } else {
     name = arg;
-    inPlace = false;
-    targetDir = opts.dirOverride ?? join(opts.cwd, arg);
   }
 
   if (!name || /[\/\\]|\.\./.test(name)) {
-    return null;
+    return {
+      reason: "invalid-name",
+      detail: `"${name}" is not a valid package name (no path separators, no "..", non-empty).`,
+    };
   }
-  return { name, targetDir, inPlace };
+
+  // Resolve targetDir. argless / `.` / matching-name all collapse to "in
+  // cwd"; only a different name lands in `./<name>/`. dirOverride wins.
+  const inCwd = !arg || arg === "." || arg === cwdBasename;
+  const targetDir =
+    opts.dirOverride ?? (inCwd ? opts.cwd : join(opts.cwd, name));
+
+  // Sage P148 security: validate `--dir` parity with name. Prevent
+  // path-traversal-into-shadow scenarios where a wrapper passes
+  // untrusted input through `--dir`.
+  if (opts.dirOverride !== undefined) {
+    if (opts.dirOverride === "" || /\.\.(\/|\\|$)/.test(opts.dirOverride)) {
+      return {
+        reason: "invalid-dir",
+        detail: `"${opts.dirOverride}" is not a valid --dir target (no "..", non-empty).`,
+      };
+    }
+  }
+
+  return { name, targetDir };
 }
 
 export interface InitResult {
