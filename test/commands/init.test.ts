@@ -66,12 +66,25 @@ describe("init command", () => {
     expect(manifest).toContain("name: P_RSS_DIGEST");
   });
 
-  test("rejects existing directory", async () => {
+  test("scaffolds into an existing non-empty directory (arc#107 init-in-place)", async () => {
     const targetDir = join(tempDir, "existing");
-    await Bun.write(join(targetDir, "file.txt"), "exists");
+    await Bun.write(join(targetDir, "unrelated.txt"), "preexisting content");
+
+    const result = await init(targetDir, "MySkill");
+    expect(result.success).toBe(true);
+    // Pre-existing unrelated file untouched
+    const original = await Bun.file(join(targetDir, "unrelated.txt")).text();
+    expect(original).toBe("preexisting content");
+    // Manifest landed alongside it
+    expect(existsSync(join(targetDir, "arc-manifest.yaml"))).toBe(true);
+  });
+
+  test("rejects when arc-manifest.yaml already exists in target (arc#107)", async () => {
+    const targetDir = join(tempDir, "already-arc");
+    await Bun.write(join(targetDir, "arc-manifest.yaml"), "name: prior\n");
 
     const result = await init(targetDir, "MySkill");
     expect(result.success).toBe(false);
-    expect(result.error).toContain("already exists");
+    expect(result.error).toContain("arc-manifest.yaml already exists");
   });
 });

@@ -1,8 +1,59 @@
-import { join } from "path";
+import { basename, join } from "path";
 import { existsSync } from "fs";
 import { mkdir } from "fs/promises";
 
 export type ArtifactInitType = "skill" | "tool" | "agent" | "prompt" | "pipeline";
+
+/**
+ * Resolve `arc init`'s `[name]` arg + cwd into a `{name, targetDir, inPlace}`
+ * tuple — pure function so it can be unit-tested without spawning the CLI.
+ *
+ * arc#107 semantics:
+ *   - argless or `.` → in-place, name = basename(cwd)
+ *   - `<name>` matching basename(cwd) → in-place, name = <name>
+ *   - `<name>` different → ./<name>/ (no `arc-<type>-` prefix)
+ *   - explicit `dir` (CLI `--dir`) always wins for targetDir
+ *
+ * Returns `null` when the resolved name would be invalid (path separators,
+ * `..`, or empty after trimming). The caller surfaces the error to stderr.
+ */
+export interface ResolvedInitTarget {
+  name: string;
+  targetDir: string;
+  inPlace: boolean;
+}
+
+export function resolveInitTarget(opts: {
+  argName?: string;
+  cwd: string;
+  dirOverride?: string;
+}): ResolvedInitTarget | null {
+  const cwdBasename = basename(opts.cwd);
+  const arg = opts.argName?.trim();
+
+  let name: string;
+  let inPlace: boolean;
+  let targetDir: string;
+
+  if (!arg || arg === ".") {
+    name = cwdBasename;
+    inPlace = true;
+    targetDir = opts.dirOverride ?? opts.cwd;
+  } else if (arg === cwdBasename) {
+    name = arg;
+    inPlace = true;
+    targetDir = opts.dirOverride ?? opts.cwd;
+  } else {
+    name = arg;
+    inPlace = false;
+    targetDir = opts.dirOverride ?? join(opts.cwd, arg);
+  }
+
+  if (!name || /[\/\\]|\.\./.test(name)) {
+    return null;
+  }
+  return { name, targetDir, inPlace };
+}
 
 export interface InitResult {
   success: boolean;
@@ -13,6 +64,14 @@ export interface InitResult {
 
 /**
  * Scaffold a new skill, tool, agent, or prompt repo directory.
+ *
+ * arc#107 — `targetDir` may already exist (init-in-place mode). In that
+ * case the function refuses only if `arc-manifest.yaml` already lives in
+ * the directory (which would mean the cwd is already an arc package);
+ * unrelated files are left alone. When `targetDir` does not yet exist,
+ * it is created recursively. This matches the ergonomics of `npm init`
+ * / `cargo init` / `git init` — the operator's cwd is a valid place to
+ * scaffold from.
  */
 export async function init(
   targetDir: string,
@@ -20,12 +79,17 @@ export async function init(
   author?: string,
   type: ArtifactInitType = "skill"
 ): Promise<InitResult> {
-  if (existsSync(targetDir)) {
+  // Refuse only if a manifest already lives at the target — the
+  // unambiguous signal that the directory is already an arc package.
+  // Other files (a fresh git clone with only .git/, an empty package.json
+  // from `npm init -y`, etc.) are fine; we layer the scaffold on top.
+  if (existsSync(join(targetDir, "arc-manifest.yaml"))) {
     return {
       success: false,
-      error: `Directory already exists: ${targetDir}`,
+      error: `arc-manifest.yaml already exists in ${targetDir} — refusing to overwrite`,
     };
   }
+  await mkdir(targetDir, { recursive: true });
 
   const authorName = author ?? "username";
   const files: string[] = [];
