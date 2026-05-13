@@ -466,7 +466,7 @@ export async function extractPackage(
   }
 
   // Clean up tarball -- cleanup failure is non-fatal
-  await unlink(tarballPath).catch((_err) => {});
+  await unlink(tarballPath).catch((_err: unknown) => {});
 
   // Verify manifest exists
   const hasManifest = existsSync(join(extractedPath, "arc-manifest.yaml")) ||

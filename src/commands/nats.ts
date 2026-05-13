@@ -350,7 +350,10 @@ export async function addBot(name: string, opts: AddBotOptions): Promise<AddBotR
     if (json) {
       throw new ArcNatsCommandError(code, `Failed to configure user "${name}" — rolled back. Cause: ${cause}`);
     }
-    throw new Error(`Failed to configure user "${name}" — rolled back. Cause: ${cause}`);
+    throw new Error(
+      `Failed to configure user "${name}" — rolled back. Cause: ${cause}`,
+      { cause: err },
+    );
   }
 
   // Surface the durable pubkey (matches what cortex receives in JSON mode and

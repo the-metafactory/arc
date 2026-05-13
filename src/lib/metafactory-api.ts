@@ -224,7 +224,7 @@ export async function fetchMetafactoryRegistry(
   debugLog(`Fetched ${allPackages.length} packages from ${source.name}`);
 
   // Cache the result
-  await cacheRegistry(cachePath, source, config).catch((_err) => {
+  await cacheRegistry(cachePath, source, config).catch((_err: unknown) => {
     // Cache write failure is non-fatal
     debugLog(`Failed to cache results for ${source.name}`);
   });

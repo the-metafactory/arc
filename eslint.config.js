@@ -36,7 +36,10 @@ export default tseslint.config(
       "no-useless-assignment": "warn",
       "no-control-regex": "warn",
       "@typescript-eslint/no-require-imports": "warn",
-      "preserve-caught-error": "warn",
+      // Mirrors myelin#127. `throw new Error(msg)` from a catch block
+      // should pass `{ cause: err }` to preserve the underlying exception
+      // chain for debuggability.
+      "preserve-caught-error": "error",
 
       // ── Warn: stylistic / preference rules with high pre-existing
       //         violation counts. Surface in IDE + lint output, don't
@@ -92,9 +95,10 @@ export default tseslint.config(
       // (`.option(handler)`); the rule mis-reads them as `this`-rebinding
       // hazards. Real binding issues still surface via test failures.
       "@typescript-eslint/unbound-method": "warn",
-      // catch (err: unknown) is the modern idiom but a lot of CLI error
-      // paths predate it. Warn so it surfaces; tighten in a sweep PR.
-      "@typescript-eslint/use-unknown-in-catch-callback-variable": "warn",
+      // Mirrors myelin#127. `.catch((err: unknown) => …)` is the safe
+      // idiom; bare `(err)` defaults to implicit `any`. All 2 arc sites
+      // were already _err stubs; just type-annotated.
+      "@typescript-eslint/use-unknown-in-catch-callback-variable": "error",
       // Same bun-test idiom as await-thenable. Off in tests (override
       // below), error at src so a real `.forEach(() => doThing())`
       // where doThing returns void still gets caught when callers
