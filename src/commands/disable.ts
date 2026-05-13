@@ -4,7 +4,7 @@ import type { ArcPaths, HostAdapter } from "../types.js";
 import { getSkill, updateSkillStatus } from "../lib/db.js";
 import { removeSymlink, removeCliShim, extractAllCliInfo } from "../lib/symlinks.js";
 import { readManifest } from "../lib/manifest.js";
-import { removeHooks, hasHooks } from "../lib/hooks.js";
+import { removeHooks } from "../lib/hooks.js";
 
 export interface DisableResult {
   success: boolean;
@@ -74,10 +74,13 @@ export async function disable(
       await removeSymlink(join(host.paths.binDir, fallbackName));
     }
   }
-  if (hasHooks(manifest?.provides?.hooks)) {
-    const settingsPath = host.paths.settingsPath;
-    await removeHooks(name, settingsPath);
-  }
+  // arc#137: same fix as `arc remove` — always invoke removeHooks. The
+  // `_pai_pkg` tag inside removeHooks filters to this package's entries
+  // only, so the call is idempotent when nothing matches. Gating on
+  // `manifest?.provides?.hooks` left orphan settings.json entries when
+  // the source repo was deleted out-of-band or the hooks declaration
+  // was dropped in a later version.
+  await removeHooks(name, host.paths.settingsPath);
 
   // Update database
   updateSkillStatus(db, name, "disabled");

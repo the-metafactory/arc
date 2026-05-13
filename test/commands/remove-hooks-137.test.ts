@@ -27,8 +27,8 @@ import {
   createMockSkillRepo,
   type TestEnv,
 } from "../helpers/test-env.js";
-import { install } from "../../src/commands/install.js";
 import { remove } from "../../src/commands/remove.js";
+import { disable } from "../../src/commands/disable.js";
 import { recordInstall } from "../../src/lib/db.js";
 
 let env: TestEnv;
@@ -81,7 +81,7 @@ async function seedSettingsWithHook(packageName: string): Promise<void> {
 async function seedInstalledSkill(name: string): Promise<string> {
   const repo = await createMockSkillRepo(env.root, { name });
   const installPath = join(env.arc.reposDir, `mock-${name}`);
-  // Move the mock repo into reposDir where install() would have cloned it
+  // Copy mock repo files into reposDir where install() would have cloned them
   await Bun.write(
     join(installPath, "arc-manifest.yaml"),
     await Bun.file(join(repo.path, "arc-manifest.yaml")).text(),
@@ -161,6 +161,24 @@ describe("arc#137 — remove cleans hooks even when manifest is unreadable", () 
     expect(afterEntries.some((h) => h._pai_pkg === "OtherPackage")).toBe(true);
   });
 
+  test("disable also cleans hook entry when manifest is unreadable (parity with remove)", async () => {
+    // Same bug existed in disable.ts — sage P147 review observation that
+    // `hasHooks` had multiple callsites surfaced this adjacent path.
+    const name = "DeltaSkill";
+    const installPath = await seedInstalledSkill(name);
+    await seedSettingsWithHook(name);
+
+    await rm(installPath, { recursive: true, force: true });
+
+    const result = await disable(env.db, env.arc, env.host, name);
+    expect(result.success).toBe(true);
+
+    const after = await readSettings();
+    const afterEntries = (after.hooks?.SessionStart ?? []) as Array<{ _pai_pkg?: string }>;
+    expect(afterEntries.some((h) => h._pai_pkg === name)).toBe(false);
+    expect(afterEntries.some((h) => h._pai_pkg === "OtherPackage")).toBe(true);
+  });
+
   test("remove of a hookless package is a settings.json no-op (touches only own entries)", async () => {
     const name = "GammaSkill";
     await seedInstalledSkill(name);
@@ -188,7 +206,4 @@ describe("arc#137 — remove cleans hooks even when manifest is unreadable", () 
     expect(afterEntries[0]._pai_pkg).toBe("OtherPackage");
   });
 
-  // Suppress unused-import lint for symbols the rewritten test no longer
-  // exercises directly (kept here so a future expansion can reuse them).
-  void install;
 });
