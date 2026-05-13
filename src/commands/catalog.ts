@@ -380,7 +380,13 @@ export async function catalogPush(
  *
  * @param host Unused today; threaded for #117 signature consistency. catalogPushCatalog
  *   only invokes git against the catalog file (arc state).
+ *
+ * Async signature matches the rest of the catalog command surface
+ * (catalogList, catalogAdd, catalogUse, …) which DO await readManifest /
+ * install. The push variant only shells out via Bun.spawnSync; keeping it
+ * sync would force every caller to special-case its return shape.
  */
+// eslint-disable-next-line @typescript-eslint/require-await
 export async function catalogPushCatalog(
   arc: ArcPaths,
   _host: HostAdapter

@@ -54,7 +54,11 @@ export default tseslint.config(
       //   no-explicit-any ...... infra layers that bridge untyped surfaces
       //   no-unsafe-* .......... Bun.spawnSync / process / yaml-parsed
       //                           dynamic data flows through these
-      "@typescript-eslint/require-await": "warn",
+      // Production code has zero require-await sites — myelin#121's
+      // pattern: turn off in tests (adapter mocks have async signatures
+      // without I/O), promote to error elsewhere so new src violations
+      // gate the build.
+      "@typescript-eslint/require-await": "error",
       "@typescript-eslint/no-unnecessary-condition": "warn",
       "@typescript-eslint/await-thenable": "warn",
       "@typescript-eslint/no-empty-function": "warn",
@@ -67,7 +71,15 @@ export default tseslint.config(
       "@typescript-eslint/no-unsafe-argument": "warn",
       "@typescript-eslint/no-unsafe-return": "warn",
       "@typescript-eslint/no-base-to-string": "warn",
-      "@typescript-eslint/restrict-template-expressions": "warn",
+      // Number / boolean interpolation in template literals is
+      // universally understood — `Found ${count} matches` reads
+      // cleanly. The rule still fires on `unknown`, `never`, `any`,
+      // and exotic objects — those carry real correctness signal.
+      // Mirrors myelin#122.
+      "@typescript-eslint/restrict-template-expressions": [
+        "error",
+        { allowNumber: true, allowBoolean: true },
+      ],
       "@typescript-eslint/return-await": "warn",
       "@typescript-eslint/no-unused-expressions": "warn",
       // Commander-style fluent chains pass method references as args
@@ -98,6 +110,14 @@ export default tseslint.config(
       "@typescript-eslint/restrict-template-expressions": "off",
       "@typescript-eslint/no-unused-vars": "off",
       "@typescript-eslint/no-deprecated": "off",
+      // Mocks of async-shaped interfaces (fetch / readFile / spawn
+      // wrappers, …) implement `() => Promise<T>` without I/O to
+      // await. The `async` keyword satisfies the type signature; the
+      // rule's "unnecessary" verdict in test code is pure noise.
+      // Mirrors myelin#121's test-override approach. Production code
+      // has zero require-await sites today; this override only affects
+      // tests.
+      "@typescript-eslint/require-await": "off",
     },
   },
   {

@@ -48,7 +48,7 @@ function keyPath(name: string): string {
 function validatePrincipal(p: unknown, index: number): asserts p is Principal {
   if (!p || typeof p !== "object") throw new Error(`principals[${index}]: not an object`);
   const r = p as Record<string, unknown>;
-  if (typeof r.id !== "string" || !DID_RE.test(r.id)) throw new Error(`principals[${index}].id: invalid DID "${r.id}"`);
+  if (typeof r.id !== "string" || !DID_RE.test(r.id)) throw new Error(`principals[${index}].id: invalid DID "${String(r.id)}"`);
   if (typeof r.public_key !== "string" || !BASE64_RE.test(r.public_key) || r.public_key.length < 40) {
     throw new Error(`principals[${index}].public_key: invalid (must be base64, ≥40 chars)`);
   }

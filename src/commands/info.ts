@@ -270,7 +270,13 @@ function errorResult(error: string): InfoResult {
 
 /**
  * Fetch release notes by repo URL and version tag.
+ *
+ * Async signature is the contract callers expect (mirrors
+ * fetchReleaseNotes etc.); the body shells out via Bun.spawnSync which
+ * is sync. Keeping the Promise wrapper preserves future async-fetch
+ * migration without callsite churn.
  */
+// eslint-disable-next-line @typescript-eslint/require-await
 async function fetchReleaseNotesFromUrl(repoUrl: string, version: string): Promise<string | null> {
   const tag = `v${version}`;
   const ghMatch = /github\.com[:/]([^/]+)\/([^/.]+)/.exec(repoUrl);
