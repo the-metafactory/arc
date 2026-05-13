@@ -97,6 +97,30 @@ describe("init command", () => {
     expect(result.error).toContain("not a directory");
   });
 
+  test("rejects broken symlink at target path with a clean error (sage P148 cycle 5)", async () => {
+    const { symlink } = await import("fs/promises");
+    const targetDir = join(tempDir, "broken-link");
+    // Point symlink at a path that doesn't exist
+    await symlink(join(tempDir, "does-not-exist"), targetDir);
+
+    const result = await init(targetDir, "MySkill");
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("broken symlink");
+  });
+
+  test("accepts symlink pointing at an existing directory (sage P148 cycle 3 + 5)", async () => {
+    const { mkdir: mkdirP, symlink } = await import("fs/promises");
+    const realDir = join(tempDir, "real-dir");
+    const linkDir = join(tempDir, "link-to-dir");
+    await mkdirP(realDir, { recursive: true });
+    await symlink(realDir, linkDir);
+
+    const result = await init(linkDir, "MySkill");
+    expect(result.success).toBe(true);
+    // Files land in the real target dir via the symlink
+    expect(existsSync(join(realDir, "arc-manifest.yaml"))).toBe(true);
+  });
+
   test("refuses to clobber pre-existing README.md / package.json / etc (sage P148 cycle 3 security)", async () => {
     const targetDir = join(tempDir, "preexisting-files");
     // Operator already has README + package.json

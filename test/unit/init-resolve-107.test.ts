@@ -118,4 +118,45 @@ describe("resolveInitTarget — arc#107 init-in-place", () => {
     expect(r.targetDir).not.toContain("arc-skill-test-blueprint");
     expect(r.targetDir).toBe("/tmp/test-blueprint");
   });
+
+  // Sage P148 cycle 5: case-insensitive match on macOS / Windows.
+  test("name matching cwd case-insensitively → in-place on darwin", () => {
+    const r = ok(resolveInitTarget({
+      argName: "Foo",
+      cwd: "/tmp/foo",
+      platformOverride: "darwin",
+    }));
+    // Name uses the cwd basename's casing (filesystem truth).
+    expect(r.name).toBe("foo");
+    expect(r.targetDir).toBe("/tmp/foo");
+  });
+
+  test("name matching cwd case-insensitively → in-place on win32", () => {
+    const r = ok(resolveInitTarget({
+      argName: "FOO",
+      cwd: "/tmp/foo",
+      platformOverride: "win32",
+    }));
+    expect(r.name).toBe("foo");
+    expect(r.targetDir).toBe("/tmp/foo");
+  });
+
+  test("case-sensitive on linux → 'Foo' vs 'foo' lands in ./Foo/", () => {
+    const r = ok(resolveInitTarget({
+      argName: "Foo",
+      cwd: "/tmp/foo",
+      platformOverride: "linux",
+    }));
+    expect(r.name).toBe("Foo");
+    expect(r.targetDir).toBe("/tmp/foo/Foo");
+  });
+
+  test("exact case still matches on linux (regression: strict equal still works)", () => {
+    const r = ok(resolveInitTarget({
+      argName: "foo",
+      cwd: "/tmp/foo",
+      platformOverride: "linux",
+    }));
+    expect(r.targetDir).toBe("/tmp/foo");
+  });
 });

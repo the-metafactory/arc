@@ -1,6 +1,7 @@
 import { basename, join } from "path";
-import { existsSync, statSync } from "fs";
+import { existsSync, lstatSync, statSync } from "fs";
 import { mkdir } from "fs/promises";
+import { platform } from "os";
 
 export type ArtifactInitType = "skill" | "tool" | "agent" | "prompt" | "pipeline";
 
@@ -50,12 +51,32 @@ export function resolveInitTarget(opts: {
   argName?: string;
   cwd: string;
   dirOverride?: string;
+  /**
+   * Override the platform for matchBy-basename case-folding (test
+   * isolation). Production callers omit this and `os.platform()`
+   * decides. Sage P148 cycle 5 — macOS / Windows are case-insensitive
+   * by default, so `arc init Foo` in `/x/foo` should match in-place.
+   */
+  platformOverride?: NodeJS.Platform;
 }): ResolvedInitTarget {
   const cwdBasename = basename(opts.cwd);
   const arg = opts.argName?.trim();
+  // Case-insensitive match on darwin / win32 (their default filesystems
+  // are case-insensitive); strict on linux + others. The actual `name`
+  // returned uses the cwd basename's casing when matched, so the
+  // manifest reflects what the filesystem actually shows.
+  const plat = opts.platformOverride ?? platform();
+  const caseInsensitive = plat === "darwin" || plat === "win32";
+  const nameMatches =
+    arg !== undefined &&
+    arg !== "" &&
+    arg !== "." &&
+    (caseInsensitive
+      ? arg.toLowerCase() === cwdBasename.toLowerCase()
+      : arg === cwdBasename);
   // `inCwd` decides whether we scaffold in cwd (argless / `.` / matching
   // name) or in a new subdir. Compute once — sage P148 cycle 3 nit.
-  const inCwd = !arg || arg === "." || arg === cwdBasename;
+  const inCwd = !arg || arg === "." || nameMatches;
 
   const name = inCwd ? cwdBasename : arg!;
 
@@ -110,15 +131,50 @@ export async function init(
   author?: string,
   type: ArtifactInitType = "skill"
 ): Promise<InitResult> {
-  // Sage P148 cycle 2 + 3: refuse when targetDir is an existing
-  // non-directory. `statSync` follows symlinks so a symlink-to-directory
-  // is treated as a directory (cycle 3 nit). A regular file or broken
-  // symlink fails fast with a clean error before any partial state lands.
-  if (existsSync(targetDir) && !statSync(targetDir).isDirectory()) {
-    return {
-      success: false,
-      error: `${targetDir} exists and is not a directory`,
-    };
+  // Sage P148 cycles 2 / 3 / 5: refuse when targetDir is unusable.
+  // Three distinct cases require slightly different probes:
+  //   - regular file at the path → reject ("not a directory")
+  //   - symlink pointing at a directory → allow (statSync follows it)
+  //   - broken symlink → reject ("broken symlink"); `existsSync` returns
+  //     false for broken symlinks so the previous existsSync-gated path
+  //     fell through to `mkdir`, which then threw an unhandled EEXIST.
+  // `lstatSync` detects the symlink without following it; on a symlink
+  // we then follow with `statSync` to distinguish good vs broken.
+  let lstat;
+  try {
+    lstat = lstatSync(targetDir);
+  } catch (err: any) {
+    if (err?.code !== "ENOENT") {
+      return {
+        success: false,
+        error: `Cannot access ${targetDir}: ${err?.message ?? err}`,
+      };
+    }
+    // Doesn't exist — fine, mkdir below will create it.
+    lstat = undefined;
+  }
+  if (lstat) {
+    if (lstat.isSymbolicLink()) {
+      try {
+        const resolved = statSync(targetDir);
+        if (!resolved.isDirectory()) {
+          return {
+            success: false,
+            error: `${targetDir} exists and is not a directory`,
+          };
+        }
+      } catch {
+        return {
+          success: false,
+          error: `${targetDir} is a broken symlink`,
+        };
+      }
+    } else if (!lstat.isDirectory()) {
+      return {
+        success: false,
+        error: `${targetDir} exists and is not a directory`,
+      };
+    }
   }
 
   const lowerName = name.replace(/^_/, "").toLowerCase();
