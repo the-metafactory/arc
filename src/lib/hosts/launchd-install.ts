@@ -156,6 +156,69 @@ export async function installLaunchdArtifacts(opts: {
 }
 
 /**
+ * Reverse the launchd-side install at uninstall time (arc#140 P5).
+ *
+ * Symmetric to {@link installLaunchdArtifacts}: removes the binary
+ * symlink from `host.binDir` and the rendered plist from `host.plistDir`.
+ * Does NOT invoke `launchctl bootout` — that side effect lives in the
+ * bot's own `lifecycle.preuninstall` array, which arc runs BEFORE this
+ * function fires.
+ *
+ * Best-effort across both artifacts: ENOENT on either path is swallowed
+ * (idempotent removal), non-ENOENT errors surface via console.warn so
+ * the user sees orphans they need to inspect manually.
+ *
+ * Returns the paths actually removed (for caller-side diagnostics /
+ * test assertions). Empty fields mean "already gone or never declared".
+ */
+export async function removeLaunchdArtifacts(opts: {
+  host: HostAdapter & { paths: DarwinLaunchdHostPaths };
+  manifest: ArcManifest;
+  quiet?: boolean;
+}): Promise<LaunchdInstallRecord> {
+  const removed: LaunchdInstallRecord = {};
+  const provides = opts.manifest.provides ?? {};
+
+  if (provides.binary) {
+    const binName = provides.binary.split("/").pop()!;
+    const binLinkPath = join(opts.host.paths.binDir, binName);
+    try {
+      await unlink(binLinkPath);
+      removed.binSymlink = binLinkPath;
+      if (!opts.quiet) {
+        console.log(`  ✓ Binary unlinked: ${binLinkPath}`);
+      }
+    } catch (err: any) {
+      if (err?.code !== "ENOENT") {
+        console.warn(
+          `  ⚠ remove: failed to unlink launchd binary ${binLinkPath}: ${err?.message ?? err}`,
+        );
+      }
+    }
+  }
+
+  if (provides.plist) {
+    const plistName = provides.plist.split("/").pop()!;
+    const plistPath = join(opts.host.paths.plistDir, plistName);
+    try {
+      await unlink(plistPath);
+      removed.plistPath = plistPath;
+      if (!opts.quiet) {
+        console.log(`  ✓ Plist removed: ${plistPath}`);
+      }
+    } catch (err: any) {
+      if (err?.code !== "ENOENT") {
+        console.warn(
+          `  ⚠ remove: failed to unlink launchd plist ${plistPath}: ${err?.message ?? err}`,
+        );
+      }
+    }
+  }
+
+  return removed;
+}
+
+/**
  * Reverse {@link installLaunchdArtifacts}.
  *
  * Best-effort across both artifacts: an ENOENT on one path doesn't
