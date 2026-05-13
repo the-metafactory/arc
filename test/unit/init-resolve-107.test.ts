@@ -7,17 +7,19 @@
 import { describe, test, expect } from "bun:test";
 import {
   resolveInitTarget,
-  type ResolveInitFailure,
   type ResolvedInitTarget,
 } from "../../src/commands/init.js";
 
-function ok(r: ResolvedInitTarget | ResolveInitFailure): ResolvedInitTarget {
-  if ("reason" in r) throw new Error(`Expected ok, got failure: ${r.detail}`);
+type OkResult = Extract<ResolvedInitTarget, { ok: true }>;
+type FailResult = Extract<ResolvedInitTarget, { ok: false }>;
+
+function ok(r: ResolvedInitTarget): OkResult {
+  if (!r.ok) throw new Error(`Expected ok, got failure: ${r.detail}`);
   return r;
 }
 
-function fail(r: ResolvedInitTarget | ResolveInitFailure): ResolveInitFailure {
-  if (!("reason" in r)) throw new Error(`Expected failure, got ok`);
+function fail(r: ResolvedInitTarget): FailResult {
+  if (r.ok) throw new Error(`Expected failure, got ok`);
   return r;
 }
 

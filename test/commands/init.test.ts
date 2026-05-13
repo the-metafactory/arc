@@ -96,4 +96,31 @@ describe("init command", () => {
     expect(result.success).toBe(false);
     expect(result.error).toContain("not a directory");
   });
+
+  test("refuses to clobber pre-existing README.md / package.json / etc (sage P148 cycle 3 security)", async () => {
+    const targetDir = join(tempDir, "preexisting-files");
+    // Operator already has README + package.json
+    await Bun.write(join(targetDir, "README.md"), "# pre-existing");
+    await Bun.write(join(targetDir, "package.json"), `{"name":"prior"}`);
+
+    const result = await init(targetDir, "MySkill");
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/Refusing to overwrite existing file/);
+
+    // Operator content untouched
+    const readme = await Bun.file(join(targetDir, "README.md")).text();
+    expect(readme).toBe("# pre-existing");
+  });
+
+  test("in-place scaffold layers cleanly when no target files pre-exist", async () => {
+    const targetDir = join(tempDir, "clean-existing");
+    // Operator has unrelated file — scaffold should layer alongside
+    await Bun.write(join(targetDir, "notes.md"), "operator notes");
+
+    const result = await init(targetDir, "MySkill");
+    expect(result.success).toBe(true);
+    const notes = await Bun.file(join(targetDir, "notes.md")).text();
+    expect(notes).toBe("operator notes");
+    expect(existsSync(join(targetDir, "arc-manifest.yaml"))).toBe(true);
+  });
 });

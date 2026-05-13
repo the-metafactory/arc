@@ -609,7 +609,7 @@ program
         cwd: process.cwd(),
         dirOverride: opts.dir,
       });
-      if ("reason" in resolved) {
+      if (!resolved.ok) {
         console.error(`\n❌ ${resolved.detail}`);
         process.exit(1);
       }

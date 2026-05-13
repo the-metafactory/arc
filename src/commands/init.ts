@@ -1,8 +1,32 @@
 import { basename, join } from "path";
-import { existsSync, lstatSync } from "fs";
+import { existsSync, statSync } from "fs";
 import { mkdir } from "fs/promises";
 
 export type ArtifactInitType = "skill" | "tool" | "agent" | "prompt" | "pipeline";
+
+/**
+ * Enumerate the relative paths a scaffold will write for a given type.
+ * Sage P148 cycle 3 security: in-place mode silently overwrote
+ * pre-existing README.md / package.json / SKILL.md / .gitignore via
+ * `Bun.write`. arc#107 documents in-place as "layer cleanly", which is
+ * a lie unless every target is checked before write. This list keeps
+ * the pre-flight check in lockstep with the writes below.
+ */
+function scaffoldFilesFor(type: ArtifactInitType, lowerName: string): string[] {
+  const common = ["arc-manifest.yaml", "package.json", "README.md", ".gitignore"];
+  switch (type) {
+    case "tool":
+      return [...common, `${lowerName}.ts`];
+    case "skill":
+      return [...common, "skill/SKILL.md", "skill/workflows/Main.md"];
+    case "agent":
+      return [...common, `agent/${lowerName}.md`];
+    case "prompt":
+      return [...common, `prompt/${lowerName}.md`];
+    case "pipeline":
+      return [...common, "pipeline.yaml", "A_EXAMPLE/action.json", "A_EXAMPLE/action.ts"];
+  }
+}
 
 /**
  * Resolve `arc init`'s `[name]` arg + cwd into a `{name, targetDir}` tuple
@@ -13,48 +37,35 @@ export type ArtifactInitType = "skill" | "tool" | "agent" | "prompt" | "pipeline
  *   - `<name>` different from basename(cwd) → ./<name>/ (no `arc-<type>-` prefix)
  *   - explicit `dirOverride` (CLI `--dir`) always wins for targetDir
  *
- * Returns `null` when the resolved name OR a `--dir` override would be
- * invalid (path separators in name, `..` traversal, empty name). The
- * caller surfaces the error to stderr.
+ * Returns a discriminated union: `{ok: true, ...}` on success,
+ * `{ok: false, reason, detail}` on validation failure. Discriminate
+ * via `r.ok` (explicit boolean per sage P148 cycle 3 — implicit
+ * field-absence discriminators are fragile to type drift).
  */
-export interface ResolvedInitTarget {
-  name: string;
-  targetDir: string;
-}
-
-export interface ResolveInitFailure {
-  reason: "invalid-name" | "invalid-dir";
-  detail: string;
-}
+export type ResolvedInitTarget =
+  | { ok: true; name: string; targetDir: string }
+  | { ok: false; reason: "invalid-name" | "invalid-dir"; detail: string };
 
 export function resolveInitTarget(opts: {
   argName?: string;
   cwd: string;
   dirOverride?: string;
-}): ResolvedInitTarget | ResolveInitFailure {
+}): ResolvedInitTarget {
   const cwdBasename = basename(opts.cwd);
   const arg = opts.argName?.trim();
+  // `inCwd` decides whether we scaffold in cwd (argless / `.` / matching
+  // name) or in a new subdir. Compute once — sage P148 cycle 3 nit.
+  const inCwd = !arg || arg === "." || arg === cwdBasename;
 
-  // Resolve the name first.
-  let name: string;
-  if (!arg || arg === ".") {
-    name = cwdBasename;
-  } else {
-    name = arg;
-  }
+  const name = inCwd ? cwdBasename : arg!;
 
   if (!name || /[\/\\]|\.\./.test(name)) {
     return {
+      ok: false,
       reason: "invalid-name",
       detail: `"${name}" is not a valid package name (no path separators, no "..", non-empty).`,
     };
   }
-
-  // Resolve targetDir. argless / `.` / matching-name all collapse to "in
-  // cwd"; only a different name lands in `./<name>/`. dirOverride wins.
-  const inCwd = !arg || arg === "." || arg === cwdBasename;
-  const targetDir =
-    opts.dirOverride ?? (inCwd ? opts.cwd : join(opts.cwd, name));
 
   // Sage P148 security: validate `--dir` parity with name. Prevent
   // path-traversal-into-shadow scenarios where a wrapper passes
@@ -62,13 +73,17 @@ export function resolveInitTarget(opts: {
   if (opts.dirOverride !== undefined) {
     if (opts.dirOverride === "" || /\.\.(\/|\\|$)/.test(opts.dirOverride)) {
       return {
+        ok: false,
         reason: "invalid-dir",
         detail: `"${opts.dirOverride}" is not a valid --dir target (no "..", non-empty).`,
       };
     }
   }
 
-  return { name, targetDir };
+  const targetDir =
+    opts.dirOverride ?? (inCwd ? opts.cwd : join(opts.cwd, name));
+
+  return { ok: true, name, targetDir };
 }
 
 export interface InitResult {
@@ -95,32 +110,46 @@ export async function init(
   author?: string,
   type: ArtifactInitType = "skill"
 ): Promise<InitResult> {
-  // Sage P148 cycle 2: refuse when targetDir is an existing non-directory
-  // (regular file, symlink to file). `mkdir({recursive: true})` would
-  // throw `EEXIST` mid-scaffold, partially written. Surface a clean
-  // error first.
-  if (existsSync(targetDir) && !lstatSync(targetDir).isDirectory()) {
+  // Sage P148 cycle 2 + 3: refuse when targetDir is an existing
+  // non-directory. `statSync` follows symlinks so a symlink-to-directory
+  // is treated as a directory (cycle 3 nit). A regular file or broken
+  // symlink fails fast with a clean error before any partial state lands.
+  if (existsSync(targetDir) && !statSync(targetDir).isDirectory()) {
     return {
       success: false,
       error: `${targetDir} exists and is not a directory`,
     };
   }
-  // Refuse only if a manifest already lives at the target — the
-  // unambiguous signal that the directory is already an arc package.
-  // Other files (a fresh git clone with only .git/, an empty package.json
-  // from `npm init -y`, etc.) are fine; we layer the scaffold on top.
-  if (existsSync(join(targetDir, "arc-manifest.yaml"))) {
-    return {
-      success: false,
-      error: `arc-manifest.yaml already exists in ${targetDir} — refusing to overwrite`,
-    };
+
+  const lowerName = name.replace(/^_/, "").toLowerCase();
+
+  // Sage P148 cycle 3 security: pre-flight check ALL files the scaffold
+  // is about to write. Refuse if any exist — arc never overwrites
+  // operator content. arc-manifest.yaml gets a dedicated error message
+  // because it's the unambiguous "already an arc package" signal; the
+  // others share a generic message naming the offending path.
+  const filesToWrite = scaffoldFilesFor(type, lowerName);
+  for (const rel of filesToWrite) {
+    const abs = join(targetDir, rel);
+    if (existsSync(abs)) {
+      if (rel === "arc-manifest.yaml") {
+        return {
+          success: false,
+          error: `arc-manifest.yaml already exists in ${targetDir} — refusing to overwrite`,
+        };
+      }
+      return {
+        success: false,
+        error: `Refusing to overwrite existing file: ${abs}`,
+      };
+    }
   }
+
   await mkdir(targetDir, { recursive: true });
 
   const authorName = author ?? "username";
   const files: string[] = [];
   const prefix = `arc-${type}`;
-  const lowerName = name.replace(/^_/, "").toLowerCase();
 
   // ── Directory structure ──────────────────────────────────────────────────
 
