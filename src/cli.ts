@@ -11,7 +11,7 @@ import { disable } from "./commands/disable.js";
 import { enable } from "./commands/enable.js";
 import { remove, removeLibrary } from "./commands/remove.js";
 import { verify, formatVerify } from "./commands/verify.js";
-import { init } from "./commands/init.js";
+import { init, resolveInitTarget } from "./commands/init.js";
 import { upgradeCore, formatUpgrade } from "./commands/upgrade-core.js";
 import { selfUpdate, formatSelfUpdate, checkSelfUpdate, formatSelfUpdateCheck } from "./commands/self-update.js";
 import {
@@ -573,7 +573,7 @@ program
   });
 
 program
-  .command("init <name>")
+  .command("init [name]")
   .description("Scaffold a new skill, tool, agent, or prompt repo")
   .option("-d, --dir <path>", "Target directory")
   .option("-a, --author <name>", "Author GitHub username")
@@ -583,7 +583,7 @@ program
   )
   .action(
     async (
-      name: string,
+      name: string | undefined,
       opts: { dir?: string; author?: string; type?: string }
     ) => {
       const validTypes = ["skill", "tool", "agent", "prompt", "pipeline"] as const;
@@ -601,17 +601,20 @@ program
         process.exit(1);
       }
 
-      // Sanitize name — prevent path traversal
-      if (/[\/\\]|\.\./.test(name)) {
-        console.error(`\n❌ Invalid name "${name}". Name must not contain path separators or "..".`);
+      // arc#107 — resolve name + targetDir with init-in-place semantics.
+      // See `resolveInitTarget` for the matrix; logic lives there as a pure
+      // function so it's unit-testable.
+      const resolved = resolveInitTarget({
+        argName: name,
+        cwd: process.cwd(),
+        dirOverride: opts.dir,
+      });
+      if (!resolved.ok) {
+        console.error(`\n❌ ${resolved.detail}`);
         process.exit(1);
       }
 
-      const prefix = `arc-${artifactType}`;
-      const targetDir =
-        opts.dir ??
-        `./${prefix}-${name.replace(/^_/, "").toLowerCase()}`;
-      const result = await init(targetDir, name, opts.author, artifactType);
+      const result = await init(resolved.targetDir, resolved.name, opts.author, artifactType);
 
       if (result.success) {
         console.log(`\n✅ Scaffolded ${artifactType} at ${result.path}`);
