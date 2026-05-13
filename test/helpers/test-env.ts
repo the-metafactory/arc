@@ -108,7 +108,11 @@ export async function createMockSkillRepo(
       postinstall?: { path: string; content: string };
       preupgrade?: { path: string; content: string };
       postupgrade?: { path: string; content: string };
+      preremove?: { path: string; content: string };
     };
+    /** provides.files entries to declare in the manifest. Source files
+     *  are created on disk so install can symlink them. */
+    files?: Array<{ source: string; target: string; content?: string }>;
   }
 ): Promise<MockSkillRepo> {
   const repoDir = join(root, `mock-${opts.name}`);
@@ -170,6 +174,15 @@ export async function createMockSkillRepo(
     }
   }
 
+  // Create source files referenced by provides.files. install needs the
+  // source to exist or it bails out via the pre-validation pass in
+  // createArtifactSymlinks (#84).
+  if (opts.files?.length) {
+    for (const f of opts.files) {
+      await Bun.write(join(repoDir, f.source), f.content ?? `// mock ${f.source}\n`);
+    }
+  }
+
   // Create arc-manifest.yaml (unless testing without it)
   if (!opts.withoutManifest) {
     const caps = opts.capabilities ?? {};
@@ -191,6 +204,9 @@ export async function createMockSkillRepo(
               { command: `bun src/tool.ts`, name: opts.name.replace(/^_/, "").toLowerCase() },
               ...(opts.extraCli ?? []),
             ] }
+          : {}),
+        ...(opts.files?.length
+          ? { files: opts.files.map((f) => ({ source: f.source, target: f.target })) }
           : {}),
       },
       depends_on: { tools: [{ name: "bun", version: ">=1.0.0" }] },
