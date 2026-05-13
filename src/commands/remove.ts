@@ -11,7 +11,7 @@ import type {
 import { getSkill, removeSkill, listByLibrary } from "../lib/db.js";
 import { removeSymlink, removeCliShim, extractAllCliInfo } from "../lib/symlinks.js";
 import { readManifest } from "../lib/manifest.js";
-import { removeHooks, hasHooks } from "../lib/hooks.js";
+import { removeHooks } from "../lib/hooks.js";
 import { findGitRoot } from "../lib/paths.js";
 import { unwireExtensions } from "../lib/extensions.js";
 import { runLifecycleScripts, runScript } from "../lib/scripts.js";
@@ -374,11 +374,17 @@ export async function remove(
     }
   }
 
-  // Remove hooks from settings.json (before deleting repo)
-  if (hasHooks(manifest?.provides?.hooks)) {
-    const settingsPath = host.paths.settingsPath;
-    await removeHooks(name, settingsPath);
-  }
+  // Remove hooks from settings.json (before deleting repo).
+  //
+  // arc#137: always invoke removeHooks regardless of manifest state.
+  // The filter inside removeHooks keys on the `_pai_pkg` tag written at
+  // install time, so it's safe (and idempotent) to call when the source
+  // repo was deleted out-of-band and the manifest no longer parses.
+  // Gating on `manifest?.provides?.hooks` was wrong: a missing or
+  // unreadable manifest left settings.json entries pointing at paths
+  // that no longer exist, surfacing as "No such file or directory"
+  // errors on every Claude Code session start.
+  await removeHooks(name, host.paths.settingsPath);
 
   // Remove extensions (before deleting repo)
   if (manifest?.extensions) {
