@@ -434,10 +434,12 @@ program
   .command("remove <name>")
   .description("Completely uninstall a skill (supports library:artifact syntax)")
   .option("--library <name>", "Remove all artifacts from a library")
-  .action(async (name: string, opts: { library?: string }) => {
+  .option("-y, --yes", "Run non-interactively, suppress prompts")
+  .action(async (name: string, opts: { library?: string; yes?: boolean }) => {
     const paths = createArcPaths();
     const db = openDatabase(paths.dbPath);
     const host = getDefaultHost();
+    const removeOpts = { yes: opts.yes };
 
     if (opts.library) {
       // Remove all artifacts from a library
@@ -445,7 +447,7 @@ program
       const libArtifacts = listByLibrary(db, opts.library);
       if (libArtifacts.length) {
         for (const art of libArtifacts) {
-          const result = await remove(db, paths, host, art.name);
+          const result = await remove(db, paths, host, art.name, removeOpts);
           if (result.success) {
             console.log(`🗑️  Removed ${result.name}`);
           }
@@ -459,13 +461,13 @@ program
       const libRef = parseLibraryRef(name);
       const removeName = libRef?.artifactName ?? name;
 
-      const result = await remove(db, paths, host, removeName);
+      const result = await remove(db, paths, host, removeName, removeOpts);
 
       if (result.success) {
         console.log(`🗑️  Removed ${result.name}`);
       } else {
         // Artifact not found — check if name matches a library
-        const libResult = await removeLibrary(db, paths, host, removeName);
+        const libResult = await removeLibrary(db, paths, host, removeName, removeOpts);
         if (libResult.success) {
           console.log(`🗑️  Removed ${libResult.removedCount} artifact(s) from library '${removeName}'`);
         } else {

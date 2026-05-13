@@ -9,6 +9,19 @@ const TEST_ACCOUNT = "OP_JC";
 const TEST_BOT = "arc-test-bot";
 const CREDS_PATH = join(homedir(), ".config", "nats", `${TEST_BOT}.creds`);
 
+// The validation tests below spawn the CLI which calls `nsc add user ...`,
+// which fails up-front with "account not in operator" if the test account
+// isn't registered under whoever the active operator happens to be. The
+// error message in that case has nothing to do with subject validation, so
+// these tests are environment-skewed unless the operator carries OP_JC.
+// Skip cleanly when the account isn't available rather than asserting on
+// an unrelated nsc failure (was producing flake — see arc#138 sweep).
+const TEST_ACCOUNT_AVAILABLE = (() => {
+  if (!NSC_AVAILABLE) return false;
+  const probe = Bun.spawnSync(["nsc", "list", "accounts"], { stdout: "pipe", stderr: "pipe" });
+  return probe.exitCode === 0 && probe.stdout.toString().includes(TEST_ACCOUNT);
+})();
+
 // `removeBot` now requires server-side revocation push (#130). The local nsc
 // lifecycle test only runs against an operator whose JWT carries a reachable
 // account-jwt-server URL. `nsc push --diff` is non-destructive and reports
@@ -64,7 +77,7 @@ describe("nats commands", () => {
   });
 
   describe("subject validation", () => {
-    test.skipIf(!NSC_AVAILABLE)("rejects subjects with shell metacharacters via CLI", () => {
+    test.skipIf(!NSC_AVAILABLE || !TEST_ACCOUNT_AVAILABLE)("rejects subjects with shell metacharacters via CLI", () => {
       const result = Bun.spawnSync(["bun", "src/cli.ts", "nats", "add-bot", "subj-test",
         "-a", TEST_ACCOUNT, "--pub", "valid.subject,$(evil)",
       ], { cwd: join(import.meta.dir, "../.."), stderr: "pipe" });
@@ -73,7 +86,7 @@ describe("nats commands", () => {
       expect(result.stderr.toString()).toContain("Invalid NATS subject");
     });
 
-    test.skipIf(!NSC_AVAILABLE)("rejects invalid bot name via CLI", () => {
+    test.skipIf(!NSC_AVAILABLE || !TEST_ACCOUNT_AVAILABLE)("rejects invalid bot name via CLI", () => {
       const result = Bun.spawnSync(["bun", "src/cli.ts", "nats", "add-bot", "UPPER-CASE",
         "-a", TEST_ACCOUNT,
       ], { cwd: join(import.meta.dir, "../.."), stderr: "pipe" });

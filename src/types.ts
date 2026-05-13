@@ -222,6 +222,9 @@ export interface ArcManifest {
     postinstall?: string;
     preupgrade?: string;
     postupgrade?: string;
+    /** Runs before `arc remove` tears down symlinks / hooks / repo. Used to
+     *  stop daemons, unload launchd plists, etc. */
+    preremove?: string;
   };
   /** Optional namespace for publishing (alternative to account default) */
   namespace?: string;

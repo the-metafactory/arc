@@ -1,5 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { existsSync } from "fs";
+import { lstat, readlink, unlink, writeFile } from "fs/promises";
 import { join } from "path";
 import {
   createTestEnv,
@@ -166,5 +167,162 @@ describe("removeLibrary", () => {
     const result = await removeLibrary(env.db, env.arc, env.host, "nonexistent");
     expect(result.success).toBe(false);
     expect(result.error).toContain("not installed");
+  });
+});
+
+describe("remove parity with install (arc#138)", () => {
+  test("accepts -y / yes option", async () => {
+    const repo = await createMockSkillRepo(env.root, {
+      name: "YesFlag",
+    });
+    await install({
+      arc: env.arc, host: env.host,
+      db: env.db,
+      repoUrl: repo.url,
+      yes: true,
+    });
+
+    // Smoke: opts.yes is accepted without throwing, mirrors install.
+    const result = await remove(env.db, env.arc, env.host, "YesFlag", { yes: true });
+    expect(result.success).toBe(true);
+    expect(getSkill(env.db, "YesFlag")).toBeNull();
+  });
+
+  test("reverse-iterates provides.files and removes installed symlinks", async () => {
+    const fileTargetA = join(env.root, "fake-home", "plistA");
+    const fileTargetB = join(env.root, "fake-home", "plistB");
+    const repo = await createMockSkillRepo(env.root, {
+      name: "FilesPkg",
+      files: [
+        { source: "files/plist-a", target: fileTargetA, content: "PLIST A\n" },
+        { source: "files/plist-b", target: fileTargetB, content: "PLIST B\n" },
+      ],
+    });
+
+    const installed = await install({
+      arc: env.arc, host: env.host,
+      db: env.db,
+      repoUrl: repo.url,
+      yes: true,
+    });
+    expect(installed.success).toBe(true);
+
+    // Both targets must be valid symlinks before remove.
+    expect((await lstat(fileTargetA)).isSymbolicLink()).toBe(true);
+    expect((await lstat(fileTargetB)).isSymbolicLink()).toBe(true);
+
+    const result = await remove(env.db, env.arc, env.host, "FilesPkg", { yes: true });
+    expect(result.success).toBe(true);
+
+    expect(existsSync(fileTargetA)).toBe(false);
+    expect(existsSync(fileTargetB)).toBe(false);
+  });
+
+  test("leaves hand-edited files untouched (symlink replaced by regular file)", async () => {
+    const fileTarget = join(env.root, "fake-home", "kept");
+    const repo = await createMockSkillRepo(env.root, {
+      name: "HandEdited",
+      files: [{ source: "files/orig", target: fileTarget, content: "from-pkg\n" }],
+    });
+
+    await install({
+      arc: env.arc, host: env.host,
+      db: env.db,
+      repoUrl: repo.url,
+      yes: true,
+    });
+
+    // Operator replaces the arc-installed symlink with their own regular file.
+    await unlink(fileTarget);
+    await writeFile(fileTarget, "operator-customised\n", "utf8");
+
+    const result = await remove(env.db, env.arc, env.host, "HandEdited", { yes: true });
+    expect(result.success).toBe(true);
+
+    // Regular file MUST survive — arc has no business deleting user content.
+    expect(existsSync(fileTarget)).toBe(true);
+    expect((await lstat(fileTarget)).isSymbolicLink()).toBe(false);
+  });
+
+  test("leaves symlinks pointing somewhere else untouched", async () => {
+    const fileTarget = join(env.root, "fake-home", "redirected");
+    const elsewhere = join(env.root, "elsewhere.txt");
+    await writeFile(elsewhere, "from-elsewhere\n", "utf8");
+
+    const repo = await createMockSkillRepo(env.root, {
+      name: "Redirected",
+      files: [{ source: "files/x", target: fileTarget, content: "from-pkg\n" }],
+    });
+
+    await install({
+      arc: env.arc, host: env.host,
+      db: env.db,
+      repoUrl: repo.url,
+      yes: true,
+    });
+
+    // Operator re-points the symlink to a file outside the package.
+    await unlink(fileTarget);
+    const { symlink } = await import("fs/promises");
+    await symlink(elsewhere, fileTarget);
+
+    const result = await remove(env.db, env.arc, env.host, "Redirected", { yes: true });
+    expect(result.success).toBe(true);
+
+    // Symlink (and the file it points at) MUST survive.
+    expect((await lstat(fileTarget)).isSymbolicLink()).toBe(true);
+    expect(await readlink(fileTarget)).toBe(elsewhere);
+    expect(existsSync(elsewhere)).toBe(true);
+  });
+
+  test("fires scripts.preremove before tearing down the package", async () => {
+    const markerPath = join(env.root, "preremove-ran");
+    const fileTarget = join(env.root, "fake-home", "tracked");
+    const repo = await createMockSkillRepo(env.root, {
+      name: "PreRemoveSkill",
+      files: [{ source: "files/tracked", target: fileTarget, content: "tracked\n" }],
+      scripts: {
+        preremove: {
+          path: "./scripts/preremove.sh",
+          // Capture whether the symlink still exists at preremove time.
+          // If preremove fires AFTER teardown the file would already be gone.
+          content: `#!/bin/bash\nif [ -L "${fileTarget}" ]; then echo "preremove-pre-teardown" > "${markerPath}"; else echo "preremove-post-teardown" > "${markerPath}"; fi\n`,
+        },
+      },
+    });
+
+    await install({
+      arc: env.arc, host: env.host,
+      db: env.db,
+      repoUrl: repo.url,
+      yes: true,
+    });
+
+    const result = await remove(env.db, env.arc, env.host, "PreRemoveSkill", { yes: true });
+    expect(result.success).toBe(true);
+
+    expect(existsSync(markerPath)).toBe(true);
+    const content = await Bun.file(markerPath).text();
+    expect(content.trim()).toBe("preremove-pre-teardown");
+
+    // And the file the marker referenced is gone after the remove completes.
+    expect(existsSync(fileTarget)).toBe(false);
+  });
+
+  test("no preremove script in manifest → remove is still a no-op for that hook", async () => {
+    const repo = await createMockSkillRepo(env.root, {
+      name: "NoPreRemove",
+    });
+    await install({
+      arc: env.arc, host: env.host,
+      db: env.db,
+      repoUrl: repo.url,
+      yes: true,
+    });
+
+    // Should succeed without trying to run any preremove script.
+    const result = await remove(env.db, env.arc, env.host, "NoPreRemove", { yes: true });
+    expect(result.success).toBe(true);
+    expect(getSkill(env.db, "NoPreRemove")).toBeNull();
   });
 });
