@@ -95,11 +95,11 @@ export function recordInstall(
     skill.install_path,
     skill.skill_dir,
     skill.status,
-    skill.artifact_type || "skill",
-    skill.tier || manifest.tier || "custom",
-    skill.customization_path || null,
-    skill.install_source || null,
-    skill.library_name || null,
+    skill.artifact_type,
+    skill.tier,
+    skill.customization_path,
+    skill.install_source,
+    skill.library_name,
     skill.installed_at || now,
     skill.updated_at || now
   );

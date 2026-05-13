@@ -293,7 +293,7 @@ export async function remove(
       installPath: skill.install_path,
       scriptPath: manifest.scripts.preremove,
       hookName: "preremove",
-      quiet: opts.yes || opts.quiet,
+      quiet: opts.yes === true || opts.quiet === true,
     });
     if (!preResult.success && !preResult.skipped) {
       console.warn(

@@ -53,7 +53,7 @@ export default tseslint.config(
       //                           cannot prove it from generics
       //   no-empty-function ..... 25 → catch blocks with `{}` (intentional swallow)
       //   no-non-null-assertion . 23 → `result.files!` after success-narrow
-      //   prefer-nullish-coalescing  8 → idiomatic `||` for string defaults
+      //   prefer-nullish-coalescing  → 0 (promoted to error)
       //   no-explicit-any ...... infra layers that bridge untyped surfaces
       //   no-unsafe-* .......... Bun.spawnSync / process / yaml-parsed
       //                           dynamic data flows through these
@@ -72,7 +72,7 @@ export default tseslint.config(
       "@typescript-eslint/await-thenable": "error",
       "@typescript-eslint/no-empty-function": "warn",
       "@typescript-eslint/no-non-null-assertion": "warn",
-      "@typescript-eslint/prefer-nullish-coalescing": "warn",
+      "@typescript-eslint/prefer-nullish-coalescing": "error",
       "@typescript-eslint/no-explicit-any": "warn",
       "@typescript-eslint/no-unsafe-assignment": "warn",
       "@typescript-eslint/no-unsafe-member-access": "warn",

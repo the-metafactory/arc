@@ -512,7 +512,7 @@ async function installSkillEntry(
   entry: CatalogEntry
 ): Promise<EntryInstallResult> {
   const resolved = resolveSource(entry.source);
-  const isCli = entry.has_cli || entry.bundle;
+  const isCli = entry.has_cli === true || entry.bundle === true;
   const baseDir = isCli ? arc.reposDir : host.paths.skillsDir;
   const installDir = join(baseDir, entry.name);
   const skillLinkDir = join(host.paths.skillsDir, entry.name);

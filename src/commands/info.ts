@@ -329,8 +329,8 @@ export function formatInfo(result: InfoResult): string {
   const lines: string[] = [
     `${skill.name} v${skill.version}`,
     `  Status: ${skill.status}`,
-    `  Tier: ${skill.tier || "custom"}`,
-    `  Source: ${skill.install_source || "direct"}`,
+    `  Tier: ${skill.tier}`,
+    `  Source: ${skill.install_source ?? "direct"}`,
     `  Repo: ${skill.repo_url}`,
     `  Path: ${skill.install_path}`,
     `  Installed: ${skill.installed_at}`,

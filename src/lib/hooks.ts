@@ -205,9 +205,7 @@ export async function registerHooks(
 ): Promise<void> {
   const settings = await readSettings(settingsPath);
 
-  if (!settings.hooks) {
-    settings.hooks = {};
-  }
+  settings.hooks ??= {};
 
   for (const hook of hooks) {
     if (!settings.hooks[hook.event]) {
