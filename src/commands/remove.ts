@@ -2,19 +2,26 @@ import { join } from "path";
 import { rm, lstat, readlink, unlink } from "fs/promises";
 import { homedir } from "os";
 import type { Database } from "bun:sqlite";
-import type { ArcPaths, HostAdapter } from "../types.js";
+import type {
+  ArcManifest,
+  ArcPaths,
+  DarwinLaunchdHostPaths,
+  HostAdapter,
+  HostId,
+} from "../types.js";
 import { getSkill, removeSkill, listByLibrary } from "../lib/db.js";
 import { removeSymlink, removeCliShim, extractAllCliInfo } from "../lib/symlinks.js";
 import { readManifest } from "../lib/manifest.js";
 import { removeHooks, hasHooks } from "../lib/hooks.js";
 import { findGitRoot } from "../lib/paths.js";
 import { unwireExtensions } from "../lib/extensions.js";
-import { runScript } from "../lib/scripts.js";
-
-export interface RemoveOptions {
-  /** Suppress interactive prompts / informational output (for non-interactive / test use). */
-  yes?: boolean;
-}
+import { runLifecycleScripts, runScript } from "../lib/scripts.js";
+import {
+  type HostOverrides,
+  orderTargetsForInstall,
+  resolveHost,
+} from "../lib/hosts/registry.js";
+import { removeLaunchdArtifacts } from "../lib/hosts/launchd-install.js";
 
 export interface RemoveResult {
   success: boolean;
@@ -23,57 +30,264 @@ export interface RemoveResult {
   removedCount?: number;
 }
 
+export interface RemoveOptions {
+  /** Suppress interactive prompts / informational output (arc#138). */
+  yes?: boolean;
+  /**
+   * Suppress console output (for non-interactive / test use). Passed
+   * through to lifecycle script runs.
+   */
+  quiet?: boolean;
+  /**
+   * Per-host adapter overrides for multi-target removes (arc#140 P5).
+   * Mirrors `InstallOptions.hostOverrides`.
+   */
+  hostOverrides?: HostOverrides;
+}
+
+/**
+ * Run the preuninstall phase (arc#140 P5): `scripts.preuninstall` (single
+ * script) first, then `lifecycle.preuninstall` (ordered array). The arc#140
+ * design (cortex `docs/design-arc-agent-bots.md` §8.3) requires
+ * preuninstall scripts to fire BEFORE any symlinks are removed — typical
+ * sequence is launchctl unload → drain → signal cortex reload, all of
+ * which need the agent fragment + binary still on disk.
+ *
+ * Symmetric to runPreinstallPhase / runPostinstallPhase in install.ts.
+ * On any script failure the function returns the error string; caller
+ * decides whether to abort the uninstall. Per the design doc's
+ * D7 ("abort-on-revoke-failure"), arc remove aborts to avoid leaving
+ * phantom state — the operator can investigate and retry.
+ */
+function runPreuninstallPhase(
+  installPath: string,
+  manifest: ArcManifest | null,
+  quiet?: boolean,
+): { success: true } | { success: false; error: string } {
+  if (!manifest) return { success: true };
+
+  const lifecycle = manifest.lifecycle?.preuninstall;
+  if (lifecycle && lifecycle.length > 0) {
+    const result = runLifecycleScripts({
+      installPath,
+      scriptPaths: lifecycle,
+      phase: "preuninstall",
+      quiet,
+    });
+    if (!result.success) {
+      return {
+        success: false,
+        error: `Preuninstall lifecycle script failed: ${result.failedAt} (exit ${result.steps.at(-1)?.exitCode ?? "?"})`,
+      };
+    }
+  }
+
+  return { success: true };
+}
+
+/**
+ * Run the postuninstall phase (arc#140 P5): `lifecycle.postuninstall`
+ * (ordered array). Fires AFTER symlinks + plist + binary are removed,
+ * so it's safe for scripts that signal cortex to re-read agents.d/
+ * (which is now empty of this bot).
+ *
+ * Failures in postuninstall do NOT roll the uninstall back (the
+ * artifacts are already gone) — they're surfaced to the operator
+ * as warnings.
+ */
+function runPostuninstallPhase(
+  installPath: string,
+  manifest: ArcManifest | null,
+  quiet?: boolean,
+): { success: true } | { success: false; error: string } {
+  if (!manifest) return { success: true };
+
+  const lifecycle = manifest.lifecycle?.postuninstall;
+  if (lifecycle && lifecycle.length > 0) {
+    const result = runLifecycleScripts({
+      installPath,
+      scriptPaths: lifecycle,
+      phase: "postuninstall",
+      quiet,
+    });
+    if (!result.success) {
+      return {
+        success: false,
+        error: `Postuninstall lifecycle script failed: ${result.failedAt} (exit ${result.steps.at(-1)?.exitCode ?? "?"})`,
+      };
+    }
+  }
+
+  return { success: true };
+}
+
+/**
+ * Multi-target uninstall walk (arc#140 P5).
+ *
+ * Reverses the install ordering: supervision hosts (darwin-launchd,
+ * linux-systemd) FIRST so the daemon stops and releases its NATS
+ * connection BEFORE the registry-side fragment is removed (per cortex
+ * `docs/design-arc-agent-bots.md` §8.3 "revoke creds BEFORE removing
+ * files").
+ *
+ * For each target:
+ *   - darwin-launchd → removeLaunchdArtifacts (plist + binary symlink)
+ *   - cortex / claude-code → remove the type-appropriate artifact
+ *     symlink from that host's directory
+ *
+ * Errors are best-effort: a missing artifact on one target does not
+ * abort the others. Non-ENOENT errors surface via console.warn.
+ */
+async function removePerTarget(opts: {
+  targets: HostId[];
+  manifest: ArcManifest;
+  packageName: string;
+  hostOverrides?: HostOverrides;
+  quiet?: boolean;
+}): Promise<void> {
+  const reverseOrder = [...orderTargetsForInstall(opts.targets)].reverse();
+
+  for (const targetId of reverseOrder) {
+    const targetHost = resolveHost(targetId, opts.hostOverrides);
+
+    if (targetId === "darwin-launchd") {
+      await removeLaunchdArtifacts({
+        host: targetHost as HostAdapter & { paths: DarwinLaunchdHostPaths },
+        manifest: opts.manifest,
+        quiet: opts.quiet,
+      });
+      continue;
+    }
+
+    // registry hosts (cortex, claude-code): unlink the type-conventional
+    // artifact symlink from this host's directory. Same per-type dispatch
+    // as the single-host path below — factored so the inline reuses it.
+    await removeArtifactFromHost(
+      opts.manifest.type,
+      opts.packageName,
+      targetHost,
+    );
+
+    // provides.files (e.g. cortex's <name>.md fragment) — unlink each
+    // declared target path.
+    for (const f of opts.manifest.provides?.files ?? []) {
+      const home = process.env.HOME ?? "";
+      const target = f.target.replace(/^~/, home);
+      await removeSymlink(target);
+    }
+  }
+}
+
+/**
+ * Remove the type-conventional artifact symlink from one host adapter.
+ *
+ * Pulled out of the legacy single-host remove path so both that path
+ * and {@link removePerTarget} share the same per-type unlink logic.
+ */
+async function removeArtifactFromHost(
+  type: ArcManifest["type"],
+  name: string,
+  host: HostAdapter,
+): Promise<void> {
+  switch (type) {
+    case "agent": {
+      const mdLink = join(host.paths.agentsDir, `${name}.md`);
+      const dirLink = join(host.paths.agentsDir, name);
+      if (!(await removeSymlink(mdLink))) {
+        await removeSymlink(dirLink);
+      }
+      return;
+    }
+    case "prompt": {
+      const mdLink = join(host.paths.promptsDir, `${name}.md`);
+      const dirLink = join(host.paths.promptsDir, name);
+      if (!(await removeSymlink(mdLink))) {
+        await removeSymlink(dirLink);
+      }
+      return;
+    }
+    case "tool": {
+      const binLink = join(host.paths.binDir, name);
+      await removeSymlink(binLink);
+      return;
+    }
+    case "skill":
+    case "system":
+    case "component":
+    case "rules":
+    case "library":
+    case "pipeline":
+    default: {
+      const skillLink = join(host.paths.skillsDir, name);
+      await removeSymlink(skillLink);
+      return;
+    }
+  }
+}
+
 /**
  * Completely remove an installed skill.
  *
  * Mirrors `install` in reverse:
- *  1. Fire `scripts.preremove` (if declared) so the package can stop daemons
- *     and clean up host-side state (launchd plists, etc.) BEFORE its repo +
- *     symlinks are torn down. See arc#138.
- *  2. Tear down primary symlink (skill/agent/tool/...) and CLI shims.
- *  3. Remove hooks from settings.json and unwire extensions.
- *  4. Reverse-iterate `provides.files` and unlink each target IFF it is a
- *     symlink pointing at the source we installed (hand-edited files are
- *     left in place with a warning).
- *  5. Delete the DB row and the cloned repo directory.
+ *  1. Fire `scripts.preremove` (if declared, arc#138) so the package can
+ *     stop daemons and clean up host-side state BEFORE its repo + symlinks
+ *     are torn down. Failures here warn but do not abort.
+ *  2. arc#140 P5: run `lifecycle.preuninstall` array (in declared order).
+ *     The bot's daemon needs the binary + creds in place to drain/unload.
+ *     Per design doc §10.1 D7, a failure here ABORTS the remove (phantom
+ *     state is worse than refusing the operation).
+ *  3. For packages declaring `targets:` (standalone-bot agents): walk each
+ *     target's artifacts in REVERSE install order (supervision hosts FIRST,
+ *     registry hosts LAST).
+ *  4. Otherwise: tear down primary symlink (skill/agent/tool/…).
+ *  5. CLI shims, hooks, extensions cleanup.
+ *  6. Reverse-iterate `provides.files` and unlink each target IFF it is a
+ *     symlink pointing at the source we installed (arc#138 safety).
+ *  7. Delete the DB row.
+ *  8. arc#140 P5: run `lifecycle.postuninstall` array. Failures warn only.
+ *  9. Delete the cloned repo directory.
  */
 export async function remove(
   db: Database,
   arc: ArcPaths,
   host: HostAdapter,
   name: string,
-  opts: RemoveOptions = {}
+  opts: RemoveOptions = {},
 ): Promise<RemoveResult> {
   const skill = getSkill(db, name);
   if (!skill) {
     return { success: false, error: `Skill '${name}' is not installed` };
   }
 
-  // Read manifest up-front. Needed for preremove firing, provides.files
-  // cleanup, CLI shim names, and hooks teardown. Best-effort: if the manifest
-  // is unreadable (corrupted clone, manual rm -rf, etc.) we fall through with
-  // a null manifest and skip the manifest-driven cleanup steps — the DB row
-  // and primary symlink will still be removed.
+  // Read manifest up-front. Needed for preremove firing, lifecycle scripts,
+  // provides.files cleanup, CLI shim names, and hooks teardown. Best-effort:
+  // if the manifest is unreadable (corrupted clone, manual rm -rf), fall
+  // through with a null manifest — DB row and primary symlink still removed.
   const manifest = await readManifest(skill.install_path).catch(() => null);
 
-  // 1. Fire preremove script BEFORE anything is torn down. Same shape as
-  //    preinstall/preupgrade — gives the package a chance to stop daemons,
-  //    unload launchd plists, etc. while its files and symlinks still exist.
-  //    Missing script falls through silently via runScript's skipped path.
+  // 1. Fire scripts.preremove (arc#138) — non-aborting on failure.
   if (manifest?.scripts?.preremove) {
     const preResult = runScript({
       installPath: skill.install_path,
       scriptPath: manifest.scripts.preremove,
       hookName: "preremove",
-      quiet: opts.yes,
+      quiet: opts.yes || opts.quiet,
     });
     if (!preResult.success && !preResult.skipped) {
-      // Do NOT abort: a failing preremove (e.g. daemon already stopped) must
-      // not block the user from finishing the cleanup. Warn loudly instead.
       console.warn(
         `  ⚠ preremove script exited ${preResult.exitCode}; continuing remove anyway`,
       );
     }
+  }
+
+  // 2. arc#140 P5: lifecycle.preuninstall array — ABORTS on failure (D7).
+  const preuninstallResult = runPreuninstallPhase(
+    skill.install_path,
+    manifest,
+    opts.quiet ?? opts.yes,
+  );
+  if (!preuninstallResult.success) {
+    return { success: false, error: preuninstallResult.error };
   }
 
   const isTool = skill.artifact_type === "tool";
@@ -82,7 +296,17 @@ export async function remove(
   const isPipeline = skill.artifact_type === "pipeline";
   const isAction = skill.artifact_type === "action";
 
-  if (isAction) {
+  // Multi-target path (arc#140 P5): walk targets in reverse install order.
+  // No-op when manifest is missing (we still try to clean DB/repo below).
+  if (manifest && manifest.targets && manifest.targets.length > 0) {
+    await removePerTarget({
+      targets: manifest.targets,
+      manifest,
+      packageName: name,
+      hostOverrides: opts?.hostOverrides,
+      quiet: opts?.quiet,
+    });
+  } else if (isAction) {
     // Actions: remove action symlink
     const actionLink = join(arc.actionsDir, name);
     await removeSymlink(actionLink);
@@ -159,6 +383,21 @@ export async function remove(
 
   // Remove from database (CASCADE deletes capabilities) — before repo removal
   removeSkill(db, name);
+
+  // arc#140 P5: run postuninstall lifecycle scripts AFTER artifacts are gone
+  // — typical use is to signal cortex reload so the AgentRegistry rebuilds
+  // without this agent. Failures here are surfaced as warnings (the
+  // uninstall itself already succeeded; the artifacts are no longer on disk).
+  if (manifest) {
+    const postuninstallResult = runPostuninstallPhase(
+      skill.install_path,
+      manifest,
+      opts?.quiet,
+    );
+    if (!postuninstallResult.success && !opts?.quiet) {
+      console.warn(`  ⚠ ${postuninstallResult.error}`);
+    }
+  }
 
   // Remove repo directory — but NOT if other library artifacts still reference it
   if (skill.library_name) {
