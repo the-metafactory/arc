@@ -1,4 +1,4 @@
-import { basename, join } from "path";
+import { basename, dirname, join } from "path";
 import { existsSync, lstatSync, statSync } from "fs";
 import { mkdir } from "fs/promises";
 import { platform } from "os";
@@ -6,27 +6,69 @@ import { platform } from "os";
 export type ArtifactInitType = "skill" | "tool" | "agent" | "prompt" | "pipeline";
 
 /**
- * Enumerate the relative paths a scaffold will write for a given type.
- * Sage P148 cycle 3 security: in-place mode silently overwrote
- * pre-existing README.md / package.json / SKILL.md / .gitignore via
- * `Bun.write`. arc#107 documents in-place as "layer cleanly", which is
- * a lie unless every target is checked before write. This list keeps
- * the pre-flight check in lockstep with the writes below.
+ * A single file the scaffold will create. The list returned by
+ * {@link scaffoldEntriesFor} is the SOLE source of truth for what
+ * `init()` writes — pre-flight overwrite check, mkdir-of-parents, and
+ * the actual write loop all iterate the same array. Previously a
+ * paths-only `scaffoldFilesFor` array sat parallel to inline
+ * `Bun.write` calls, requiring a drift-guard test to catch skew. Sage
+ * P148 cycles 4 / 5 / 6 repeatedly flagged the parallel sources as a
+ * structural cost; this refactor eliminates the parallelism.
  */
-function scaffoldFilesFor(type: ArtifactInitType, lowerName: string): string[] {
-  const common = ["arc-manifest.yaml", "package.json", "README.md", ".gitignore"];
+export interface ScaffoldEntry {
+  /** Path relative to the scaffold's target directory. */
+  path: string;
+  /** File contents to write verbatim. */
+  content: string;
+}
+
+/**
+ * Enumerate every file `init()` will create for a given type, with
+ * contents. Single source of truth — pre-flight check + writes both
+ * iterate this array.
+ */
+export function scaffoldEntriesFor(
+  type: ArtifactInitType,
+  name: string,
+  author?: string,
+): ScaffoldEntry[] {
+  const lowerName = name.replace(/^_/, "").toLowerCase();
+  const authorName = author ?? "username";
+  const prefix = `arc-${type}`;
+
+  const entries: ScaffoldEntry[] = [
+    { path: "arc-manifest.yaml", content: buildManifest(type, name, lowerName, authorName) },
+    { path: "package.json", content: buildPackageJson(type, name, lowerName, prefix) },
+    { path: "README.md", content: buildReadme(type, name, lowerName, prefix) },
+    { path: ".gitignore", content: GITIGNORE },
+  ];
+
   switch (type) {
     case "tool":
-      return [...common, `${lowerName}.ts`];
+      entries.push({ path: `${lowerName}.ts`, content: buildToolEntry(name) });
+      break;
     case "skill":
-      return [...common, "skill/SKILL.md", "skill/workflows/Main.md"];
+      entries.push(
+        { path: "skill/SKILL.md", content: buildSkillMd(name) },
+        { path: "skill/workflows/Main.md", content: SKILL_WORKFLOW_MAIN },
+      );
+      break;
     case "agent":
-      return [...common, `agent/${lowerName}.md`];
+      entries.push({ path: `agent/${lowerName}.md`, content: buildAgentMd(name) });
+      break;
     case "prompt":
-      return [...common, `prompt/${lowerName}.md`];
+      entries.push({ path: `prompt/${lowerName}.md`, content: buildPromptMd(name) });
+      break;
     case "pipeline":
-      return [...common, "pipeline.yaml", "A_EXAMPLE/action.json", "A_EXAMPLE/action.ts"];
+      entries.push(
+        { path: "pipeline.yaml", content: buildPipelineYaml(name) },
+        { path: "A_EXAMPLE/action.json", content: PIPELINE_ACTION_JSON },
+        { path: "A_EXAMPLE/action.ts", content: PIPELINE_ACTION_TS },
+      );
+      break;
   }
+
+  return entries;
 }
 
 /**
@@ -118,12 +160,16 @@ export interface InitResult {
  * Scaffold a new skill, tool, agent, or prompt repo directory.
  *
  * arc#107 — `targetDir` may already exist (init-in-place mode). In that
- * case the function refuses only if `arc-manifest.yaml` already lives in
- * the directory (which would mean the cwd is already an arc package);
+ * case the function refuses if `arc-manifest.yaml` already lives there
+ * (the "already an arc package" signal) OR if any other scaffold target
+ * file already exists (prevents silent clobber of operator content);
  * unrelated files are left alone. When `targetDir` does not yet exist,
- * it is created recursively. This matches the ergonomics of `npm init`
- * / `cargo init` / `git init` — the operator's cwd is a valid place to
- * scaffold from.
+ * it is created recursively. Matches the ergonomics of `npm init` /
+ * `cargo init` / `git init`.
+ *
+ * Implementation: all file creation goes through {@link scaffoldEntriesFor}.
+ * The pre-flight overwrite check, parent-directory creation, and write
+ * loop all iterate the same array — there is no parallel list to drift.
  */
 export async function init(
   targetDir: string,
@@ -177,18 +223,16 @@ export async function init(
     }
   }
 
-  const lowerName = name.replace(/^_/, "").toLowerCase();
+  const entries = scaffoldEntriesFor(type, name, author);
 
   // Sage P148 cycle 3 security: pre-flight check ALL files the scaffold
-  // is about to write. Refuse if any exist — arc never overwrites
-  // operator content. arc-manifest.yaml gets a dedicated error message
-  // because it's the unambiguous "already an arc package" signal; the
-  // others share a generic message naming the offending path.
-  const filesToWrite = scaffoldFilesFor(type, lowerName);
-  for (const rel of filesToWrite) {
-    const abs = join(targetDir, rel);
+  // will write. Refuse if any exist — arc never overwrites operator
+  // content. `arc-manifest.yaml` gets a dedicated message because it's
+  // the unambiguous "already an arc package" signal.
+  for (const entry of entries) {
+    const abs = join(targetDir, entry.path);
     if (existsSync(abs)) {
-      if (rel === "arc-manifest.yaml") {
+      if (entry.path === "arc-manifest.yaml") {
         return {
           success: false,
           error: `arc-manifest.yaml already exists in ${targetDir} — refusing to overwrite`,
@@ -201,41 +245,59 @@ export async function init(
     }
   }
 
+  // Create targetDir + every parent implied by entry paths in one pass.
   await mkdir(targetDir, { recursive: true });
-
-  const authorName = author ?? "username";
-  const files: string[] = [];
-  const prefix = `arc-${type}`;
-
-  // ── Directory structure ──────────────────────────────────────────────────
-
-  if (type === "tool") {
-    await mkdir(join(targetDir, "lib"), { recursive: true });
-  } else if (type === "skill") {
-    await mkdir(join(targetDir, "skill", "workflows"), { recursive: true });
-  } else if (type === "agent") {
-    await mkdir(join(targetDir, "agent"), { recursive: true });
-  } else if (type === "prompt") {
-    await mkdir(join(targetDir, "prompt"), { recursive: true });
+  const parentDirs = new Set<string>();
+  for (const entry of entries) {
+    const dir = dirname(entry.path);
+    if (dir !== "." && dir !== "") parentDirs.add(dir);
+  }
+  for (const dir of parentDirs) {
+    await mkdir(join(targetDir, dir), { recursive: true });
   }
 
-  // ── arc-manifest.yaml ───────────────────────────────────────────────────
+  // Write every entry. files[] mirrors entries by construction — no
+  // separate `files.push` calls to forget.
+  const files: string[] = [];
+  for (const entry of entries) {
+    await Bun.write(join(targetDir, entry.path), entry.content);
+    files.push(entry.path);
+  }
 
-  let manifestContent: string;
+  return {
+    success: true,
+    path: targetDir,
+    files,
+  };
+}
 
-  if (type === "tool") {
-    manifestContent = `# arc-manifest.yaml — capability declaration
+// ── Content builders ────────────────────────────────────────────────────
+//
+// Pure functions; no side effects. Each returns the file body verbatim.
+// Order in the file mirrors the order entries are declared in
+// scaffoldEntriesFor for readability.
+
+function buildManifest(
+  type: ArtifactInitType,
+  name: string,
+  lowerName: string,
+  authorName: string,
+): string {
+  const header = `# arc-manifest.yaml — capability declaration
 schema: arc/v1
 name: ${name}
 version: 1.0.0
-type: tool
+type: ${type}
 tier: custom
 
 author:
   name: ${authorName}
   github: ${authorName}
 
-provides:
+`;
+  switch (type) {
+    case "tool":
+      return header + `provides:
   cli:
     - command: "bun ${lowerName}.ts"
       name: "${lowerName}"
@@ -257,19 +319,8 @@ capabilities:
     allowed: false
   secrets: []
 `;
-  } else if (type === "skill") {
-    manifestContent = `# arc-manifest.yaml — capability declaration
-schema: arc/v1
-name: ${name}
-version: 1.0.0
-type: skill
-tier: custom
-
-author:
-  name: ${authorName}
-  github: ${authorName}
-
-provides:
+    case "skill":
+      return header + `provides:
   skill:
     - trigger: "${lowerName}"
   # cli:
@@ -292,19 +343,8 @@ capabilities:
     allowed: false
   secrets: []
 `;
-  } else if (type === "agent") {
-    manifestContent = `# arc-manifest.yaml — capability declaration
-schema: arc/v1
-name: ${name}
-version: 1.0.0
-type: agent
-tier: custom
-
-author:
-  name: ${authorName}
-  github: ${authorName}
-
-capabilities:
+    case "agent":
+      return header + `capabilities:
   filesystem:
     read:
       - agent/
@@ -313,19 +353,8 @@ capabilities:
     allowed: false
   secrets: []
 `;
-  } else if (type === "pipeline") {
-    manifestContent = `# arc-manifest.yaml — capability declaration
-schema: arc/v1
-name: ${name}
-version: 1.0.0
-type: pipeline
-tier: custom
-
-author:
-  name: ${authorName}
-  github: ${authorName}
-
-capabilities:
+    case "pipeline":
+      return header + `capabilities:
   filesystem:
     read: []
     write: []
@@ -336,20 +365,8 @@ capabilities:
       - bun
   secrets: []
 `;
-  } else {
-    // prompt
-    manifestContent = `# arc-manifest.yaml — capability declaration
-schema: arc/v1
-name: ${name}
-version: 1.0.0
-type: prompt
-tier: custom
-
-author:
-  name: ${authorName}
-  github: ${authorName}
-
-capabilities:
+    case "prompt":
+      return header + `capabilities:
   filesystem:
     read: []
     write: []
@@ -359,14 +376,153 @@ capabilities:
   secrets: []
 `;
   }
+}
 
-  await Bun.write(join(targetDir, "arc-manifest.yaml"), manifestContent);
-  files.push("arc-manifest.yaml");
+function buildPackageJson(
+  type: ArtifactInitType,
+  name: string,
+  lowerName: string,
+  prefix: string,
+): string {
+  const typeLabel = type.charAt(0).toUpperCase() + type.slice(1);
+  return JSON.stringify(
+    {
+      name: `${prefix}-${lowerName}`,
+      version: "1.0.0",
+      description: `arc ${name} ${typeLabel}`,
+      type: "module",
+      scripts: { test: "bun test" },
+      dependencies: {},
+    },
+    null,
+    2,
+  ) + "\n";
+}
 
-  // ── Type-specific files ─────────────────────────────────────────────────
+function buildReadme(
+  type: ArtifactInitType,
+  name: string,
+  lowerName: string,
+  prefix: string,
+): string {
+  const pkg = `${prefix}-${lowerName}`;
+  switch (type) {
+    case "tool":
+      return `# ${name}
 
-  if (type === "tool") {
-    const toolContent = `#!/usr/bin/env bun
+arc tool — [brief description].
+
+## Setup
+
+\`\`\`bash
+arc install ${pkg}
+\`\`\`
+
+## Manual Setup
+
+\`\`\`bash
+git clone [repo-url] ~/Developer/${pkg}/
+cd ~/Developer/${pkg}/
+bun install
+\`\`\`
+
+## License
+
+MIT
+`;
+    case "skill":
+      return `# ${name}
+
+arc skill — [brief description].
+
+## Setup
+
+\`\`\`bash
+git clone [repo-url] ~/Developer/${pkg}/
+cd ~/Developer/${pkg}/
+bun install
+\`\`\`
+
+## Integration
+
+\`\`\`bash
+ln -sfn ~/Developer/${pkg}/skill ~/.claude/skills/${name}
+\`\`\`
+
+## License
+
+MIT
+`;
+    case "agent":
+      return `# ${name}
+
+arc agent — [brief description].
+
+## Setup
+
+\`\`\`bash
+git clone [repo-url] ~/Developer/${pkg}/
+\`\`\`
+
+## Integration
+
+\`\`\`bash
+ln -sfn ~/Developer/${pkg}/agent ~/.claude/agents/${name}
+\`\`\`
+
+## License
+
+MIT
+`;
+    case "pipeline":
+      return `# ${name}
+
+arc pipeline — [brief description].
+
+## Setup
+
+\`\`\`bash
+arc install ${pkg}
+\`\`\`
+
+## Manual Setup
+
+\`\`\`bash
+git clone [repo-url] ~/Developer/${pkg}/
+cd ~/Developer/${pkg}/
+bun install
+\`\`\`
+
+## License
+
+MIT
+`;
+    case "prompt":
+      return `# ${name}
+
+arc prompt — [brief description].
+
+## Setup
+
+\`\`\`bash
+git clone [repo-url] ~/Developer/${pkg}/
+\`\`\`
+
+## Integration
+
+\`\`\`bash
+ln -sfn ~/Developer/${pkg}/prompt ~/.claude/prompts/${name}
+\`\`\`
+
+## License
+
+MIT
+`;
+  }
+}
+
+function buildToolEntry(name: string): string {
+  return `#!/usr/bin/env bun
 
 /**
  * ${name} — arc tool
@@ -374,10 +530,10 @@ capabilities:
 
 console.log("${name} tool");
 `;
-    await Bun.write(join(targetDir, `${lowerName}.ts`), toolContent);
-    files.push(`${lowerName}.ts`);
-  } else if (type === "skill") {
-    const skillMdContent = `---
+}
+
+function buildSkillMd(name: string): string {
+  return `---
 name: ${name}
 description: |
   [Describe what this skill does]
@@ -395,23 +551,10 @@ description: |
 |---------|----------|
 | [trigger] | \`Workflows/Main.md\` |
 `;
-    await Bun.write(join(targetDir, "skill", "SKILL.md"), skillMdContent);
-    files.push("skill/SKILL.md");
+}
 
-    const workflowContent = `# Main Workflow
-
-## Steps
-
-1. [Step 1]
-2. [Step 2]
-`;
-    await Bun.write(
-      join(targetDir, "skill", "workflows", "Main.md"),
-      workflowContent
-    );
-    files.push("skill/workflows/Main.md");
-  } else if (type === "agent") {
-    const agentMdContent = `---
+function buildAgentMd(name: string): string {
+  return `---
 name: ${name}
 description: "[Describe what this agent does]"
 model: sonnet
@@ -437,10 +580,10 @@ persona:
 - [Constraint 1]
 - [Constraint 2]
 `;
-    await Bun.write(join(targetDir, "agent", `${lowerName}.md`), agentMdContent);
-    files.push(`agent/${lowerName}.md`);
-  } else if (type === "prompt") {
-    const promptMdContent = `---
+}
+
+function buildPromptMd(name: string): string {
+  return `---
 name: ${name}
 description: "[Describe what this prompt does]"
 version: 1.0.0
@@ -474,10 +617,10 @@ version: 1.0.0
 [Expected output]
 \`\`\`
 `;
-    await Bun.write(join(targetDir, "prompt", `${lowerName}.md`), promptMdContent);
-    files.push(`prompt/${lowerName}.md`);
-  } else if (type === "pipeline") {
-    const pipelineYaml = `name: ${name}
+}
+
+function buildPipelineYaml(name: string): string {
+  return `name: ${name}
 description: "[Describe what this pipeline does]"
 version: 1.0.0
 
@@ -485,19 +628,28 @@ actions:
   - name: A_EXAMPLE
     description: "Example action"
 `;
-    await Bun.write(join(targetDir, "pipeline.yaml"), pipelineYaml);
-    files.push("pipeline.yaml");
+}
 
-    const actionJson = JSON.stringify({
-      name: "A_EXAMPLE",
-      description: "Example action — replace with your logic",
-      inputs: { data: { type: "string", description: "Input data" } },
-      outputs: { result: { type: "string", description: "Output result" } },
-    }, null, 2) + "\n";
-    await Bun.write(join(targetDir, "A_EXAMPLE", "action.json"), actionJson);
-    files.push("A_EXAMPLE/action.json");
+const SKILL_WORKFLOW_MAIN = `# Main Workflow
 
-    const actionTs = `#!/usr/bin/env bun
+## Steps
+
+1. [Step 1]
+2. [Step 2]
+`;
+
+const PIPELINE_ACTION_JSON = JSON.stringify(
+  {
+    name: "A_EXAMPLE",
+    description: "Example action — replace with your logic",
+    inputs: { data: { type: "string", description: "Input data" } },
+    outputs: { result: { type: "string", description: "Output result" } },
+  },
+  null,
+  2,
+) + "\n";
+
+const PIPELINE_ACTION_TS = `#!/usr/bin/env bun
 
 /**
  * A_EXAMPLE — example pipeline action
@@ -506,166 +658,10 @@ actions:
 const input = JSON.parse(process.argv[2] ?? "{}");
 console.log(JSON.stringify({ result: \`Processed: \${input.data}\` }));
 `;
-    await Bun.write(join(targetDir, "A_EXAMPLE", "action.ts"), actionTs);
-    files.push("A_EXAMPLE/action.ts");
-  }
 
-  // ── package.json ────────────────────────────────────────────────────────
-
-  const typeLabel = type.charAt(0).toUpperCase() + type.slice(1);
-  const packageJson = {
-    name: `${prefix}-${lowerName}`,
-    version: "1.0.0",
-    description: `arc ${name} ${typeLabel}`,
-    type: "module",
-    scripts: {
-      test: "bun test",
-    },
-    dependencies: {},
-  };
-
-  await Bun.write(
-    join(targetDir, "package.json"),
-    JSON.stringify(packageJson, null, 2) + "\n"
-  );
-  files.push("package.json");
-
-  // ── README.md ───────────────────────────────────────────────────────────
-
-  let readmeContent: string;
-
-  if (type === "tool") {
-    readmeContent = `# ${name}
-
-arc tool — [brief description].
-
-## Setup
-
-\`\`\`bash
-arc install ${prefix}-${lowerName}
-\`\`\`
-
-## Manual Setup
-
-\`\`\`bash
-git clone [repo-url] ~/Developer/${prefix}-${lowerName}/
-cd ~/Developer/${prefix}-${lowerName}/
-bun install
-\`\`\`
-
-## License
-
-MIT
-`;
-  } else if (type === "skill") {
-    readmeContent = `# ${name}
-
-arc skill — [brief description].
-
-## Setup
-
-\`\`\`bash
-git clone [repo-url] ~/Developer/${prefix}-${lowerName}/
-cd ~/Developer/${prefix}-${lowerName}/
-bun install
-\`\`\`
-
-## Integration
-
-\`\`\`bash
-ln -sfn ~/Developer/${prefix}-${lowerName}/skill ~/.claude/skills/${name}
-\`\`\`
-
-## License
-
-MIT
-`;
-  } else if (type === "agent") {
-    readmeContent = `# ${name}
-
-arc agent — [brief description].
-
-## Setup
-
-\`\`\`bash
-git clone [repo-url] ~/Developer/${prefix}-${lowerName}/
-\`\`\`
-
-## Integration
-
-\`\`\`bash
-ln -sfn ~/Developer/${prefix}-${lowerName}/agent ~/.claude/agents/${name}
-\`\`\`
-
-## License
-
-MIT
-`;
-  } else if (type === "pipeline") {
-    readmeContent = `# ${name}
-
-arc pipeline — [brief description].
-
-## Setup
-
-\`\`\`bash
-arc install ${prefix}-${lowerName}
-\`\`\`
-
-## Manual Setup
-
-\`\`\`bash
-git clone [repo-url] ~/Developer/${prefix}-${lowerName}/
-cd ~/Developer/${prefix}-${lowerName}/
-bun install
-\`\`\`
-
-## License
-
-MIT
-`;
-  } else {
-    // prompt
-    readmeContent = `# ${name}
-
-arc prompt — [brief description].
-
-## Setup
-
-\`\`\`bash
-git clone [repo-url] ~/Developer/${prefix}-${lowerName}/
-\`\`\`
-
-## Integration
-
-\`\`\`bash
-ln -sfn ~/Developer/${prefix}-${lowerName}/prompt ~/.claude/prompts/${name}
-\`\`\`
-
-## License
-
-MIT
-`;
-  }
-
-  await Bun.write(join(targetDir, "README.md"), readmeContent);
-  files.push("README.md");
-
-  // ── .gitignore ──────────────────────────────────────────────────────────
-
-  const gitignoreContent = `node_modules/
+const GITIGNORE = `node_modules/
 .env
 *.env
 secrets/
 cache/
 `;
-
-  await Bun.write(join(targetDir, ".gitignore"), gitignoreContent);
-  files.push(".gitignore");
-
-  return {
-    success: true,
-    path: targetDir,
-    files,
-  };
-}
