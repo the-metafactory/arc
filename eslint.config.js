@@ -60,7 +60,13 @@ export default tseslint.config(
       // gate the build.
       "@typescript-eslint/require-await": "error",
       "@typescript-eslint/no-unnecessary-condition": "warn",
-      "@typescript-eslint/await-thenable": "warn",
+      // 100% test-file noise from bun-test's
+      // `await expect(promise).rejects.toThrow(...)` matcher idiom.
+      // The matcher chain returns void; the rule reads it as awaiting
+      // a non-thenable. Off in tests (override below), error at src
+      // so genuine "awaiting a sync value" bugs get caught. Mirrors
+      // myelin#123.
+      "@typescript-eslint/await-thenable": "error",
       "@typescript-eslint/no-empty-function": "warn",
       "@typescript-eslint/no-non-null-assertion": "warn",
       "@typescript-eslint/prefer-nullish-coalescing": "warn",
@@ -89,8 +95,11 @@ export default tseslint.config(
       // catch (err: unknown) is the modern idiom but a lot of CLI error
       // paths predate it. Warn so it surfaces; tighten in a sweep PR.
       "@typescript-eslint/use-unknown-in-catch-callback-variable": "warn",
-      // Bun-flavored idioms.
-      "@typescript-eslint/no-confusing-void-expression": "off",
+      // Same bun-test idiom as await-thenable. Off in tests (override
+      // below), error at src so a real `.forEach(() => doThing())`
+      // where doThing returns void still gets caught when callers
+      // expect a return value.
+      "@typescript-eslint/no-confusing-void-expression": "error",
     },
   },
   {
@@ -118,6 +127,12 @@ export default tseslint.config(
       // has zero require-await sites today; this override only affects
       // tests.
       "@typescript-eslint/require-await": "off",
+      // Bun-test's `await expect(promise).rejects.toThrow(...)` idiom
+      // returns void from the matcher chain. Both rules fire as false
+      // positives on every assert of that shape across the suite.
+      // Mirrors myelin#123.
+      "@typescript-eslint/no-confusing-void-expression": "off",
+      "@typescript-eslint/await-thenable": "off",
     },
   },
   {
