@@ -152,6 +152,61 @@ export interface RulesConfig {
   [key: string]: unknown;
 }
 
+/**
+ * Runtime declaration for type:agent packages.
+ *
+ * Per cortex `docs/design-arc-agent-bots.md` §4. Names the substrate
+ * (claude-code / codex / pi-dev / custom) and the supervision mode
+ * (in-process under cortex's runner, or standalone as its own daemon).
+ * Capabilities are register-on-start values published to NATS KV by
+ * the bot's daemon — listed here so cortex can scope credentials and
+ * the dashboard can render an accurate provenance badge.
+ */
+export interface AgentRuntime {
+  substrate: "claude-code" | "codex" | "pi-dev" | "custom-binary" | string;
+  mode: "in-process" | "standalone";
+  capabilities?: string[];
+}
+
+/**
+ * Identity declaration for type:agent packages.
+ *
+ * Rendered into the cortex fragment (`~/.config/cortex/agents.d/<id>.yaml`)
+ * by the CortexHostAdapter. The `trust` list is propagated to the
+ * runtime's `TrustResolver` — every id MUST resolve in the merged
+ * `AgentRegistry` at construction time (cortex `docs/design-arc-agent-bots.md`
+ * §9, registry.ts §9.3 rule 1).
+ */
+export interface AgentIdentity {
+  id: string;
+  did?: string;
+  displayName?: string;
+  roles?: string[];
+  trust?: string[];
+}
+
+/**
+ * Ordered lifecycle script arrays for `type: agent` packages.
+ *
+ * Sister field to the existing `scripts.{preinstall,postinstall,…}` single-
+ * script shape. The array form is required for standalone-bot install
+ * sequences where order matters (cortex `docs/design-arc-agent-bots.md`
+ * §8.1 / §8.2): drop fragment → signal cortex reload → issue NATS creds →
+ * (standalone only) launchctl load. Uninstall reverses.
+ *
+ * Each entry is a path relative to the package install root, exactly like
+ * the single-script `scripts` fields. Both shapes may be present on the
+ * same manifest; arc runs `scripts.<phase>` first, then `lifecycle.<phase>`
+ * in declared order. A failure in any entry aborts the install and
+ * triggers the same rollback path as the single-script form.
+ */
+export interface LifecycleScripts {
+  preinstall?: string[];
+  postinstall?: string[];
+  preuninstall?: string[];
+  postuninstall?: string[];
+}
+
 /** Inline hook array format (e.g. Grove) */
 export type InlineHook = {
   event: string;
@@ -190,6 +245,28 @@ export interface ArcManifest {
   type: "skill" | "system" | "tool" | "agent" | "prompt" | "component" | "pipeline" | "rules" | "library";
   /** Only present when type is "library" — lists contained artifacts */
   artifacts?: LibraryArtifactEntry[];
+  /**
+   * Multi-target install destinations (arc#117 multi-backend HostAdapter).
+   *
+   * When absent, arc routes to the single host adapter passed in
+   * InstallOptions (today: claude-code). When present, arc dispatches
+   * once per declared target in the order required by the artifact's
+   * design contract — for `type: agent` standalone bots, that means
+   * `cortex` FIRST, then the OS-supervision host (`darwin-launchd` or
+   * `linux-systemd`) per cortex `docs/design-arc-agent-bots.md` §3.2.
+   */
+  targets?: HostId[];
+  /**
+   * Runtime declaration — type:agent only. Names substrate + supervision
+   * mode + capabilities. Required for type:agent packages that declare
+   * `targets: [cortex, …]`. See AgentRuntime.
+   */
+  runtime?: AgentRuntime;
+  /**
+   * Identity declaration — type:agent only. Rendered into the cortex
+   * agent fragment. See AgentIdentity.
+   */
+  identity?: AgentIdentity;
   tier?: PackageTier;
   author?: {
     name: string;
@@ -207,6 +284,25 @@ export interface ArcManifest {
     files?: Array<{ source: string; target: string }>;
     templates?: RulesTemplate[];
     hooks?: HooksDeclaration;
+    /**
+     * Standalone-bot daemon binary, relative to the package install root.
+     * Rendered into the OS-supervision host's binDir (`~/bin/<binary>` on
+     * darwin-launchd) at install time. type:agent + runtime.mode=standalone only.
+     */
+    binary?: string;
+    /**
+     * macOS launchd plist template, relative to the package install root.
+     * Rendered into `~/Library/LaunchAgents/<label>.plist` by the
+     * darwin-launchd HostAdapter, with token substitution (e.g.,
+     * `{{NATS_URL}}`, `{{BIN}}`, `{{LOG_DIR}}`).
+     */
+    plist?: string;
+    /**
+     * Linux systemd user unit template, relative to the package install root.
+     * Rendered into `~/.config/systemd/user/<unit>.service` by the
+     * linux-systemd HostAdapter (post-P6).
+     */
+    systemdUnit?: string;
   };
   extensions?: {
     statusline?: ExtensionEntry[];
@@ -226,6 +322,13 @@ export interface ArcManifest {
      *  stop daemons, unload launchd plists, etc. */
     preremove?: string;
   };
+  /**
+   * Ordered lifecycle script arrays — for sequences where order matters
+   * (e.g. type:agent standalone bots: signal-reload → issue-creds →
+   * launchctl-load). Runs after the single-script `scripts` field of the
+   * same phase. See LifecycleScripts.
+   */
+  lifecycle?: LifecycleScripts;
   /** Optional namespace for publishing (alternative to account default) */
   namespace?: string;
   /** Bundle configuration for arc publish */
@@ -429,8 +532,28 @@ export interface AuditWarning {
  * the type stays truthful: a value of `HostId` should always correspond to
  * an actually implemented `HostAdapter`. Phase 2 of #117 adds `"codex"`,
  * `"cursor"`, etc. as those adapters arrive.
+ *
+ * `darwin-launchd` and `linux-systemd` are OS-supervision hosts for
+ * standalone-bot type:agent packages — they receive the daemon binary and
+ * a launchd plist (macOS) or systemd user unit (Linux). See cortex
+ * `docs/design-arc-agent-bots.md` §3.2 and arc#140. The adapter for
+ * `darwin-launchd` lands in P2 of arc#140; `linux-systemd` later (Phase C
+ * of the design doc). Schema declares the union so a `targets:` value can
+ * be parsed and validated even before its adapter is registered.
  */
-export type HostId = "claude-code" | "cortex";
+export type HostId =
+  | "claude-code"
+  | "cortex"
+  | "darwin-launchd"
+  | "linux-systemd";
+
+/** Set of all known HostId values — for runtime validation of `targets:`. */
+export const KNOWN_HOST_IDS: readonly HostId[] = [
+  "claude-code",
+  "cortex",
+  "darwin-launchd",
+  "linux-systemd",
+] as const;
 
 /** arc's own state — host-independent. Lives under ~/.config/metafactory/. */
 export interface ArcPaths {

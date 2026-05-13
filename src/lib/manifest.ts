@@ -1,7 +1,8 @@
 import { readFile } from "fs/promises";
 import { join } from "path";
 import YAML from "yaml";
-import type { ArcManifest, RiskLevel } from "../types.js";
+import type { ArcManifest, HostId, RiskLevel } from "../types.js";
+import { KNOWN_HOST_IDS } from "../types.js";
 
 /** Preferred manifest filename (new name). */
 export const MANIFEST_FILENAME = "arc-manifest.yaml";
@@ -109,6 +110,8 @@ async function readManifestFromDir(
       }
 
       normalizeCapabilities(parsed, filename);
+      validateTargets(parsed, filename);
+      validateLifecycle(parsed, filename);
 
       return parsed;
     } catch (err: any) {
@@ -179,6 +182,117 @@ export function normalizeCapabilities(manifest: ArcManifest, filename: string): 
 }
 
 /**
+ * Validate `targets:` on the manifest.
+ *
+ * - Each entry must be a member of `KNOWN_HOST_IDS` (claude-code | cortex |
+ *   darwin-launchd | linux-systemd today).
+ * - Duplicates are rejected — ambiguous semantics for multi-target install
+ *   ordering.
+ * - Empty array is rejected — declaring `targets: []` is more confusing than
+ *   omitting the field. Omission means "default host".
+ *
+ * The membership check is purely schema-level. arc#140 P3 adds a
+ * detection-time check ("target X listed but adapter not implemented") at
+ * dispatch time.
+ */
+export function validateTargets(manifest: ArcManifest, filename: string): void {
+  const targets = manifest.targets;
+  if (targets === undefined) return;
+
+  if (!Array.isArray(targets)) {
+    throw new Error(
+      `Invalid ${filename}: 'targets' must be an array of host IDs (got ${typeof targets})`,
+    );
+  }
+  if (targets.length === 0) {
+    throw new Error(
+      `Invalid ${filename}: 'targets' is empty — omit the field to use the default host`,
+    );
+  }
+
+  const seen = new Set<HostId>();
+  for (const entry of targets) {
+    if (typeof entry !== "string") {
+      throw new Error(
+        `Invalid ${filename}: targets entries must be strings, got ${JSON.stringify(entry)}`,
+      );
+    }
+    if (!(KNOWN_HOST_IDS as readonly string[]).includes(entry)) {
+      throw new Error(
+        `Invalid ${filename}: unknown target host '${entry}'. Known: ${KNOWN_HOST_IDS.join(", ")}`,
+      );
+    }
+    if (seen.has(entry as HostId)) {
+      throw new Error(
+        `Invalid ${filename}: duplicate target '${entry}' in 'targets'`,
+      );
+    }
+    seen.add(entry as HostId);
+  }
+}
+
+/**
+ * Validate `lifecycle:` arrays.
+ *
+ * - Each known phase (preinstall/postinstall/preuninstall/postuninstall) is
+ *   an array of strings.
+ * - Each script path is relative (no leading `/`) and contains no `..`
+ *   segment — defense in depth against a package whose install root differs
+ *   from the bundled-script root.
+ * - Unknown phase keys are rejected so typos surface at parse time rather
+ *   than silently no-op'ing at install.
+ */
+export function validateLifecycle(manifest: ArcManifest, filename: string): void {
+  const lifecycle = manifest.lifecycle;
+  if (lifecycle === undefined) return;
+
+  if (typeof lifecycle !== "object" || Array.isArray(lifecycle)) {
+    throw new Error(
+      `Invalid ${filename}: 'lifecycle' must be an object with phase arrays`,
+    );
+  }
+
+  const knownPhases = new Set([
+    "preinstall",
+    "postinstall",
+    "preuninstall",
+    "postuninstall",
+  ]);
+
+  for (const key of Object.keys(lifecycle)) {
+    if (!knownPhases.has(key)) {
+      throw new Error(
+        `Invalid ${filename}: unknown lifecycle phase '${key}'. Known: ${[...knownPhases].join(", ")}`,
+      );
+    }
+    const arr = (lifecycle as Record<string, unknown>)[key];
+    if (!Array.isArray(arr)) {
+      throw new Error(
+        `Invalid ${filename}: lifecycle.${key} must be an array of script paths`,
+      );
+    }
+    for (const entry of arr) {
+      if (typeof entry !== "string") {
+        throw new Error(
+          `Invalid ${filename}: lifecycle.${key} entries must be strings, got ${JSON.stringify(entry)}`,
+        );
+      }
+      if (entry.startsWith("/")) {
+        throw new Error(
+          `Invalid ${filename}: lifecycle.${key} entry '${entry}' must be a relative path (no leading /)`,
+        );
+      }
+      const segments = entry.split("/");
+      if (segments.includes("..")) {
+        throw new Error(
+          `Invalid ${filename}: lifecycle.${key} entry '${entry}' must not contain '..'`,
+        );
+      }
+    }
+  }
+}
+
+/**
  * Validate a library root manifest.
  * Libraries must have an artifacts array and must NOT have provides/capabilities/scripts.
  */
@@ -203,6 +317,11 @@ function validateLibraryManifest(parsed: ArcManifest, filename: string): void {
   if (parsed.scripts) {
     throw new Error(
       `Invalid ${filename}: library root manifest must not contain 'scripts' (belongs on per-artifact manifests)`
+    );
+  }
+  if (parsed.lifecycle) {
+    throw new Error(
+      `Invalid ${filename}: library root manifest must not contain 'lifecycle' (belongs on per-artifact manifests)`
     );
   }
 
