@@ -9,6 +9,7 @@ import type {
   PackageTier,
 } from "../types.js";
 import type { Database } from "bun:sqlite";
+import { errorMessage } from "../lib/errors.js";
 import { readManifest, readLibraryArtifacts, assessRisk, formatCapabilities } from "../lib/manifest.js";
 import { recordInstall, getSkill } from "../lib/db.js";
 import { runScript, runLifecycleScripts } from "../lib/scripts.js";
@@ -182,11 +183,11 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
   let manifest: ArcManifest | null = null;
   try {
     manifest = await readManifest(installPath);
-  } catch (err: any) {
+  } catch (err) {
     Bun.spawnSync(["rm", "-rf", installPath]);
     return {
       success: false,
-      error: `Failed to read manifest in ${repoUrl}: ${err.message}`,
+      error: `Failed to read manifest in ${repoUrl}: ${errorMessage(err)}`,
     };
   }
   if (!manifest) {
@@ -470,8 +471,8 @@ async function installLibrary(
   let artifactEntries: Awaited<ReturnType<typeof readLibraryArtifacts>>;
   try {
     artifactEntries = await readLibraryArtifacts(installPath, libraryManifest);
-  } catch (err: any) {
-    return { success: false, error: err.message };
+  } catch (err) {
+    return { success: false, error: errorMessage(err) };
   }
 
   // Filter to specific artifact if requested
@@ -754,9 +755,9 @@ async function installPerTarget(opts: {
     let targetHost;
     try {
       targetHost = resolveHost(targetId, opts.hostOverrides);
-    } catch (err: any) {
+    } catch (err) {
       await rollbackAll();
-      return { error: err?.message ?? `Failed to resolve host '${targetId}'` };
+      return { error: errorMessage(err) || `Failed to resolve host '${targetId}'` };
     }
 
     if (targetId === "darwin-launchd") {
@@ -778,10 +779,10 @@ async function installPerTarget(opts: {
           quiet: opts.quiet,
         });
         launchd.push(rec);
-      } catch (err: any) {
+      } catch (err) {
         await rollbackAll();
         return {
-          error: `darwin-launchd install failed: ${err?.message ?? err}`,
+          error: `darwin-launchd install failed: ${errorMessage(err)}`,
         };
       }
       continue;

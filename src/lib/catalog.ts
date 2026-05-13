@@ -7,6 +7,7 @@ import type {
 } from "../types.js";
 import { getSkill } from "./db.js";
 import { parseDependencyRef } from "./source-resolver.js";
+import { isErrno } from "./errors.js";
 import type { Database } from "bun:sqlite";
 
 /**
@@ -33,8 +34,8 @@ export async function loadCatalog(
     parsed.catalog.tools ??= [];
 
     return parsed;
-  } catch (err: any) {
-    if (err.code === "ENOENT") return null;
+  } catch (err) {
+    if (isErrno(err) && err.code === "ENOENT") return null;
     throw err;
   }
 }

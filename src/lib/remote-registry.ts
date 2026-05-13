@@ -9,6 +9,7 @@ import type {
   SourcedSearchResult,
 } from "../types.js";
 import { searchRegistry, findRegistryEntry } from "./registry.js";
+import { errorMessage } from "./errors.js";
 
 const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
 
@@ -61,8 +62,8 @@ export async function fetchRemoteRegistry(
       parsed.registry.components ??= [];
       parsed.registry.rules ??= [];
       return parsed;
-    } catch (err: any) {
-      process.stderr.write(`Warning: failed to read local source "${source.name}": ${filePath}: ${err.message ?? err}\n`);
+    } catch (err) {
+      process.stderr.write(`Warning: failed to read local source "${source.name}": ${filePath}: ${errorMessage(err)}\n`);
       return null;
     }
   }
@@ -141,10 +142,10 @@ export async function fetchRemoteRegistry(
     await writeFile(cached, text, "utf-8");
 
     return parsed;
-  } catch (err: any) {
+  } catch (err) {
     // Network failure — warn and try stale cache
     process.stderr.write(
-      `Warning: network error fetching source "${source.name}": ${err.message ?? err}\n`,
+      `Warning: network error fetching source "${source.name}": ${errorMessage(err)}\n`,
     );
     if (existsSync(cached)) {
       try {

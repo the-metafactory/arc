@@ -3,6 +3,7 @@ import { join } from "path";
 import YAML from "yaml";
 import type { ArcManifest, HostId, RiskLevel } from "../types.js";
 import { KNOWN_HOST_IDS } from "../types.js";
+import { isErrno } from "./errors.js";
 
 /** Preferred manifest filename (new name). */
 export const MANIFEST_FILENAME = "arc-manifest.yaml";
@@ -114,8 +115,8 @@ async function readManifestFromDir(
       validateLifecycle(parsed, filename);
 
       return parsed;
-    } catch (err: any) {
-      if (err.code === "ENOENT") continue;
+    } catch (err) {
+      if (isErrno(err) && err.code === "ENOENT") continue;
       throw err;
     }
   }

@@ -3,6 +3,7 @@ import { existsSync } from "fs";
 import { mkdir, cp, rm } from "fs/promises";
 import { homedir } from "os";
 import type { Database } from "bun:sqlite";
+import { errorMessage } from "../lib/errors.js";
 import type { ArcPaths, HostAdapter, CatalogEntry, ArtifactType } from "../types.js";
 import { MANIFEST_FILENAMES } from "../lib/manifest.js";
 import {
@@ -123,8 +124,8 @@ export async function catalogAdd(
     addEntry(config, entry, artifactType);
     await saveCatalog(arc.catalogPath, config);
     return { success: true, name: entry.name, artifactType };
-  } catch (err: any) {
-    return { success: false, error: err.message };
+  } catch (err) {
+    return { success: false, error: errorMessage(err) };
   }
 }
 
@@ -173,8 +174,8 @@ export async function catalogUse(
   let ordered: { entry: CatalogEntry; artifactType: ArtifactType }[];
   try {
     ordered = resolveDependencies(config, name);
-  } catch (err: any) {
-    return { success: false, error: err.message };
+  } catch (err) {
+    return { success: false, error: errorMessage(err) };
   }
 
   const installed: { name: string; artifactType: ArtifactType }[] = [];

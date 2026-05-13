@@ -13,6 +13,7 @@ import { readFile } from "fs/promises";
 import { join } from "path";
 import YAML from "yaml";
 import type { RulesTemplate, RulesConfig } from "../types.js";
+import { errorMessage, isErrno } from "./errors.js";
 
 export interface GenerateResult {
   target: string;
@@ -66,15 +67,15 @@ async function generateSingleRule(
   try {
     const configContent = await readFile(configPath, "utf-8");
     config = YAML.parse(configContent) as RulesConfig;
-  } catch (err: any) {
-    if (err.code === "ENOENT") {
+  } catch (err) {
+    if (isErrno(err) && err.code === "ENOENT") {
       // No config file — skip optional templates, error on required
       if (tmpl.optional) {
         return { target, success: true }; // silently skip
       }
       return { target, success: false, error: `Config file not found: ${tmpl.config}` };
     }
-    return { target, success: false, error: `Failed to read config: ${err.message}` };
+    return { target, success: false, error: `Failed to read config: ${errorMessage(err)}` };
   }
 
   // 2. Check if this format is opted-in (for optional templates)

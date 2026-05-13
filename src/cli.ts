@@ -96,6 +96,7 @@ import {
 import { homedir } from "os";
 import { join } from "path";
 import { parseLibraryRef } from "./lib/artifact-installer.js";
+import { errorMessage } from "./lib/errors.js";
 
 const pkg = require("../package.json");
 
@@ -774,8 +775,8 @@ source
       addSource(config, newSource);
       await saveSources(paths.sourcesPath, config);
       console.log(`Added source "${name}" [${opts.tier}] (${opts.type})`);
-    } catch (err: any) {
-      console.error(`Error: ${err.message}`);
+    } catch (err) {
+      console.error(`Error: ${errorMessage(err)}`);
       process.exit(1);
     }
   });
@@ -808,8 +809,8 @@ source
       removeSource(config, name);
       await saveSources(paths.sourcesPath, config);
       console.log(`Removed source "${name}"`);
-    } catch (err: any) {
-      console.error(`Error: ${err.message}`);
+    } catch (err) {
+      console.error(`Error: ${errorMessage(err)}`);
       process.exit(1);
     }
   });

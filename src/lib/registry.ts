@@ -8,6 +8,7 @@ import type {
   CatalogEntry,
 } from "../types.js";
 import { findEntry } from "./catalog.js";
+import { isErrno } from "./errors.js";
 
 /**
  * Load and parse registry.yaml from the given path.
@@ -32,8 +33,8 @@ export async function loadRegistry(
     parsed.registry.rules ??= [];
 
     return parsed;
-  } catch (err: any) {
-    if (err.code === "ENOENT") return null;
+  } catch (err) {
+    if (isErrno(err) && err.code === "ENOENT") return null;
     throw err;
   }
 }

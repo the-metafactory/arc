@@ -2,6 +2,7 @@ import { join } from "path";
 import { existsSync, readdirSync, lstatSync, readlinkSync } from "fs";
 import { mkdir } from "fs/promises";
 import type { Database } from "bun:sqlite";
+import { errorMessage } from "../lib/errors.js";
 import { listSkills } from "../lib/db.js";
 import { createSymlink, isValidSymlink, getSymlinkTarget } from "../lib/symlinks.js";
 
@@ -158,14 +159,14 @@ export async function upgradeCore(
           detail: `Target not found: ${link.target}`,
         });
       }
-    } catch (err: any) {
+    } catch (err) {
       steps.push({
         action: "persistent-symlink",
         target: link.name,
         status: "failed",
-        detail: err.message,
+        detail: errorMessage(err),
       });
-      errors.push(`Failed to create ${link.name} symlink: ${err.message}`);
+      errors.push(`Failed to create ${link.name} symlink: ${errorMessage(err)}`);
     }
   }
 
@@ -220,15 +221,15 @@ export async function upgradeCore(
           detail: `Source not found: ${effectiveSource}`,
         });
       }
-    } catch (err: any) {
+    } catch (err) {
       steps.push({
         action: "skill-symlink",
         target: skill.name,
         status: "failed",
-        detail: err.message,
+        detail: errorMessage(err),
       });
       errors.push(
-        `Failed to symlink skill ${skill.name}: ${err.message}`
+        `Failed to symlink skill ${skill.name}: ${errorMessage(err)}`
       );
     }
   }
@@ -250,12 +251,12 @@ export async function upgradeCore(
           detail: `${binLink} → ${skill.install_path}`,
         });
       }
-    } catch (err: any) {
+    } catch (err) {
       steps.push({
         action: "bin-symlink",
         target: skill.name,
         status: "failed",
-        detail: err.message,
+        detail: errorMessage(err),
       });
     }
   }
@@ -280,14 +281,14 @@ export async function upgradeCore(
       status: "created",
       detail: `${config.claudeSymlink} → ${newReleaseDir}`,
     });
-  } catch (err: any) {
+  } catch (err) {
     steps.push({
       action: "main-symlink",
       target: config.claudeSymlink,
       status: "failed",
-      detail: err.message,
+      detail: errorMessage(err),
     });
-    errors.push(`Failed to swap main symlink: ${err.message}`);
+    errors.push(`Failed to swap main symlink: ${errorMessage(err)}`);
   }
 
   // 7. Validate
@@ -405,9 +406,9 @@ async function carryForwardConfigSymlinks(
               detail: `${newLink} → ${target}`,
             });
           }
-        } catch (err: any) {
+        } catch (err) {
           errors.push(
-            `Failed to carry forward ${entry}/${subEntry}: ${err.message}`
+            `Failed to carry forward ${entry}/${subEntry}: ${errorMessage(err)}`
           );
         }
       }

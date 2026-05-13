@@ -7,6 +7,7 @@
 import { join } from "path";
 import { existsSync } from "fs";
 import { writeFile, mkdir, chmod } from "fs/promises";
+import { errorMessage } from "./errors.js";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -128,8 +129,8 @@ export async function fetchCosignBinary(): Promise<{ path?: string; error?: stri
 
     process.stderr.write(`cosign ${COSIGN_VERSION} downloaded and verified.\n`);
     return { path: destPath };
-  } catch (err: any) {
-    return { error: `Failed to fetch cosign: ${err.message ?? err}` };
+  } catch (err) {
+    return { error: `Failed to fetch cosign: ${errorMessage(err)}` };
   }
 }
 
