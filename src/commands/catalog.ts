@@ -292,14 +292,14 @@ export async function catalogPush(
   const tmpDir = join(arc.reposDir, `_push_${name}_${Date.now()}`);
   try {
     let cloneResult = Bun.spawnSync(
-      ["git", "clone", "--depth", "1", "--branch", resolved.branch!, resolved.cloneUrl, tmpDir],
+      ["git", "clone", "--depth", "1", "--branch", resolved.branch ?? "main", resolved.cloneUrl, tmpDir],
       { stdout: "pipe", stderr: "pipe" }
     );
 
     if (cloneResult.exitCode !== 0) {
       const sshUrl = `git@github.com:${resolved.org}/${resolved.repo}.git`;
       cloneResult = Bun.spawnSync(
-        ["git", "clone", "--depth", "1", "--branch", resolved.branch!, sshUrl, tmpDir],
+        ["git", "clone", "--depth", "1", "--branch", resolved.branch ?? "main", sshUrl, tmpDir],
         { stdout: "pipe", stderr: "pipe" }
       );
     }
@@ -542,14 +542,14 @@ async function installSkillEntry(
     const tmpDir = join(arc.reposDir, `_tmp_${entry.name}_${Date.now()}`);
     try {
       let cloneResult = Bun.spawnSync(
-        ["git", "clone", "--depth", "1", "--branch", resolved.branch!, resolved.cloneUrl, tmpDir],
+        ["git", "clone", "--depth", "1", "--branch", resolved.branch ?? "main", resolved.cloneUrl, tmpDir],
         { stdout: "pipe", stderr: "pipe" }
       );
 
       if (cloneResult.exitCode !== 0) {
         const sshUrl = `git@github.com:${resolved.org}/${resolved.repo}.git`;
         cloneResult = Bun.spawnSync(
-          ["git", "clone", "--depth", "1", "--branch", resolved.branch!, sshUrl, tmpDir],
+          ["git", "clone", "--depth", "1", "--branch", resolved.branch ?? "main", sshUrl, tmpDir],
           { stdout: "pipe", stderr: "pipe" }
         );
       }
@@ -693,14 +693,14 @@ async function installAgentEntry(
   const tmpDir = join(arc.reposDir, `_tmp_${entry.name}_${Date.now()}`);
   try {
     let cloneResult = Bun.spawnSync(
-      ["git", "clone", "--depth", "1", "--branch", resolved.branch!, resolved.cloneUrl, tmpDir],
+      ["git", "clone", "--depth", "1", "--branch", resolved.branch ?? "main", resolved.cloneUrl, tmpDir],
       { stdout: "pipe", stderr: "pipe" }
     );
 
     if (cloneResult.exitCode !== 0) {
       const sshUrl = `git@github.com:${resolved.org}/${resolved.repo}.git`;
       cloneResult = Bun.spawnSync(
-        ["git", "clone", "--depth", "1", "--branch", resolved.branch!, sshUrl, tmpDir],
+        ["git", "clone", "--depth", "1", "--branch", resolved.branch ?? "main", sshUrl, tmpDir],
         { stdout: "pipe", stderr: "pipe" }
       );
     }

@@ -545,8 +545,12 @@ function formatInstalledLibraryInfo(result: InfoResult): string {
   const byType = new Map<string, InstalledSkill[]>();
   for (const a of artifacts) {
     const type = a.artifact_type;
-    if (!byType.has(type)) byType.set(type, []);
-    byType.get(type)!.push(a);
+    let bucket = byType.get(type);
+    if (!bucket) {
+      bucket = [];
+      byType.set(type, bucket);
+    }
+    bucket.push(a);
   }
 
   lines.push("");

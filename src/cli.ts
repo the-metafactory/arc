@@ -195,7 +195,7 @@ program
         console.error(`${download.error}`);
         process.exit(1);
       }
-      console.log(`Downloaded ${(download.bytesDownloaded! / 1024).toFixed(0)} KB`);
+      console.log(`Downloaded ${((download.bytesDownloaded ?? 0) / 1024).toFixed(0)} KB`);
 
       // Verify SHA-256
       const verify = await verifyChecksum(download.tempPath, resolved.sha256);
@@ -538,23 +538,23 @@ program
       } else {
         console.log(formatUpgradeResults(results, { force: true }));
       }
-    } else {
-      // name is guaranteed non-null here — commander validates required args for single-package paths
-      const libRef = parseLibraryRef(name!);
-      const upgradeName = libRef?.artifactName ?? name!;
+    } else if (name) {
+      // Single-package path: prior branches handled the !name cases.
+      const libRef = parseLibraryRef(name);
+      const upgradeName = libRef?.artifactName ?? name;
       let isLibraryUpgrade = false;
 
       if (!libRef?.artifactName) {
         // No colon — check if name matches a library
         const { listByLibrary } = await import("./lib/db.js");
-        const libArtifacts = listByLibrary(db, name!);
+        const libArtifacts = listByLibrary(db, name);
         if (libArtifacts.length > 0) {
           isLibraryUpgrade = true;
         }
       }
 
       if (isLibraryUpgrade) {
-        const results = await upgradeLibrary(db, paths, host, name!, { force: opts.force });
+        const results = await upgradeLibrary(db, paths, host, name, { force: opts.force });
         console.log(formatUpgradeResults(results, { force: opts.force }));
       } else {
         const result = await upgradePackage(db, paths, host, upgradeName, { force: opts.force });
@@ -625,7 +625,7 @@ program
       if (result.success) {
         console.log(`\n✅ Scaffolded ${artifactType} at ${result.path}`);
         console.log(`\nFiles created:`);
-        for (const f of result.files!) {
+        for (const f of result.files ?? []) {
           console.log(`  ${f}`);
         }
       } else {
@@ -1142,7 +1142,7 @@ catalog
     const result = await catalogUse(paths, host, db, name);
 
     if (result.success) {
-      for (const item of result.installed!) {
+      for (const item of result.installed ?? []) {
         console.log(`Installed ${item.name} [${item.artifactType}]`);
       }
     } else {

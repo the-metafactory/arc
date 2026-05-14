@@ -133,10 +133,13 @@ function convertToRegistryConfig(packages: MetafactoryPackageListItem[]): Regist
     // pipeline, action, rules all route to skills — arc's registry model treats them
     // as skill subtypes. Separate arrays exist in RegistryConfig but are only used
     // by REGISTRY.yaml sources that explicitly categorize them.
+    if (artifactType === "component") {
+      config.registry.components ??= [];
+    }
     const target = artifactType === "tool" ? config.registry.tools
       : artifactType === "agent" ? config.registry.agents
       : artifactType === "prompt" ? config.registry.prompts
-      : artifactType === "component" ? config.registry.components!
+      : artifactType === "component" ? config.registry.components ?? []
       : config.registry.skills;
     target.push(entry);
   }

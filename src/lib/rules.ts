@@ -159,14 +159,18 @@ async function injectSections(
   const byPosition = new Map<string, string[]>();
   for (const section of sections) {
     const pos = section.position;
-    if (!byPosition.has(pos)) byPosition.set(pos, []);
+    let bucket = byPosition.get(pos);
+    if (!bucket) {
+      bucket = [];
+      byPosition.set(pos, bucket);
+    }
 
     try {
       const content = await readFile(join(consumerDir, section.file), "utf-8");
-      byPosition.get(pos)!.push(content.trimEnd());
-    } catch (_err: any) {
+      bucket.push(content.trimEnd());
+    } catch {
       // Section file missing — skip with warning comment
-      byPosition.get(pos)!.push(`<!-- Warning: section file not found: ${section.file} -->`);
+      bucket.push(`<!-- Warning: section file not found: ${section.file} -->`);
     }
   }
 

@@ -174,7 +174,7 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
       const checkoutResult = checkoutVersionTag(installPath, opts.pinnedVersion);
       if (!checkoutResult.success) {
         Bun.spawnSync(["rm", "-rf", installPath], { stdout: "pipe", stderr: "pipe" });
-        return { success: false, error: checkoutResult.error! };
+        return { success: false, error: checkoutResult.error ?? "checkout failed" };
       }
     }
   }

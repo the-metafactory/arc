@@ -71,7 +71,7 @@ export default tseslint.config(
       // myelin#123.
       "@typescript-eslint/await-thenable": "error",
       "@typescript-eslint/no-empty-function": "error",
-      "@typescript-eslint/no-non-null-assertion": "warn",
+      "@typescript-eslint/no-non-null-assertion": "error",
       "@typescript-eslint/prefer-nullish-coalescing": "error",
       "@typescript-eslint/no-explicit-any": "warn",
       "@typescript-eslint/no-unsafe-assignment": "warn",
