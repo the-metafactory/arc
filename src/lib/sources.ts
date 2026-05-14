@@ -34,13 +34,13 @@ export async function loadSources(
   }
 
   const content = await readFile(sourcesPath, "utf-8");
-  const parsed = YAML.parse(content) as SourcesConfig;
+  const parsed = YAML.parse(content) as Partial<SourcesConfig> | null;
 
   if (!parsed?.sources || !Array.isArray(parsed.sources)) {
     return createDefaultSources();
   }
 
-  return parsed;
+  return parsed as SourcesConfig;
 }
 
 export function createDefaultSources(): SourcesConfig {

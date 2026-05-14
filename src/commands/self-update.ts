@@ -21,7 +21,7 @@ export async function selfUpdate(): Promise<SelfUpdateResult> {
   // Read current version
   let oldVersion: string;
   try {
-    const pkg = await Bun.file(pkgJsonPath).json();
+    const pkg = (await Bun.file(pkgJsonPath).json()) as { version: string };
     oldVersion = pkg.version;
   } catch {
     return { success: false, oldVersion: "unknown", newVersion: "unknown", commitsPulled: 0, error: "Could not read package.json" };
@@ -96,7 +96,7 @@ export async function selfUpdate(): Promise<SelfUpdateResult> {
   try {
     // Re-read from disk (not cached)
     const raw = await Bun.file(pkgJsonPath).text();
-    const pkg = JSON.parse(raw);
+    const pkg = JSON.parse(raw) as { version: string };
     newVersion = pkg.version;
   } catch {
     newVersion = oldVersion;

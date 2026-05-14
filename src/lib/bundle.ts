@@ -103,8 +103,10 @@ const VALID_TYPES = [
   "pipeline", "rules", "library", "action",
 ];
 
-/** Validate a manifest for publishing (stricter than install validation) */
-export function validateForPublish(manifest: ArcManifest): PublishValidation {
+/** Validate a manifest for publishing (stricter than install validation).
+ * Accepts Partial because YAML may produce a structurally-incomplete object
+ * even when the type pretends every field is present. */
+export function validateForPublish(manifest: Partial<ArcManifest>): PublishValidation {
   const errors: string[] = [];
   const warnings: string[] = [];
 

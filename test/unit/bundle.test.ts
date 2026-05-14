@@ -163,7 +163,7 @@ describe("validateForPublish", () => {
     const result = validateForPublish({
       version: "1.0.0",
       type: "skill",
-    } as ArcManifest);
+    });
     expect(result.valid).toBe(false);
     expect(result.errors.some((e) => e.includes("name"))).toBe(true);
   });
@@ -182,7 +182,7 @@ describe("validateForPublish", () => {
     const result = validateForPublish({
       name: "my-skill",
       type: "skill",
-    } as ArcManifest);
+    });
     expect(result.valid).toBe(false);
     expect(result.errors.some((e) => e.includes("version"))).toBe(true);
   });

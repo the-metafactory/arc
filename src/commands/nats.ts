@@ -43,7 +43,7 @@ export type NscRunner = (args: string[]) => NscResult;
 const defaultRunner: NscRunner = (args) => {
   const result = Bun.spawnSync(["nsc", ...args], { stderr: "pipe", stdout: "pipe" });
   return {
-    exitCode: result.exitCode ?? -1,
+    exitCode: result.exitCode,
     stdout: result.stdout.toString(),
     stderr: result.stderr.toString(),
   };
@@ -141,8 +141,8 @@ export function detectAccount(): string {
   for (const candidate of NSC_CONFIG_CANDIDATES) {
     if (!existsSync(candidate)) continue;
     try {
-      const config = JSON.parse(readFileSync(candidate, "utf-8"));
-      if (config.account && typeof config.account === "string") {
+      const config = JSON.parse(readFileSync(candidate, "utf-8")) as { account?: unknown };
+      if (typeof config.account === "string") {
         return config.account;
       }
     } catch {

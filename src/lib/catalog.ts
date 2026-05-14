@@ -19,21 +19,23 @@ export async function loadCatalog(
 ): Promise<CatalogConfig | null> {
   try {
     const content = await readFile(catalogPath, "utf-8");
-    const parsed = YAML.parse(content) as CatalogConfig;
+    const raw = YAML.parse(content) as Partial<CatalogConfig> | null;
 
-    if (!parsed.defaults || !parsed.catalog) {
+    if (!raw?.defaults || !raw.catalog) {
       throw new Error(
         "Invalid catalog.yaml: missing required sections (defaults, catalog)"
       );
     }
 
-    // Ensure arrays exist even if empty in YAML
-    parsed.catalog.skills ??= [];
-    parsed.catalog.agents ??= [];
-    parsed.catalog.prompts ??= [];
-    parsed.catalog.tools ??= [];
+    // Ensure arrays exist even if empty in YAML (the type asserts they're
+    // required, but YAML lets them be omitted).
+    const cat = raw.catalog as Partial<CatalogConfig["catalog"]>;
+    cat.skills ??= [];
+    cat.agents ??= [];
+    cat.prompts ??= [];
+    cat.tools ??= [];
 
-    return parsed;
+    return raw as CatalogConfig;
   } catch (err) {
     if (isErrno(err) && err.code === "ENOENT") return null;
     throw err;

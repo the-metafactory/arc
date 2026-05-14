@@ -79,8 +79,10 @@ export function toServerManifest(manifest: ArcManifest, scope: string): Record<s
   // Network: arc uses [{ domain, reason }] (string shorthand "example.com" is
   // normalised at readManifest, but coerce defensively here in case a manifest
   // was constructed in-memory without going through readManifest — issue #79).
-  // Server schema requires { domain }.
-  const network = (caps.network ?? []).flatMap((n): { domain: string }[] => {
+  // Server schema requires { domain }. The type asserts every entry is an
+  // object, but legacy YAML may have plain strings — cast through unknown.
+  const networkEntries = (caps.network ?? []) as unknown[];
+  const network = networkEntries.flatMap((n): { domain: string }[] => {
     if (typeof n === "string") return [{ domain: n }];
     if (n && typeof n === "object") {
       const obj = n as { domain?: unknown };

@@ -203,7 +203,7 @@ async function resolveMetafactoryInfo(
     const manifest: ArcManifest = {
       name: detail.name,
       version: detail.latest_version ?? "0.0.0",
-      type: (detail.type as ArcManifest["type"]) ?? "skill",
+      type: detail.type as ArcManifest["type"],
       description: detail.description ?? undefined,
       license: detail.license,
       author: detail.publisher.github_username
@@ -371,7 +371,7 @@ function formatRemoteInfo(result: InfoResult): string {
   if (!manifest || !remote) return "Package not found.";
 
   const lines: string[] = [];
-  const typeLabel = manifest.type ?? "skill";
+  const typeLabel = manifest.type;
 
   lines.push(`📦 ${manifest.name} v${manifest.version} (${typeLabel})`);
 
@@ -526,7 +526,7 @@ function formatInstalledLibraryInfo(result: InfoResult): string {
   const artifacts = libraryArtifacts ?? [];
 
   const name = manifest?.name ?? artifacts[0]?.library_name ?? "unknown";
-  const version = manifest?.version ?? artifacts[0]?.version ?? "?";
+  const version = manifest?.version ?? (artifacts.length > 0 ? artifacts[0].version : "?");
   const lines: string[] = [];
 
   lines.push(`\u{1F4DA} ${name} v${version} (library)`);

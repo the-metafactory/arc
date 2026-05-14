@@ -204,6 +204,10 @@ function banner(label: string, palette: string, colorEnabled: boolean): string {
  * legitimate prose punctuation; everything else gets replaced with U+FFFD.
  */
 function sanitizeForTerminal(s: string): string {
+  // Intentional control-char range — we're stripping terminal control
+  // sequences that could spoof banner output. Newline (\x0a) and tab
+  // (\x09) survive because they're legitimate prose punctuation.
+  // eslint-disable-next-line no-control-regex
   return s.replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, "�");
 }
 

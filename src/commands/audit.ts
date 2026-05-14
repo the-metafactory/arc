@@ -31,7 +31,7 @@ export function audit(db: Database): AuditResult {
   // Build tier lookup from installed skills
   const tierBySkill = new Map<string, string>();
   for (const s of activeSkills) {
-    tierBySkill.set(s.name, s.tier || "custom");
+    tierBySkill.set(s.name, s.tier);
   }
 
   // Count capability surface

@@ -34,35 +34,23 @@ export default tseslint.config(
       "@typescript-eslint/restrict-plus-operands": "error",
       "no-useless-escape": "error",
       "no-useless-assignment": "error",
-      "no-control-regex": "warn",
+      "no-control-regex": "error",
       "@typescript-eslint/no-require-imports": "error",
       // Mirrors myelin#127. `throw new Error(msg)` from a catch block
       // should pass `{ cause: err }` to preserve the underlying exception
       // chain for debuggability.
       "preserve-caught-error": "error",
 
-      // ── Warn: stylistic / preference rules with high pre-existing
-      //         violation counts. Surface in IDE + lint output, don't
-      //         gate the build. Tightened in subsequent PRs after a
-      //         dedicated cleanup pass per rule.
+      // All previously-warn rules promoted to error after dedicated
+      // cleanup sweeps. Test files keep targeted overrides (see below)
+      // for idioms that are noise in tests but signal in production.
       //
-      //   require-await ........ 94 → many `async` fns without await
-      //                           (often for future-proofing the signature)
-      //   no-unnecessary-condition .. 63 → existsSync()-then-act idioms
-      //   await-thenable ....... 26 → Bun.write returns Promise but lint
-      //                           cannot prove it from generics
-      //   no-empty-function ..... 25 → catch blocks with `{}` (intentional swallow)
-      //   no-non-null-assertion . 23 → `result.files!` after success-narrow
-      //   prefer-nullish-coalescing  → 0 (promoted to error)
-      //   no-explicit-any ...... infra layers that bridge untyped surfaces
-      //   no-unsafe-* .......... Bun.spawnSync / process / yaml-parsed
-      //                           dynamic data flows through these
       // Production code has zero require-await sites — myelin#121's
       // pattern: turn off in tests (adapter mocks have async signatures
       // without I/O), promote to error elsewhere so new src violations
       // gate the build.
       "@typescript-eslint/require-await": "error",
-      "@typescript-eslint/no-unnecessary-condition": "warn",
+      "@typescript-eslint/no-unnecessary-condition": "error",
       // 100% test-file noise from bun-test's
       // `await expect(promise).rejects.toThrow(...)` matcher idiom.
       // The matcher chain returns void; the rule reads it as awaiting
@@ -74,11 +62,11 @@ export default tseslint.config(
       "@typescript-eslint/no-non-null-assertion": "error",
       "@typescript-eslint/prefer-nullish-coalescing": "error",
       "@typescript-eslint/no-explicit-any": "error",
-      "@typescript-eslint/no-unsafe-assignment": "warn",
-      "@typescript-eslint/no-unsafe-member-access": "warn",
-      "@typescript-eslint/no-unsafe-call": "warn",
-      "@typescript-eslint/no-unsafe-argument": "warn",
-      "@typescript-eslint/no-unsafe-return": "warn",
+      "@typescript-eslint/no-unsafe-assignment": "error",
+      "@typescript-eslint/no-unsafe-member-access": "error",
+      "@typescript-eslint/no-unsafe-call": "error",
+      "@typescript-eslint/no-unsafe-argument": "error",
+      "@typescript-eslint/no-unsafe-return": "error",
       "@typescript-eslint/no-base-to-string": "error",
       // Number / boolean interpolation in template literals is
       // universally understood — `Found ${count} matches` reads

@@ -85,14 +85,16 @@ export function resolveHooksFromManifest(
 
   // Format 2: config-file reference
   const configRef = hooks;
-  if (!configRef.claude_code?.config) return null;
+  if (!configRef.claude_code.config) return null;
 
   const configPath = join(installPath, configRef.claude_code.config);
 
-  let configData: Record<string, { type?: string; command: string }[]>;
+  interface HookEntry { type?: string; command: string }
+  type HookMap = Record<string, HookEntry[]>;
+  let configData: HookMap;
   try {
     const raw = readFileSync(configPath, "utf-8");
-    const parsed = JSON.parse(raw);
+    const parsed = JSON.parse(raw) as { hooks?: HookMap } & HookMap;
     // The JSON file has either { hooks: { Event: [...] } } or { Event: [...] }
     configData = parsed.hooks ?? parsed;
   } catch {
@@ -182,7 +184,7 @@ export function findMissingHookFiles(
         continue;
       }
       const stripped = tokens[i].replace(/^['"]|['"]$/g, "");
-      if (!stripped?.startsWith("/")) continue;
+      if (!stripped.startsWith("/")) continue;
       if (!existsSync(stripped)) {
         issues.push({ event: hook.event, command: hook.command, missingPath: stripped });
       }
@@ -208,6 +210,9 @@ export async function registerHooks(
   settings.hooks ??= {};
 
   for (const hook of hooks) {
+    // Record<string, T> indexing is typed as always-defined without
+    // noUncheckedIndexedAccess; the runtime check is still needed.
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
     if (!settings.hooks[hook.event]) {
       settings.hooks[hook.event] = [];
     }

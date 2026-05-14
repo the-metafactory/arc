@@ -156,11 +156,9 @@ export function getSkill(
   db: Database,
   name: string
 ): InstalledSkill | null {
-  return (
-    (db
-      .prepare("SELECT * FROM skills WHERE name = ?")
-      .get(name) as InstalledSkill) ?? null
-  );
+  return db
+    .prepare("SELECT * FROM skills WHERE name = ?")
+    .get(name) as InstalledSkill | null;
 }
 
 /**

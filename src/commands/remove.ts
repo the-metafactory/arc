@@ -325,8 +325,8 @@ export async function remove(
       targets: manifest.targets,
       manifest,
       packageName: name,
-      hostOverrides: opts?.hostOverrides,
-      quiet: opts?.quiet,
+      hostOverrides: opts.hostOverrides,
+      quiet: opts.quiet,
     });
   } else if (isAction) {
     // Actions: remove action symlink
@@ -420,9 +420,9 @@ export async function remove(
     const postuninstallResult = runPostuninstallPhase(
       skill.install_path,
       manifest,
-      opts?.quiet,
+      opts.quiet,
     );
-    if (!postuninstallResult.success && !opts?.quiet) {
+    if (!postuninstallResult.success && !opts.quiet) {
       console.warn(`  ⚠ ${postuninstallResult.error}`);
     }
   }

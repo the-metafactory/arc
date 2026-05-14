@@ -632,7 +632,7 @@ async function installSkillEntry(
       install_path: installDir,
       skill_dir: isCli ? join(installDir, "skill") : installDir,
       status: "active",
-      artifact_type: (manifest?.type as ArtifactType) ?? "skill",
+      artifact_type: (manifest?.type ?? "skill") as ArtifactType,
       tier: "custom",
       customization_path: null,
       install_source: entry.source,

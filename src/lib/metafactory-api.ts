@@ -198,15 +198,17 @@ export async function fetchMetafactoryRegistry(
         return await readCachedRegistry(cachePath, source);
       }
 
-      const body = (await response.json()) as MetafactoryPackageListResponse;
-      if (!body.packages || !Array.isArray(body.packages)) {
+      const body = (await response.json()) as Partial<MetafactoryPackageListResponse>;
+      if (!Array.isArray(body.packages)) {
         debugLog(`Invalid response from ${source.name}: missing packages array`);
         return await readCachedRegistry(cachePath, source);
       }
       allPackages.push(...body.packages);
 
       // Check if there are more pages
-      if (body.packages.length < body.per_page || allPackages.length >= body.total) {
+      const perPage = body.per_page ?? body.packages.length;
+      const total = body.total ?? allPackages.length;
+      if (body.packages.length < perPage || allPackages.length >= total) {
         break;
       }
       page++;

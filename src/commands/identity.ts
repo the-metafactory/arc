@@ -192,7 +192,7 @@ export function importPrincipals(filePath: string): void {
     return;
   }
 
-  if (incoming.trusted_hubs?.length > 0) {
+  if (incoming.trusted_hubs.length > 0) {
     console.log(`  NOTE: trusted_hubs in import file ignored (security boundary — add manually if needed)`);
   }
 

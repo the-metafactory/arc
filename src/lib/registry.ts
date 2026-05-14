@@ -19,20 +19,21 @@ export async function loadRegistry(
 ): Promise<RegistryConfig | null> {
   try {
     const content = await readFile(registryPath, "utf-8");
-    const parsed = YAML.parse(content) as RegistryConfig;
+    const raw = YAML.parse(content) as Partial<RegistryConfig> | null;
 
-    if (!parsed.registry) {
+    if (!raw?.registry) {
       throw new Error("Invalid registry.yaml: missing 'registry' section");
     }
 
-    parsed.registry.skills ??= [];
-    parsed.registry.agents ??= [];
-    parsed.registry.prompts ??= [];
-    parsed.registry.tools ??= [];
-    parsed.registry.components ??= [];
-    parsed.registry.rules ??= [];
+    const reg = raw.registry as Partial<RegistryConfig["registry"]>;
+    reg.skills ??= [];
+    reg.agents ??= [];
+    reg.prompts ??= [];
+    reg.tools ??= [];
+    reg.components ??= [];
+    reg.rules ??= [];
 
-    return parsed;
+    return raw as RegistryConfig;
   } catch (err) {
     if (isErrno(err) && err.code === "ENOENT") return null;
     throw err;
