@@ -1,6 +1,7 @@
 import { join, dirname } from "path";
 import { homedir } from "os";
 import { existsSync, renameSync } from "fs";
+import { mkdir } from "fs/promises";
 import type { ArcPaths, HostAdapter } from "../types.js";
 import { createClaudeCodeHost } from "./hosts/claude-code.js";
 
@@ -116,8 +117,10 @@ export async function ensureDirectories(
   ];
 
   for (const dir of dirs) {
+    // Explicit mkdir — Bun.write only auto-creates parents on Bun ≥1.2.
+    // Don't gate arc's first-install on a particular Bun runtime.
+    await mkdir(dir, { recursive: true });
     await Bun.write(join(dir, ".gitkeep"), "");
-    // Bun.write auto-creates parent directories
   }
 }
 
