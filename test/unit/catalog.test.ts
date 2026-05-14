@@ -191,7 +191,7 @@ describe("listCatalog", () => {
     const config = sampleCatalog();
     const items = listCatalog(config, env.db);
     expect(items).toHaveLength(4); // 3 skills + 1 agent
-    expect(items.every((i) => i.installed === false)).toBe(true);
+    expect(items.every((i) => !i.installed)).toBe(true);
   });
 });
 

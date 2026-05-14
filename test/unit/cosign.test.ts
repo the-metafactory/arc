@@ -47,7 +47,7 @@ describe("ensureCosignBinary", () => {
   test("returns path or error", async () => {
     // Suppress stderr from potential download messages
     const originalWrite = process.stderr.write;
-    process.stderr.write = (() => true) as any;
+    process.stderr.write = (() => true);
     try {
       const result = await ensureCosignBinary();
       expect(result.path !== undefined || result.error !== undefined).toBe(true);
@@ -64,7 +64,7 @@ describe("verifySigstoreBundle", () => {
   test("returns invalid for nonexistent artifact and bundle", async () => {
     // Suppress stderr from potential download messages
     const originalWrite = process.stderr.write;
-    process.stderr.write = (() => true) as any;
+    process.stderr.write = (() => true);
     try {
       const result = await verifySigstoreBundle(
         "/nonexistent/artifact.tar.gz",

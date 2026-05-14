@@ -21,12 +21,12 @@ export function parsePackageRef(input: string): PackageRef | null {
   if (input.startsWith("http") || input.startsWith("git@") || input.startsWith("file://")) return null;
   if (input.startsWith("./") || input.startsWith("/") || input.startsWith("~")) return null;
 
-  const match = input.match(PACKAGE_REF_RE);
+  const match = PACKAGE_REF_RE.exec(input);
   if (!match) return null;
 
   return {
-    scope: match[1]!,
-    name: match[2]!,
+    scope: match[1],
+    name: match[2],
     version: match[3] || undefined,
   };
 }
@@ -204,6 +204,10 @@ function banner(label: string, palette: string, colorEnabled: boolean): string {
  * legitimate prose punctuation; everything else gets replaced with U+FFFD.
  */
 function sanitizeForTerminal(s: string): string {
+  // Intentional control-char range — we're stripping terminal control
+  // sequences that could spoof banner output. Newline (\x0a) and tab
+  // (\x09) survive because they're legitimate prose punctuation.
+  // eslint-disable-next-line no-control-regex
   return s.replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, "�");
 }
 
@@ -335,7 +339,7 @@ export async function downloadPackage(
   const tempPath = join(tempDir, `arc-download-${Date.now()}.tar.gz`);
 
   const headers: Record<string, string> = {};
-  if (source && source.token && getSourceType(source) === "metafactory") {
+  if (source?.token && getSourceType(source) === "metafactory") {
     headers.Authorization = `Bearer ${source.token}`;
   }
 
@@ -465,8 +469,9 @@ export async function extractPackage(
     };
   }
 
-  // Clean up tarball -- cleanup failure is non-fatal
-  await unlink(tarballPath).catch((_err) => {});
+  await unlink(tarballPath).catch((_err: unknown) => {
+    // best-effort cleanup; tarball may already be gone
+  });
 
   // Verify manifest exists
   const hasManifest = existsSync(join(extractedPath, "arc-manifest.yaml")) ||

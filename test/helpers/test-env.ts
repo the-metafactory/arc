@@ -89,19 +89,19 @@ export async function createMockSkillRepo(
     version?: string;
     author?: string;
     /** Use authors array format instead of singular author */
-    authors?: Array<{ name: string; github: string }>;
+    authors?: { name: string; github: string }[];
     /** Artifact type: skill (default), tool, agent, prompt, component, pipeline, action */
     type?: "skill" | "tool" | "agent" | "prompt" | "component" | "pipeline" | "action";
     withCli?: boolean;
     withoutManifest?: boolean;
     capabilities?: {
-      network?: Array<{ domain: string; reason: string }>;
+      network?: { domain: string; reason: string }[];
       filesystem?: { read?: string[]; write?: string[] };
       bash?: { allowed: boolean; restricted_to?: string[] };
       secrets?: string[];
     };
     /** Additional CLI entries beyond the default one */
-    extraCli?: Array<{ name: string; command: string }>;
+    extraCli?: { name: string; command: string }[];
     /** Lifecycle scripts to declare in the manifest and create on disk */
     scripts?: {
       preinstall?: { path: string; content: string };
@@ -112,7 +112,7 @@ export async function createMockSkillRepo(
     };
     /** provides.files entries to declare in the manifest. Source files
      *  are created on disk so install can symlink them. */
-    files?: Array<{ source: string; target: string; content?: string }>;
+    files?: { source: string; target: string; content?: string }[];
     /**
      * Ordered lifecycle script arrays (arc#140). Each phase is an ordered
      * list of `{ path, content }`. The helper writes each script to disk
@@ -120,10 +120,10 @@ export async function createMockSkillRepo(
      * the array of paths in declared order.
      */
     lifecycle?: {
-      preinstall?: Array<{ path: string; content: string }>;
-      postinstall?: Array<{ path: string; content: string }>;
-      preuninstall?: Array<{ path: string; content: string }>;
-      postuninstall?: Array<{ path: string; content: string }>;
+      preinstall?: { path: string; content: string }[];
+      postinstall?: { path: string; content: string }[];
+      preuninstall?: { path: string; content: string }[];
+      postuninstall?: { path: string; content: string }[];
     };
   }
 ): Promise<MockSkillRepo> {
@@ -248,7 +248,7 @@ export async function createMockSkillRepo(
         lifecycle: Object.fromEntries(
           Object.entries(opts.lifecycle)
             .filter(([, arr]) => arr && arr.length > 0)
-            .map(([phase, arr]) => [phase, arr!.map((s) => s.path)]),
+            .map(([phase, arr]) => [phase, arr.map((s) => s.path)]),
         ),
       } : {}),
     };
@@ -307,13 +307,13 @@ export async function createMockLibraryRepo(
     name: string;
     version?: string;
     author?: string;
-    artifacts: Array<{
+    artifacts: {
       path: string;
       name: string;
       type: "skill" | "tool" | "agent" | "prompt" | "pipeline" | "component" | "action";
       version?: string;
       description?: string;
-    }>;
+    }[];
   }
 ): Promise<MockLibraryRepo> {
   const repoDir = join(root, `mock-lib-${opts.name}`);
@@ -449,10 +449,12 @@ function buildYaml(obj: any, indent = 0): string {
     } else if (typeof val === "object") {
       out += `${pad}${key}:\n`;
       out += buildYaml(val, indent + 1);
-    } else if (typeof val === "boolean") {
+    } else if (typeof val === "boolean" || typeof val === "number" || typeof val === "string") {
       out += `${pad}${key}: ${val}\n`;
     } else {
-      out += `${pad}${key}: ${val}\n`;
+      // Fallback for unexpected types (bigint, symbol, function); JSON.stringify
+      // gives a sensible "null"/quoted representation.
+      out += `${pad}${key}: ${JSON.stringify(val)}\n`;
     }
   }
 

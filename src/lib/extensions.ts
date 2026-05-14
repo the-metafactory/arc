@@ -2,7 +2,7 @@ import { join } from "path";
 import { mkdir } from "fs/promises";
 import { existsSync } from "fs";
 import { createSymlink, removeSymlink } from "./symlinks.js";
-import type { ArcManifest, ExtensionEntry } from "../types.js";
+import type { ArcManifest } from "../types.js";
 
 /**
  * Wire extensions declared in a package manifest.

@@ -27,7 +27,7 @@ async function generateKeypair() {
     { name: "Ed25519" },
     true,
     ["sign", "verify"],
-  )) as CryptoKeyPair;
+  ));
   const raw = await crypto.subtle.exportKey("raw", kp.publicKey);
   return { kp, rawPubBase64: bytesToBase64(new Uint8Array(raw)) };
 }

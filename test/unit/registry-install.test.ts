@@ -529,7 +529,7 @@ describe("downloadPackage", () => {
   // origin (R2/S3/CDN), the bearer token must not reach the redirect target.
   test("strips Authorization on cross-origin redirect", async () => {
     const originalFetch = globalThis.fetch;
-    const requests: Array<{ url: string; auth: string | null }> = [];
+    const requests: { url: string; auth: string | null }[] = [];
     globalThis.fetch = mockFetch(async (input: any, init?: any) => {
       const url = typeof input === "string" ? input : input.url;
       const headers = new Headers(init?.headers);
@@ -600,7 +600,7 @@ describe("downloadPackage", () => {
     // Internal redirect (e.g. /v1/storage/download/abc → /v2/storage/download/abc
     // on the same origin) is part of the auth surface; strip would break installs.
     const originalFetch = globalThis.fetch;
-    const requests: Array<{ url: string; auth: string | null }> = [];
+    const requests: { url: string; auth: string | null }[] = [];
     globalThis.fetch = mockFetch(async (input: any, init?: any) => {
       const url = typeof input === "string" ? input : input.url;
       const headers = new Headers(init?.headers);

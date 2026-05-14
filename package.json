@@ -12,7 +12,10 @@
     "test:unit": "bun test test/unit/",
     "test:commands": "bun test test/commands/",
     "test:e2e": "bun test test/e2e/",
-    "fetch-cosign": "bun scripts/fetch-cosign.ts"
+    "fetch-cosign": "bun scripts/fetch-cosign.ts",
+    "lint": "eslint .",
+    "lint:errors": "eslint --quiet .",
+    "lint:fix": "eslint --fix ."
   },
   "dependencies": {
     "@noble/ed25519": "^3.1.0",
@@ -20,6 +23,12 @@
     "yaml": "^2.7.0"
   },
   "devDependencies": {
-    "@types/bun": "^1.2.0"
+    "@eslint/js": "^10.0.1",
+    "@types/bun": "^1.2.0",
+    "@typescript-eslint/eslint-plugin": "^8.59.3",
+    "@typescript-eslint/parser": "^8.59.3",
+    "eslint": "^10.3.0",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.59.3"
   }
 }

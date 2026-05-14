@@ -72,7 +72,7 @@ describe("fetchRemoteRegistry", () => {
 
     // Capture stderr to keep test output clean
     const originalWrite = process.stderr.write;
-    process.stderr.write = (() => true) as any;
+    process.stderr.write = (() => true);
     try {
       const result = await fetchRemoteRegistry(source, env.arc.cachePath);
       expect(result).toBeNull();
@@ -219,7 +219,7 @@ describe("searchAllSources", () => {
 
     // Suppress stderr warnings from failed fetches
     const originalWrite = process.stderr.write;
-    process.stderr.write = (() => true) as any;
+    process.stderr.write = (() => true);
     try {
       const results = await searchAllSources(
         sources,

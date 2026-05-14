@@ -34,13 +34,13 @@ export async function loadSources(
   }
 
   const content = await readFile(sourcesPath, "utf-8");
-  const parsed = YAML.parse(content) as SourcesConfig;
+  const parsed = YAML.parse(content) as Partial<SourcesConfig> | null;
 
   if (!parsed?.sources || !Array.isArray(parsed.sources)) {
     return createDefaultSources();
   }
 
-  return parsed;
+  return parsed as SourcesConfig;
 }
 
 export function createDefaultSources(): SourcesConfig {
@@ -67,7 +67,7 @@ export function validateSource(source: RegistrySource): { valid: boolean; error?
   const type = getSourceType(source);
 
   // Validate type value
-  if (source.type && !VALID_SOURCE_TYPES.includes(source.type as SourceType)) {
+  if (source.type && !VALID_SOURCE_TYPES.includes(source.type)) {
     return { valid: false, error: `Invalid source type "${source.type}". Valid types: ${VALID_SOURCE_TYPES.join(", ")}` };
   }
 

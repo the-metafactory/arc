@@ -50,9 +50,9 @@ export function resolveInitTarget(opts: {
   // name) or in a new subdir. Compute once.
   const inCwd = !arg || arg === "." || nameMatches;
 
-  const name = inCwd ? cwdBasename : arg!;
+  const name = inCwd ? cwdBasename : arg;
 
-  if (!name || /[\/\\]|\.\./.test(name)) {
+  if (!name || /[/\\]|\.\./.test(name)) {
     return {
       ok: false,
       reason: "invalid-name",

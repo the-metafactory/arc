@@ -31,8 +31,13 @@ function formatServerError(err: unknown): string | undefined {
     const obj = err as { message?: unknown; error?: unknown };
     if (typeof obj.message === "string") return obj.message;
     if (typeof obj.error === "string") return obj.error;
-    try { return JSON.stringify(err); } catch { return String(err); }
+    try { return JSON.stringify(err); } catch {
+      // eslint-disable-next-line @typescript-eslint/no-base-to-string
+      return String(err);
+    }
   }
+  // After narrowing above, err is a primitive — String() is safe.
+  // eslint-disable-next-line @typescript-eslint/no-base-to-string
   return String(err);
 }
 
@@ -63,7 +68,7 @@ export function toServerManifest(manifest: ArcManifest, scope: string): Record<s
   const caps = manifest.capabilities ?? {};
 
   // Filesystem: arc uses { read: [path], write: [path] }, server uses [{ path, access }]
-  const filesystem: Array<{ path: string; access: string }> = [];
+  const filesystem: { path: string; access: string }[] = [];
   for (const p of (caps.filesystem?.read ?? [])) {
     filesystem.push({ path: p, access: "read" });
   }
@@ -74,15 +79,20 @@ export function toServerManifest(manifest: ArcManifest, scope: string): Record<s
   // Network: arc uses [{ domain, reason }] (string shorthand "example.com" is
   // normalised at readManifest, but coerce defensively here in case a manifest
   // was constructed in-memory without going through readManifest — issue #79).
-  // Server schema requires { domain }.
-  const network = (caps.network ?? []).flatMap((n): Array<{ domain: string }> => {
+  // Server schema requires { domain }. The type asserts every entry is an
+  // object, but legacy YAML may have plain strings — cast through unknown.
+  const networkEntries = (caps.network ?? []) as unknown[];
+  const network = networkEntries.flatMap((n): { domain: string }[] => {
     if (typeof n === "string") return [{ domain: n }];
-    if (n && typeof (n as any).domain === "string") return [{ domain: (n as any).domain }];
+    if (n && typeof n === "object") {
+      const obj = n as { domain?: unknown };
+      if (typeof obj.domain === "string") return [{ domain: obj.domain }];
+    }
     return [];
   });
 
   // Bash → subprocess
-  const subprocess: Array<{ command: string }> = [];
+  const subprocess: { command: string }[] = [];
   if (caps.bash?.allowed) {
     for (const cmd of (caps.bash.restricted_to ?? [])) {
       subprocess.push({ command: cmd });

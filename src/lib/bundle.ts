@@ -76,7 +76,9 @@ export async function withTempDir<T>(
   try {
     return await fn(tempDir);
   } finally {
-    await rm(tempDir, { recursive: true, force: true }).catch(() => {});
+    await rm(tempDir, { recursive: true, force: true }).catch(() => {
+      // best-effort cleanup
+    });
   }
 }
 
@@ -101,8 +103,10 @@ const VALID_TYPES = [
   "pipeline", "rules", "library", "action",
 ];
 
-/** Validate a manifest for publishing (stricter than install validation) */
-export function validateForPublish(manifest: ArcManifest): PublishValidation {
+/** Validate a manifest for publishing (stricter than install validation).
+ * Accepts Partial because YAML may produce a structurally-incomplete object
+ * even when the type pretends every field is present. */
+export function validateForPublish(manifest: Partial<ArcManifest>): PublishValidation {
   const errors: string[] = [];
   const warnings: string[] = [];
 
@@ -213,7 +217,9 @@ export async function createBundle(
   const { sha256, sizeBytes, fileCount } = await getBundleStats(tarballName);
 
   if (sizeBytes > MAX_PACKAGE_SIZE) {
-    await rm(tarballName).catch(() => {});
+    await rm(tarballName).catch(() => {
+      // best-effort cleanup
+    });
     const sizeMb = (sizeBytes / 1024 / 1024).toFixed(1);
     const hint =
       "If this is a monorepo, pass a package subdirectory (e.g. `arc bundle packages/my-pkg`), " +

@@ -1,3 +1,4 @@
+import { readFileSync } from "fs";
 import { join } from "path";
 
 export interface SelfUpdateResult {
@@ -20,7 +21,7 @@ export async function selfUpdate(): Promise<SelfUpdateResult> {
   // Read current version
   let oldVersion: string;
   try {
-    const pkg = await Bun.file(pkgJsonPath).json();
+    const pkg = (await Bun.file(pkgJsonPath).json()) as { version: string };
     oldVersion = pkg.version;
   } catch {
     return { success: false, oldVersion: "unknown", newVersion: "unknown", commitsPulled: 0, error: "Could not read package.json" };
@@ -95,7 +96,7 @@ export async function selfUpdate(): Promise<SelfUpdateResult> {
   try {
     // Re-read from disk (not cached)
     const raw = await Bun.file(pkgJsonPath).text();
-    const pkg = JSON.parse(raw);
+    const pkg = JSON.parse(raw) as { version: string };
     newVersion = pkg.version;
   } catch {
     newVersion = oldVersion;
@@ -120,7 +121,7 @@ export function checkSelfUpdate(): SelfUpdateCheck {
 
   let currentVersion: string;
   try {
-    const raw = require(pkgJsonPath);
+    const raw = JSON.parse(readFileSync(pkgJsonPath, "utf8")) as { version: string };
     currentVersion = raw.version;
   } catch {
     return { currentVersion: "unknown", latestVersion: null, updateAvailable: false };

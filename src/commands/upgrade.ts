@@ -2,7 +2,7 @@ import { existsSync, readdirSync } from "fs";
 import { join, dirname } from "path";
 import { mkdir } from "fs/promises";
 import { homedir } from "os";
-import type { ArcPaths, HostAdapter, InstalledSkill, SourcesConfig, RulesTemplate } from "../types.js";
+import type { ArcPaths, HostAdapter, RulesTemplate } from "../types.js";
 import type { Database } from "bun:sqlite";
 import { listSkills, getSkill, listByLibrary } from "../lib/db.js";
 import { readManifest, readLibraryArtifacts } from "../lib/manifest.js";
@@ -59,7 +59,7 @@ function compareSemver(a: string, b: string): number {
 export async function checkUpgrades(
   db: Database,
   arc: ArcPaths,
-  host: HostAdapter,
+  _host: HostAdapter,
 ): Promise<UpgradeCheckResult[]> {
   const installed = listSkills(db).filter((s) => s.status === "active");
   const sources = await loadSources(arc.sourcesPath);
@@ -429,7 +429,7 @@ export async function upgradeLibrary(
   // Discover and install new artifacts added to the library manifest since last install
   if (gitRoot) {
     const rootManifest = await readManifest(gitRoot);
-    if (rootManifest && rootManifest.type === "library") {
+    if (rootManifest?.type === "library") {
       let manifestArtifacts: Awaited<ReturnType<typeof readLibraryArtifacts>>;
       try {
         manifestArtifacts = await readLibraryArtifacts(gitRoot, rootManifest);

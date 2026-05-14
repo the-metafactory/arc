@@ -96,8 +96,8 @@ import {
 import { homedir } from "os";
 import { join } from "path";
 import { parseLibraryRef } from "./lib/artifact-installer.js";
-
-const pkg = require("../package.json");
+import { errorMessage } from "./lib/errors.js";
+import pkg from "../package.json" with { type: "json" };
 
 const program = new Command();
 
@@ -182,7 +182,7 @@ program
         // exit code so scripts can tell deliberate-removal apart from
         // missing/network failures.
         if (download.quarantine) {
-          const colorEnabled = process.stderr.isTTY === true;
+          const colorEnabled = process.stderr.isTTY;
           for (const line of formatQuarantineMessage(
             formatPackageRef(pkgRef),
             download.quarantine,
@@ -195,7 +195,7 @@ program
         console.error(`${download.error}`);
         process.exit(1);
       }
-      console.log(`Downloaded ${(download.bytesDownloaded! / 1024).toFixed(0)} KB`);
+      console.log(`Downloaded ${((download.bytesDownloaded ?? 0) / 1024).toFixed(0)} KB`);
 
       // Verify SHA-256
       const verify = await verifyChecksum(download.tempPath, resolved.sha256);
@@ -204,7 +204,9 @@ program
         console.error(`  Expected: ${verify.expected}`);
         console.error(`  Actual:   ${verify.actual}`);
         console.error(`This could indicate a corrupted download or compromised package.`);
-        await Bun.file(download.tempPath).exists() && Bun.spawnSync(["rm", "-f", download.tempPath]);
+        if (await Bun.file(download.tempPath).exists()) {
+          Bun.spawnSync(["rm", "-f", download.tempPath]);
+        }
         process.exit(1);
       }
       console.log(`SHA-256 verified`);
@@ -235,7 +237,9 @@ program
         } else {
           console.error(`This could indicate a compromised registry or a tampered manifest.`);
         }
-        await Bun.file(download.tempPath).exists() && Bun.spawnSync(["rm", "-f", download.tempPath]);
+        if (await Bun.file(download.tempPath).exists()) {
+          Bun.spawnSync(["rm", "-f", download.tempPath]);
+        }
         process.exit(1);
       }
       if (sigResult.verified === true) {
@@ -260,7 +264,9 @@ program
       if (sigstoreResult.verified === false) {
         console.error(`Sigstore verification failed: ${sigstoreResult.reason}`);
         console.error(`This could indicate a tampered artifact or an unexpected signer.`);
-        await Bun.file(download.tempPath).exists() && Bun.spawnSync(["rm", "-f", download.tempPath]);
+        if (await Bun.file(download.tempPath).exists()) {
+          Bun.spawnSync(["rm", "-f", download.tempPath]);
+        }
         process.exit(1);
       }
       if (sigstoreResult.verified === true) {
@@ -532,23 +538,23 @@ program
       } else {
         console.log(formatUpgradeResults(results, { force: true }));
       }
-    } else {
-      // name is guaranteed non-null here — commander validates required args for single-package paths
-      const libRef = parseLibraryRef(name!);
-      let upgradeName = libRef?.artifactName ?? name!;
+    } else if (name) {
+      // Single-package path: prior branches handled the !name cases.
+      const libRef = parseLibraryRef(name);
+      const upgradeName = libRef?.artifactName ?? name;
       let isLibraryUpgrade = false;
 
       if (!libRef?.artifactName) {
         // No colon — check if name matches a library
         const { listByLibrary } = await import("./lib/db.js");
-        const libArtifacts = listByLibrary(db, name!);
+        const libArtifacts = listByLibrary(db, name);
         if (libArtifacts.length > 0) {
           isLibraryUpgrade = true;
         }
       }
 
       if (isLibraryUpgrade) {
-        const results = await upgradeLibrary(db, paths, host, name!, { force: opts.force });
+        const results = await upgradeLibrary(db, paths, host, name, { force: opts.force });
         console.log(formatUpgradeResults(results, { force: opts.force }));
       } else {
         const result = await upgradePackage(db, paths, host, upgradeName, { force: opts.force });
@@ -619,7 +625,7 @@ program
       if (result.success) {
         console.log(`\n✅ Scaffolded ${artifactType} at ${result.path}`);
         console.log(`\nFiles created:`);
-        for (const f of result.files!) {
+        for (const f of result.files ?? []) {
           console.log(`  ${f}`);
         }
       } else {
@@ -774,8 +780,8 @@ source
       addSource(config, newSource);
       await saveSources(paths.sourcesPath, config);
       console.log(`Added source "${name}" [${opts.tier}] (${opts.type})`);
-    } catch (err: any) {
-      console.error(`Error: ${err.message}`);
+    } catch (err) {
+      console.error(`Error: ${errorMessage(err)}`);
       process.exit(1);
     }
   });
@@ -808,8 +814,8 @@ source
       removeSource(config, name);
       await saveSources(paths.sourcesPath, config);
       console.log(`Removed source "${name}"`);
-    } catch (err: any) {
-      console.error(`Error: ${err.message}`);
+    } catch (err) {
+      console.error(`Error: ${errorMessage(err)}`);
       process.exit(1);
     }
   });
@@ -1136,7 +1142,7 @@ catalog
     const result = await catalogUse(paths, host, db, name);
 
     if (result.success) {
-      for (const item of result.installed!) {
+      for (const item of result.installed ?? []) {
         console.log(`Installed ${item.name} [${item.artifactType}]`);
       }
     } else {

@@ -3,6 +3,7 @@ import { existsSync } from "fs";
 import { mkdir, cp, rm } from "fs/promises";
 import { homedir } from "os";
 import type { Database } from "bun:sqlite";
+import { errorMessage } from "../lib/errors.js";
 import type { ArcPaths, HostAdapter, CatalogEntry, ArtifactType } from "../types.js";
 import { MANIFEST_FILENAMES } from "../lib/manifest.js";
 import {
@@ -19,7 +20,7 @@ import {
 import { resolveSource } from "../lib/source-resolver.js";
 import { readManifest } from "../lib/manifest.js";
 import { recordInstall, getSkill } from "../lib/db.js";
-import { createSymlink, createCliShim, extractAllCliInfo } from "../lib/symlinks.js";
+import { createSymlink, createCliShim } from "../lib/symlinks.js";
 
 // ── Result types ──────────────────────────────────────────────
 
@@ -31,7 +32,7 @@ export interface CatalogListResult {
 
 export interface CatalogSearchResult {
   success: boolean;
-  results?: Array<{ entry: CatalogEntry; artifactType: ArtifactType }>;
+  results?: { entry: CatalogEntry; artifactType: ArtifactType }[];
   error?: string;
 }
 
@@ -50,7 +51,7 @@ export interface CatalogRemoveResult {
 
 export interface CatalogUseResult {
   success: boolean;
-  installed?: Array<{ name: string; artifactType: ArtifactType }>;
+  installed?: { name: string; artifactType: ArtifactType }[];
   error?: string;
 }
 
@@ -62,7 +63,7 @@ export interface CatalogPushResult {
 
 export interface CatalogSyncResult {
   success: boolean;
-  synced?: Array<{ name: string; status: "ok" | "failed"; error?: string }>;
+  synced?: { name: string; status: "ok" | "failed"; error?: string }[];
   error?: string;
 }
 
@@ -123,8 +124,8 @@ export async function catalogAdd(
     addEntry(config, entry, artifactType);
     await saveCatalog(arc.catalogPath, config);
     return { success: true, name: entry.name, artifactType };
-  } catch (err: any) {
-    return { success: false, error: err.message };
+  } catch (err) {
+    return { success: false, error: errorMessage(err) };
   }
 }
 
@@ -170,14 +171,14 @@ export async function catalogUse(
   }
 
   // Resolve dependency tree
-  let ordered: Array<{ entry: CatalogEntry; artifactType: ArtifactType }>;
+  let ordered: { entry: CatalogEntry; artifactType: ArtifactType }[];
   try {
     ordered = resolveDependencies(config, name);
-  } catch (err: any) {
-    return { success: false, error: err.message };
+  } catch (err) {
+    return { success: false, error: errorMessage(err) };
   }
 
-  const installed: Array<{ name: string; artifactType: ArtifactType }> = [];
+  const installed: { name: string; artifactType: ArtifactType }[] = [];
 
   for (const { entry, artifactType } of ordered) {
     const result = await installEntry(arc, host, db, entry, artifactType, config);
@@ -214,7 +215,7 @@ export async function catalogSync(
     return { success: true, synced: [] };
   }
 
-  const synced: Array<{ name: string; status: "ok" | "failed"; error?: string }> = [];
+  const synced: { name: string; status: "ok" | "failed"; error?: string }[] = [];
 
   for (const item of installedItems) {
     const result = await installEntry(
@@ -291,14 +292,14 @@ export async function catalogPush(
   const tmpDir = join(arc.reposDir, `_push_${name}_${Date.now()}`);
   try {
     let cloneResult = Bun.spawnSync(
-      ["git", "clone", "--depth", "1", "--branch", resolved.branch!, resolved.cloneUrl, tmpDir],
+      ["git", "clone", "--depth", "1", "--branch", resolved.branch ?? "main", resolved.cloneUrl, tmpDir],
       { stdout: "pipe", stderr: "pipe" }
     );
 
     if (cloneResult.exitCode !== 0) {
       const sshUrl = `git@github.com:${resolved.org}/${resolved.repo}.git`;
       cloneResult = Bun.spawnSync(
-        ["git", "clone", "--depth", "1", "--branch", resolved.branch!, sshUrl, tmpDir],
+        ["git", "clone", "--depth", "1", "--branch", resolved.branch ?? "main", sshUrl, tmpDir],
         { stdout: "pipe", stderr: "pipe" }
       );
     }
@@ -380,10 +381,16 @@ export async function catalogPush(
  *
  * @param host Unused today; threaded for #117 signature consistency. catalogPushCatalog
  *   only invokes git against the catalog file (arc state).
+ *
+ * Async signature matches the rest of the catalog command surface
+ * (catalogList, catalogAdd, catalogUse, …) which DO await readManifest /
+ * install. The push variant only shells out via Bun.spawnSync; keeping it
+ * sync would force every caller to special-case its return shape.
  */
+// eslint-disable-next-line @typescript-eslint/require-await
 export async function catalogPushCatalog(
   arc: ArcPaths,
-  host: HostAdapter
+  _host: HostAdapter
 ): Promise<{ success: boolean; error?: string }> {
   const catalogDir = join(arc.catalogPath, "..");
 
@@ -505,7 +512,7 @@ async function installSkillEntry(
   entry: CatalogEntry
 ): Promise<EntryInstallResult> {
   const resolved = resolveSource(entry.source);
-  const isCli = entry.has_cli || entry.bundle;
+  const isCli = entry.has_cli === true || entry.bundle === true;
   const baseDir = isCli ? arc.reposDir : host.paths.skillsDir;
   const installDir = join(baseDir, entry.name);
   const skillLinkDir = join(host.paths.skillsDir, entry.name);
@@ -535,14 +542,14 @@ async function installSkillEntry(
     const tmpDir = join(arc.reposDir, `_tmp_${entry.name}_${Date.now()}`);
     try {
       let cloneResult = Bun.spawnSync(
-        ["git", "clone", "--depth", "1", "--branch", resolved.branch!, resolved.cloneUrl, tmpDir],
+        ["git", "clone", "--depth", "1", "--branch", resolved.branch ?? "main", resolved.cloneUrl, tmpDir],
         { stdout: "pipe", stderr: "pipe" }
       );
 
       if (cloneResult.exitCode !== 0) {
         const sshUrl = `git@github.com:${resolved.org}/${resolved.repo}.git`;
         cloneResult = Bun.spawnSync(
-          ["git", "clone", "--depth", "1", "--branch", resolved.branch!, sshUrl, tmpDir],
+          ["git", "clone", "--depth", "1", "--branch", resolved.branch ?? "main", sshUrl, tmpDir],
           { stdout: "pipe", stderr: "pipe" }
         );
       }
@@ -625,7 +632,7 @@ async function installSkillEntry(
       install_path: installDir,
       skill_dir: isCli ? join(installDir, "skill") : installDir,
       status: "active",
-      artifact_type: (manifest?.type as ArtifactType) ?? "skill",
+      artifact_type: (manifest?.type ?? "skill") as ArtifactType,
       tier: "custom",
       customization_path: null,
       install_source: entry.source,
@@ -686,14 +693,14 @@ async function installAgentEntry(
   const tmpDir = join(arc.reposDir, `_tmp_${entry.name}_${Date.now()}`);
   try {
     let cloneResult = Bun.spawnSync(
-      ["git", "clone", "--depth", "1", "--branch", resolved.branch!, resolved.cloneUrl, tmpDir],
+      ["git", "clone", "--depth", "1", "--branch", resolved.branch ?? "main", resolved.cloneUrl, tmpDir],
       { stdout: "pipe", stderr: "pipe" }
     );
 
     if (cloneResult.exitCode !== 0) {
       const sshUrl = `git@github.com:${resolved.org}/${resolved.repo}.git`;
       cloneResult = Bun.spawnSync(
-        ["git", "clone", "--depth", "1", "--branch", resolved.branch!, sshUrl, tmpDir],
+        ["git", "clone", "--depth", "1", "--branch", resolved.branch ?? "main", sshUrl, tmpDir],
         { stdout: "pipe", stderr: "pipe" }
       );
     }

@@ -133,10 +133,13 @@ function convertToRegistryConfig(packages: MetafactoryPackageListItem[]): Regist
     // pipeline, action, rules all route to skills — arc's registry model treats them
     // as skill subtypes. Separate arrays exist in RegistryConfig but are only used
     // by REGISTRY.yaml sources that explicitly categorize them.
-    const target = artifactType === "tool" ? config.registry.tools!
-      : artifactType === "agent" ? config.registry.agents!
-      : artifactType === "prompt" ? config.registry.prompts!
-      : artifactType === "component" ? config.registry.components!
+    if (artifactType === "component") {
+      config.registry.components ??= [];
+    }
+    const target = artifactType === "tool" ? config.registry.tools
+      : artifactType === "agent" ? config.registry.agents
+      : artifactType === "prompt" ? config.registry.prompts
+      : artifactType === "component" ? config.registry.components ?? []
       : config.registry.skills;
     target.push(entry);
   }
@@ -182,28 +185,30 @@ export async function fetchMetafactoryRegistry(
 
       if (response.status === 401 || response.status === 403) {
         process.stderr.write(`Access denied by ${source.name}. The registry may require authentication for this endpoint.\n`);
-        return readCachedRegistry(cachePath, source);
+        return await readCachedRegistry(cachePath, source);
       }
 
       if (response.status === 429) {
         process.stderr.write(`Rate limited by ${source.name}. Try again later.\n`);
-        return readCachedRegistry(cachePath, source);
+        return await readCachedRegistry(cachePath, source);
       }
 
       if (!response.ok) {
         debugLog(`API error from ${source.name}: ${response.status}`);
-        return readCachedRegistry(cachePath, source);
+        return await readCachedRegistry(cachePath, source);
       }
 
-      const body = (await response.json()) as MetafactoryPackageListResponse;
-      if (!body.packages || !Array.isArray(body.packages)) {
+      const body = (await response.json()) as Partial<MetafactoryPackageListResponse>;
+      if (!Array.isArray(body.packages)) {
         debugLog(`Invalid response from ${source.name}: missing packages array`);
-        return readCachedRegistry(cachePath, source);
+        return await readCachedRegistry(cachePath, source);
       }
       allPackages.push(...body.packages);
 
       // Check if there are more pages
-      if (body.packages.length < body.per_page || allPackages.length >= body.total) {
+      const perPage = body.per_page ?? body.packages.length;
+      const total = body.total ?? allPackages.length;
+      if (body.packages.length < perPage || allPackages.length >= total) {
         break;
       }
       page++;
@@ -224,7 +229,7 @@ export async function fetchMetafactoryRegistry(
   debugLog(`Fetched ${allPackages.length} packages from ${source.name}`);
 
   // Cache the result
-  await cacheRegistry(cachePath, source, config).catch((_err) => {
+  await cacheRegistry(cachePath, source, config).catch((_err: unknown) => {
     // Cache write failure is non-fatal
     debugLog(`Failed to cache results for ${source.name}`);
   });

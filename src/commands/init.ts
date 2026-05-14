@@ -2,6 +2,7 @@ import { dirname, join } from "path";
 import { existsSync, lstatSync, statSync } from "fs";
 import { mkdir } from "fs/promises";
 import { scaffoldEntriesFor, type ArtifactInitType } from "./init-scaffold.js";
+import { errorMessage, isErrno } from "../lib/errors.js";
 
 // Re-exports keep the public surface stable for callers (cli.ts, tests)
 // that imported from `./init.js` before the cycle-7 module split.
@@ -34,9 +35,9 @@ function validateTargetDir(targetDir: string): string | null {
   let lstat;
   try {
     lstat = lstatSync(targetDir);
-  } catch (err: any) {
-    if (err?.code === "ENOENT") return null; // doesn't exist — fine
-    return `Cannot access ${targetDir}: ${err?.message ?? err}`;
+  } catch (err) {
+    if (isErrno(err) && err.code === "ENOENT") return null; // doesn't exist — fine
+    return `Cannot access ${targetDir}: ${errorMessage(err)}`;
   }
   if (lstat.isSymbolicLink()) {
     try {

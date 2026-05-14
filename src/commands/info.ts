@@ -203,7 +203,7 @@ async function resolveMetafactoryInfo(
     const manifest: ArcManifest = {
       name: detail.name,
       version: detail.latest_version ?? "0.0.0",
-      type: (detail.type as ArcManifest["type"]) ?? "skill",
+      type: detail.type as ArcManifest["type"],
       description: detail.description ?? undefined,
       license: detail.license,
       author: detail.publisher.github_username
@@ -270,10 +270,16 @@ function errorResult(error: string): InfoResult {
 
 /**
  * Fetch release notes by repo URL and version tag.
+ *
+ * Async signature is the contract callers expect (mirrors
+ * fetchReleaseNotes etc.); the body shells out via Bun.spawnSync which
+ * is sync. Keeping the Promise wrapper preserves future async-fetch
+ * migration without callsite churn.
  */
+// eslint-disable-next-line @typescript-eslint/require-await
 async function fetchReleaseNotesFromUrl(repoUrl: string, version: string): Promise<string | null> {
   const tag = `v${version}`;
-  const ghMatch = repoUrl.match(/github\.com[:/]([^/]+)\/([^/.]+)/);
+  const ghMatch = /github\.com[:/]([^/]+)\/([^/.]+)/.exec(repoUrl);
   if (!ghMatch) return null;
 
   const nwo = `${ghMatch[1]}/${ghMatch[2]}`;
@@ -323,8 +329,8 @@ export function formatInfo(result: InfoResult): string {
   const lines: string[] = [
     `${skill.name} v${skill.version}`,
     `  Status: ${skill.status}`,
-    `  Tier: ${skill.tier || "custom"}`,
-    `  Source: ${skill.install_source || "direct"}`,
+    `  Tier: ${skill.tier}`,
+    `  Source: ${skill.install_source ?? "direct"}`,
     `  Repo: ${skill.repo_url}`,
     `  Path: ${skill.install_path}`,
     `  Installed: ${skill.installed_at}`,
@@ -365,7 +371,7 @@ function formatRemoteInfo(result: InfoResult): string {
   if (!manifest || !remote) return "Package not found.";
 
   const lines: string[] = [];
-  const typeLabel = manifest.type ?? "skill";
+  const typeLabel = manifest.type;
 
   lines.push(`📦 ${manifest.name} v${manifest.version} (${typeLabel})`);
 
@@ -520,7 +526,7 @@ function formatInstalledLibraryInfo(result: InfoResult): string {
   const artifacts = libraryArtifacts ?? [];
 
   const name = manifest?.name ?? artifacts[0]?.library_name ?? "unknown";
-  const version = manifest?.version ?? artifacts[0]?.version ?? "?";
+  const version = manifest?.version ?? (artifacts.length > 0 ? artifacts[0].version : "?");
   const lines: string[] = [];
 
   lines.push(`\u{1F4DA} ${name} v${version} (library)`);
@@ -539,8 +545,12 @@ function formatInstalledLibraryInfo(result: InfoResult): string {
   const byType = new Map<string, InstalledSkill[]>();
   for (const a of artifacts) {
     const type = a.artifact_type;
-    if (!byType.has(type)) byType.set(type, []);
-    byType.get(type)!.push(a);
+    let bucket = byType.get(type);
+    if (!bucket) {
+      bucket = [];
+      byType.set(type, bucket);
+    }
+    bucket.push(a);
   }
 
   lines.push("");

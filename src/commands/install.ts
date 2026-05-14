@@ -9,6 +9,7 @@ import type {
   PackageTier,
 } from "../types.js";
 import type { Database } from "bun:sqlite";
+import { errorMessage } from "../lib/errors.js";
 import { readManifest, readLibraryArtifacts, assessRisk, formatCapabilities } from "../lib/manifest.js";
 import { recordInstall, getSkill } from "../lib/db.js";
 import { runScript, runLifecycleScripts } from "../lib/scripts.js";
@@ -123,7 +124,7 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
     // Check if already installed in DB (by repo name or by scanning all skills)
     const allSkills = db
       .prepare("SELECT * FROM skills")
-      .all() as Array<{ name: string; status: string; repo_url: string; library_name: string | null }>;
+      .all() as { name: string; status: string; repo_url: string; library_name: string | null }[];
 
     const existingByUrl = allSkills.find((s) => s.repo_url === repoUrl && !s.library_name);
     if (existingByUrl) {
@@ -173,20 +174,20 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
       const checkoutResult = checkoutVersionTag(installPath, opts.pinnedVersion);
       if (!checkoutResult.success) {
         Bun.spawnSync(["rm", "-rf", installPath], { stdout: "pipe", stderr: "pipe" });
-        return { success: false, error: checkoutResult.error! };
+        return { success: false, error: checkoutResult.error ?? "checkout failed" };
       }
     }
   }
 
   // 2. Read manifest
-  let manifest: ArcManifest | null = null;
+  let manifest: ArcManifest | null;
   try {
     manifest = await readManifest(installPath);
-  } catch (err: any) {
+  } catch (err) {
     Bun.spawnSync(["rm", "-rf", installPath]);
     return {
       success: false,
-      error: `Failed to read manifest in ${repoUrl}: ${err.message}`,
+      error: `Failed to read manifest in ${repoUrl}: ${errorMessage(err)}`,
     };
   }
   if (!manifest) {
@@ -217,7 +218,7 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
         .prepare("SELECT name, status FROM skills WHERE name = ?")
         .get(dep.name) as { name: string; status: string } | null;
 
-      if (existing && existing.status === "active") {
+      if (existing?.status === "active") {
         continue; // Already installed
       }
 
@@ -289,7 +290,7 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
   //     OS-supervision hosts last), call createArtifactSymlinks per target
   //     or installLaunchdArtifacts for darwin-launchd.
   //   - manifest.targets absent → existing single-host flow against opts.host.
-  let symlinkResult: { record: ArtifactSymlinkRecord; filesMissingSource: Array<{ source: string; target: string }> };
+  let symlinkResult: { record: ArtifactSymlinkRecord; filesMissingSource: { source: string; target: string }[] };
   let launchdRecords: LaunchdInstallRecord[] = [];
   if (manifest.targets && manifest.targets.length > 0) {
     const multi = await installPerTarget({
@@ -470,8 +471,8 @@ async function installLibrary(
   let artifactEntries: Awaited<ReturnType<typeof readLibraryArtifacts>>;
   try {
     artifactEntries = await readLibraryArtifacts(installPath, libraryManifest);
-  } catch (err: any) {
-    return { success: false, error: err.message };
+  } catch (err) {
+    return { success: false, error: errorMessage(err) };
   }
 
   // Filter to specific artifact if requested
@@ -502,7 +503,7 @@ async function installLibrary(
   for (const { entry, manifest: artifactManifest } of artifactEntries) {
     // Check if this specific artifact is already installed
     const existing = getSkill(db, artifactManifest.name);
-    if (existing && existing.status === "active") {
+    if (existing?.status === "active") {
       if (!opts.yes) {
         console.log(`  ⏩ ${artifactManifest.name} already installed, skipping`);
       }
@@ -754,9 +755,9 @@ async function installPerTarget(opts: {
     let targetHost;
     try {
       targetHost = resolveHost(targetId, opts.hostOverrides);
-    } catch (err: any) {
+    } catch (err) {
       await rollbackAll();
-      return { error: err?.message ?? `Failed to resolve host '${targetId}'` };
+      return { error: errorMessage(err) || `Failed to resolve host '${targetId}'` };
     }
 
     if (targetId === "darwin-launchd") {
@@ -778,10 +779,10 @@ async function installPerTarget(opts: {
           quiet: opts.quiet,
         });
         launchd.push(rec);
-      } catch (err: any) {
+      } catch (err) {
         await rollbackAll();
         return {
-          error: `darwin-launchd install failed: ${err?.message ?? err}`,
+          error: `darwin-launchd install failed: ${errorMessage(err)}`,
         };
       }
       continue;
@@ -992,7 +993,7 @@ function checkoutVersionTag(
 async function promptHookConsent(
   packageName: string,
   tier: string,
-  hooks: Array<{ event: string; command: string; matcher?: string }>,
+  hooks: { event: string; command: string; matcher?: string }[],
   autoApprove?: boolean,
 ): Promise<boolean> {
   // Auto-approve for --yes flag or trusted tiers

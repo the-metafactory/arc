@@ -1,6 +1,7 @@
 import type { ArcPaths } from "../types.js";
 import { loadSources, saveSources, findMetafactorySource } from "../lib/sources.js";
 import { initiateDeviceCode, pollForToken, openBrowser } from "../lib/device-auth.js";
+import { errorMessage } from "../lib/errors.js";
 
 export interface LoginOptions {
   paths: ArcPaths;
@@ -37,10 +38,10 @@ export async function login(opts: LoginOptions): Promise<LoginResult> {
   let deviceCode;
   try {
     deviceCode = await initiateDeviceCode(source.url);
-  } catch (err: any) {
+  } catch (err) {
     return {
       success: false,
-      error: `Cannot reach ${source.url}: ${err.message}`,
+      error: `Cannot reach ${source.url}: ${errorMessage(err)}`,
     };
   }
 

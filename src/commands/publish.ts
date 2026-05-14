@@ -82,7 +82,9 @@ export async function publish(opts: PublishOptions): Promise<PublishCommandResul
   // 6. Dry run — validate and display, then clean up
   if (opts.dryRun) {
     if (tempTarball) {
-      await rm(tarballPath).catch(() => {});
+      await rm(tarballPath).catch(() => {
+        // best-effort cleanup; tarball may already be gone
+      });
     }
     return {
       success: true,
@@ -136,7 +138,9 @@ export async function publish(opts: PublishOptions): Promise<PublishCommandResul
   } finally {
     // Clean up temp tarball
     if (tempTarball) {
-      await rm(tarballPath).catch(() => {});
+      await rm(tarballPath).catch(() => {
+        // best-effort cleanup; tarball may already be gone
+      });
     }
   }
 }

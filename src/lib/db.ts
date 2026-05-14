@@ -11,10 +11,10 @@ import type {
  */
 export function openDatabase(dbPath: string): Database {
   const db = new Database(dbPath, { create: true });
-  db.exec("PRAGMA journal_mode=WAL;");
-  db.exec("PRAGMA foreign_keys=ON;");
+  db.run("PRAGMA journal_mode=WAL;");
+  db.run("PRAGMA foreign_keys=ON;");
 
-  db.exec(`
+  db.run(`
     CREATE TABLE IF NOT EXISTS skills (
       name TEXT PRIMARY KEY,
       version TEXT NOT NULL,
@@ -30,36 +30,36 @@ export function openDatabase(dbPath: string): Database {
 
   // Migration: add artifact_type column to existing databases
   try {
-    db.exec(`ALTER TABLE skills ADD COLUMN artifact_type TEXT NOT NULL DEFAULT 'skill'`);
+    db.run(`ALTER TABLE skills ADD COLUMN artifact_type TEXT NOT NULL DEFAULT 'skill'`);
   } catch {
     // Column already exists — expected for new or already-migrated databases
   }
 
   // Migration: add tier and customization_path columns
   try {
-    db.exec(`ALTER TABLE skills ADD COLUMN tier TEXT NOT NULL DEFAULT 'custom'`);
+    db.run(`ALTER TABLE skills ADD COLUMN tier TEXT NOT NULL DEFAULT 'custom'`);
   } catch {
     // Column already exists
   }
   try {
-    db.exec(`ALTER TABLE skills ADD COLUMN customization_path TEXT`);
+    db.run(`ALTER TABLE skills ADD COLUMN customization_path TEXT`);
   } catch {
     // Column already exists
   }
   try {
-    db.exec(`ALTER TABLE skills ADD COLUMN install_source TEXT`);
+    db.run(`ALTER TABLE skills ADD COLUMN install_source TEXT`);
   } catch {
     // Column already exists
   }
 
   // Migration: add library_name column for library-sourced artifacts
   try {
-    db.exec(`ALTER TABLE skills ADD COLUMN library_name TEXT`);
+    db.run(`ALTER TABLE skills ADD COLUMN library_name TEXT`);
   } catch {
     // Column already exists
   }
 
-  db.exec(`
+  db.run(`
     CREATE TABLE IF NOT EXISTS capabilities (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       skill_name TEXT NOT NULL,
@@ -95,11 +95,11 @@ export function recordInstall(
     skill.install_path,
     skill.skill_dir,
     skill.status,
-    skill.artifact_type || "skill",
-    skill.tier || manifest.tier || "custom",
-    skill.customization_path || null,
-    skill.install_source || null,
-    skill.library_name || null,
+    skill.artifact_type,
+    skill.tier,
+    skill.customization_path,
+    skill.install_source,
+    skill.library_name,
     skill.installed_at || now,
     skill.updated_at || now
   );
@@ -156,11 +156,9 @@ export function getSkill(
   db: Database,
   name: string
 ): InstalledSkill | null {
-  return (
-    (db
-      .prepare("SELECT * FROM skills WHERE name = ?")
-      .get(name) as InstalledSkill) ?? null
-  );
+  return db
+    .prepare("SELECT * FROM skills WHERE name = ?")
+    .get(name) as InstalledSkill | null;
 }
 
 /**

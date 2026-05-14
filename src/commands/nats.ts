@@ -43,7 +43,7 @@ export type NscRunner = (args: string[]) => NscResult;
 const defaultRunner: NscRunner = (args) => {
   const result = Bun.spawnSync(["nsc", ...args], { stderr: "pipe", stdout: "pipe" });
   return {
-    exitCode: result.exitCode ?? -1,
+    exitCode: result.exitCode,
     stdout: result.stdout.toString(),
     stderr: result.stderr.toString(),
   };
@@ -141,8 +141,8 @@ export function detectAccount(): string {
   for (const candidate of NSC_CONFIG_CANDIDATES) {
     if (!existsSync(candidate)) continue;
     try {
-      const config = JSON.parse(readFileSync(candidate, "utf-8"));
-      if (config.account && typeof config.account === "string") {
+      const config = JSON.parse(readFileSync(candidate, "utf-8")) as { account?: unknown };
+      if (typeof config.account === "string") {
         return config.account;
       }
     } catch {
@@ -151,7 +151,7 @@ export function detectAccount(): string {
   }
   // Fallback: parse nsc env output (env writes to stderr)
   const output = nscWithStderr(["env"]);
-  const match = output.match(/Current Account\s+\|[^|]*\|\s+(\S+)/);
+  const match = /Current Account\s+\|[^|]*\|\s+(\S+)/.exec(output);
   if (match) return match[1];
   throw new ArcNatsCommandError(
     "ACCOUNT_NOT_FOUND",
@@ -174,7 +174,7 @@ function defaultCredsPath(name: string): string {
  * envelope's `jwt` field will be empty).
  */
 function extractJwt(credsContent: string): string {
-  const match = credsContent.match(/-----BEGIN NATS USER JWT-----\s*([\s\S]*?)\s*-----END NATS USER JWT-----/);
+  const match = /-----BEGIN NATS USER JWT-----\s*([\s\S]*?)\s*-----END NATS USER JWT-----/.exec(credsContent);
   if (!match) return "";
   return match[1].replace(/\s+/g, "");
 }
@@ -325,7 +325,7 @@ export async function addBot(name: string, opts: AddBotOptions): Promise<AddBotR
 
   nsc(["add", "user", "-a", account, "-n", name]);
 
-  let credsContent = "";
+  let credsContent: string;
   try {
     if (opts.pub) {
       for (const subj of opts.pub.split(",").map((s) => s.trim())) {
@@ -350,7 +350,10 @@ export async function addBot(name: string, opts: AddBotOptions): Promise<AddBotR
     if (json) {
       throw new ArcNatsCommandError(code, `Failed to configure user "${name}" — rolled back. Cause: ${cause}`);
     }
-    throw new Error(`Failed to configure user "${name}" — rolled back. Cause: ${cause}`);
+    throw new Error(
+      `Failed to configure user "${name}" — rolled back. Cause: ${cause}`,
+      { cause: err },
+    );
   }
 
   // Surface the durable pubkey (matches what cortex receives in JSON mode and

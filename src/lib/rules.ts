@@ -13,6 +13,7 @@ import { readFile } from "fs/promises";
 import { join } from "path";
 import YAML from "yaml";
 import type { RulesTemplate, RulesConfig } from "../types.js";
+import { errorMessage, isErrno } from "./errors.js";
 
 export interface GenerateResult {
   target: string;
@@ -66,15 +67,15 @@ async function generateSingleRule(
   try {
     const configContent = await readFile(configPath, "utf-8");
     config = YAML.parse(configContent) as RulesConfig;
-  } catch (err: any) {
-    if (err.code === "ENOENT") {
+  } catch (err) {
+    if (isErrno(err) && err.code === "ENOENT") {
       // No config file — skip optional templates, error on required
       if (tmpl.optional) {
         return { target, success: true }; // silently skip
       }
       return { target, success: false, error: `Config file not found: ${tmpl.config}` };
     }
-    return { target, success: false, error: `Failed to read config: ${err.message}` };
+    return { target, success: false, error: `Failed to read config: ${errorMessage(err)}` };
   }
 
   // 2. Check if this format is opted-in (for optional templates)
@@ -91,7 +92,7 @@ async function generateSingleRule(
   let templateContent: string;
   try {
     templateContent = await readFile(templatePath, "utf-8");
-  } catch (err: any) {
+  } catch {
     return { target, success: false, error: `Template not found: ${tmpl.source}` };
   }
 
@@ -151,21 +152,25 @@ function substitutePlaceholders(template: string, config: RulesConfig): string {
  */
 async function injectSections(
   template: string,
-  sections: Array<{ position: string; file: string }>,
+  sections: { position: string; file: string }[],
   consumerDir: string,
 ): Promise<string> {
   // Group sections by position
   const byPosition = new Map<string, string[]>();
   for (const section of sections) {
     const pos = section.position;
-    if (!byPosition.has(pos)) byPosition.set(pos, []);
+    let bucket = byPosition.get(pos);
+    if (!bucket) {
+      bucket = [];
+      byPosition.set(pos, bucket);
+    }
 
     try {
       const content = await readFile(join(consumerDir, section.file), "utf-8");
-      byPosition.get(pos)!.push(content.trimEnd());
-    } catch (err: any) {
+      bucket.push(content.trimEnd());
+    } catch {
       // Section file missing — skip with warning comment
-      byPosition.get(pos)!.push(`<!-- Warning: section file not found: ${section.file} -->`);
+      bucket.push(`<!-- Warning: section file not found: ${section.file} -->`);
     }
   }
 

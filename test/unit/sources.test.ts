@@ -341,6 +341,11 @@ describe("token handling", () => {
     await Bun.write(env.arc.sourcesPath, YAML.stringify(config));
 
     const loaded = await loadSources(env.arc.sourcesPath);
+    // The test name says it all: confirm empty-string token is `||`-falsy
+    // (downstream code uses `if (token)` for "auth required" gating).
+    // Cannot use `??` here — `??` returns the empty string unchanged,
+    // which would defeat the assertion's purpose.
+    // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing
     expect(loaded.sources[0].token || undefined).toBeUndefined();
   });
 });

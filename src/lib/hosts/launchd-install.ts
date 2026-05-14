@@ -1,13 +1,14 @@
 import { existsSync } from "fs";
 import { mkdir, readFile, unlink } from "fs/promises";
 import { homedir } from "os";
-import { dirname, join } from "path";
+import { basename, dirname, join } from "path";
 import type {
   ArcManifest,
   DarwinLaunchdHostPaths,
   HostAdapter,
 } from "../../types.js";
 import { createSymlink, removeSymlink } from "../symlinks.js";
+import { errorMessage, isErrno } from "../errors.js";
 
 /**
  * Token substitution map for plist rendering.
@@ -66,7 +67,7 @@ export function buildLaunchdTokens(opts: {
  */
 export function renderPlist(template: string, tokens: LaunchdTokens): string {
   return template.replace(/\{\{([A-Za-z0-9_-]+)\}\}/g, (match, key: string) => {
-    return key in tokens ? tokens[key]! : match;
+    return key in tokens ? tokens[key] : match;
   });
 }
 
@@ -116,7 +117,7 @@ export async function installLaunchdArtifacts(opts: {
     }
     // The binary's name in PATH is the basename of provides.binary —
     // a manifest declaring `binary: bin/sage` lands as `~/bin/sage`.
-    const binName = provides.binary.split("/").pop()!;
+    const binName = basename(provides.binary);
     const binLinkPath = join(opts.host.paths.binDir, binName);
     await mkdir(opts.host.paths.binDir, { recursive: true });
     await createSymlink(sourceBinPath, binLinkPath);
@@ -147,7 +148,7 @@ export async function installLaunchdArtifacts(opts: {
     // The plist filename lives in the manifest path's basename — a
     // manifest declaring `plist: services/ai.meta-factory.sage.plist`
     // lands as `~/Library/LaunchAgents/ai.meta-factory.sage.plist`.
-    const plistName = provides.plist.split("/").pop()!;
+    const plistName = basename(provides.plist);
     const plistTargetPath = join(opts.host.paths.plistDir, plistName);
     await mkdir(dirname(plistTargetPath), { recursive: true });
     await Bun.write(plistTargetPath, rendered);
@@ -185,7 +186,7 @@ export async function removeLaunchdArtifacts(opts: {
   const provides = opts.manifest.provides ?? {};
 
   if (provides.binary) {
-    const binName = provides.binary.split("/").pop()!;
+    const binName = basename(provides.binary);
     const binLinkPath = join(opts.host.paths.binDir, binName);
     try {
       await unlink(binLinkPath);
@@ -193,17 +194,17 @@ export async function removeLaunchdArtifacts(opts: {
       if (!opts.quiet) {
         console.log(`  ✓ Binary unlinked: ${binLinkPath}`);
       }
-    } catch (err: any) {
-      if (err?.code !== "ENOENT") {
+    } catch (err) {
+      if (isErrno(err) && err.code !== "ENOENT") {
         console.warn(
-          `  ⚠ remove: failed to unlink launchd binary ${binLinkPath}: ${err?.message ?? err}`,
+          `  ⚠ remove: failed to unlink launchd binary ${binLinkPath}: ${errorMessage(err)}`,
         );
       }
     }
   }
 
   if (provides.plist) {
-    const plistName = provides.plist.split("/").pop()!;
+    const plistName = basename(provides.plist);
     const plistPath = join(opts.host.paths.plistDir, plistName);
     try {
       await unlink(plistPath);
@@ -211,10 +212,10 @@ export async function removeLaunchdArtifacts(opts: {
       if (!opts.quiet) {
         console.log(`  ✓ Plist removed: ${plistPath}`);
       }
-    } catch (err: any) {
-      if (err?.code !== "ENOENT") {
+    } catch (err) {
+      if (isErrno(err) && err.code !== "ENOENT") {
         console.warn(
-          `  ⚠ remove: failed to unlink launchd plist ${plistPath}: ${err?.message ?? err}`,
+          `  ⚠ remove: failed to unlink launchd plist ${plistPath}: ${errorMessage(err)}`,
         );
       }
     }
@@ -240,10 +241,10 @@ export async function rollbackLaunchdArtifacts(
   if (record.binSymlink) {
     try {
       await removeSymlink(record.binSymlink);
-    } catch (err: any) {
-      if (err?.code !== "ENOENT") {
+    } catch (err) {
+      if (isErrno(err) && err.code !== "ENOENT") {
         console.warn(
-          `  ⚠ rollback: failed to remove launchd binary symlink ${record.binSymlink}: ${err?.message ?? err}`,
+          `  ⚠ rollback: failed to remove launchd binary symlink ${record.binSymlink}: ${errorMessage(err)}`,
         );
       }
     }
@@ -252,10 +253,10 @@ export async function rollbackLaunchdArtifacts(
     try {
       // Plist is a rendered file (not a symlink). Plain unlink.
       await unlink(record.plistPath);
-    } catch (err: any) {
-      if (err?.code !== "ENOENT") {
+    } catch (err) {
+      if (isErrno(err) && err.code !== "ENOENT") {
         console.warn(
-          `  ⚠ rollback: failed to remove launchd plist ${record.plistPath}: ${err?.message ?? err}`,
+          `  ⚠ rollback: failed to remove launchd plist ${record.plistPath}: ${errorMessage(err)}`,
         );
       }
     }

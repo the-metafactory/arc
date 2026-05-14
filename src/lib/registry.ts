@@ -8,6 +8,7 @@ import type {
   CatalogEntry,
 } from "../types.js";
 import { findEntry } from "./catalog.js";
+import { isErrno } from "./errors.js";
 
 /**
  * Load and parse registry.yaml from the given path.
@@ -18,22 +19,23 @@ export async function loadRegistry(
 ): Promise<RegistryConfig | null> {
   try {
     const content = await readFile(registryPath, "utf-8");
-    const parsed = YAML.parse(content) as RegistryConfig;
+    const raw = YAML.parse(content) as Partial<RegistryConfig> | null;
 
-    if (!parsed.registry) {
+    if (!raw?.registry) {
       throw new Error("Invalid registry.yaml: missing 'registry' section");
     }
 
-    parsed.registry.skills ??= [];
-    parsed.registry.agents ??= [];
-    parsed.registry.prompts ??= [];
-    parsed.registry.tools ??= [];
-    parsed.registry.components ??= [];
-    parsed.registry.rules ??= [];
+    const reg = raw.registry as Partial<RegistryConfig["registry"]>;
+    reg.skills ??= [];
+    reg.agents ??= [];
+    reg.prompts ??= [];
+    reg.tools ??= [];
+    reg.components ??= [];
+    reg.rules ??= [];
 
-    return parsed;
-  } catch (err: any) {
-    if (err.code === "ENOENT") return null;
+    return raw as RegistryConfig;
+  } catch (err) {
+    if (isErrno(err) && err.code === "ENOENT") return null;
     throw err;
   }
 }
@@ -44,11 +46,11 @@ export async function loadRegistry(
 export function searchRegistry(
   config: RegistryConfig,
   keyword: string
-): Array<{ entry: RegistryEntry; artifactType: ArtifactType }> {
+): { entry: RegistryEntry; artifactType: ArtifactType }[] {
   const lower = keyword.toLowerCase();
-  const results: Array<{ entry: RegistryEntry; artifactType: ArtifactType }> = [];
+  const results: { entry: RegistryEntry; artifactType: ArtifactType }[] = [];
 
-  const sections: Array<{ entries: RegistryEntry[]; type: ArtifactType }> = [
+  const sections: { entries: RegistryEntry[]; type: ArtifactType }[] = [
     { entries: config.registry.skills, type: "skill" },
     { entries: config.registry.agents, type: "agent" },
     { entries: config.registry.prompts, type: "prompt" },
@@ -156,7 +158,7 @@ export function addFromRegistry(
  * Format registry search results for display.
  */
 export function formatRegistrySearch(
-  results: Array<{ entry: RegistryEntry; artifactType: ArtifactType }>
+  results: { entry: RegistryEntry; artifactType: ArtifactType }[]
 ): string {
   if (!results.length) return "No matches found in registry.";
 

@@ -36,10 +36,11 @@ function resolveConfigRoot(override?: string): string {
   const usingOverride = !!override;
   const defaultConfigRoot = join(home, ".config", "metafactory");
 
+  const envConfigRoot = process.env.ARC_CONFIG_ROOT;
   const configRoot =
     override ??
-    (usingEnvVar
-      ? process.env.ARC_CONFIG_ROOT!.replace(/^~/, home)
+    (envConfigRoot
+      ? envConfigRoot.replace(/^~/, home)
       : defaultConfigRoot);
 
   if (!usingEnvVar && !usingOverride) {

@@ -1,6 +1,6 @@
 import type { Database } from "bun:sqlite";
 import { listSkills, getAllActiveCapabilities } from "../lib/db.js";
-import type { AuditWarning, CapabilityRecord, RiskLevel } from "../types.js";
+import type { AuditWarning, CapabilityRecord } from "../types.js";
 
 export interface AuditResult {
   totalSkills: number;
@@ -31,7 +31,7 @@ export function audit(db: Database): AuditResult {
   // Build tier lookup from installed skills
   const tierBySkill = new Map<string, string>();
   for (const s of activeSkills) {
-    tierBySkill.set(s.name, s.tier || "custom");
+    tierBySkill.set(s.name, s.tier);
   }
 
   // Count capability surface
@@ -152,7 +152,6 @@ export function formatAudit(result: AuditResult, verbose = false): string {
     lines.push(``);
     lines.push(`Per-skill capabilities:`);
     for (const [name, caps] of result.bySkill) {
-      const types = caps.map((c) => c.type);
       const summary: string[] = [];
       const reads = caps.filter((c) => c.type === "fs_read").length;
       const writes = caps.filter((c) => c.type === "fs_write").length;

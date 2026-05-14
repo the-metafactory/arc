@@ -22,6 +22,7 @@ import {
 } from "../lib/hosts/registry.js";
 import { removeLaunchdArtifacts } from "../lib/hosts/launchd-install.js";
 import { isDarwinLaunchdHost } from "../lib/hosts/darwin-launchd.js";
+import { errorMessage, isErrno } from "../lib/errors.js";
 
 export interface RemoveResult {
   success: boolean;
@@ -292,7 +293,7 @@ export async function remove(
       installPath: skill.install_path,
       scriptPath: manifest.scripts.preremove,
       hookName: "preremove",
-      quiet: opts.yes || opts.quiet,
+      quiet: opts.yes === true || opts.quiet === true,
     });
     if (!preResult.success && !preResult.skipped) {
       console.warn(
@@ -319,13 +320,13 @@ export async function remove(
 
   // Multi-target path (arc#140 P5): walk targets in reverse install order.
   // No-op when manifest is missing (we still try to clean DB/repo below).
-  if (manifest && manifest.targets && manifest.targets.length > 0) {
+  if (manifest?.targets && manifest.targets.length > 0) {
     await removePerTarget({
       targets: manifest.targets,
       manifest,
       packageName: name,
-      hostOverrides: opts?.hostOverrides,
-      quiet: opts?.quiet,
+      hostOverrides: opts.hostOverrides,
+      quiet: opts.quiet,
     });
   } else if (isAction) {
     // Actions: remove action symlink
@@ -419,9 +420,9 @@ export async function remove(
     const postuninstallResult = runPostuninstallPhase(
       skill.install_path,
       manifest,
-      opts?.quiet,
+      opts.quiet,
     );
-    if (!postuninstallResult.success && !opts?.quiet) {
+    if (!postuninstallResult.success && !opts.quiet) {
       console.warn(`  ⚠ ${postuninstallResult.error}`);
     }
   }
@@ -462,9 +463,9 @@ async function removeProvidedFile(
   let stat;
   try {
     stat = await lstat(targetPath);
-  } catch (err: any) {
-    if (err?.code === "ENOENT") return; // already gone, nothing to do
-    console.warn(`  ⚠ provides.files cleanup: cannot stat ${targetPath}: ${err?.message ?? err}`);
+  } catch (err) {
+    if (isErrno(err) && err.code === "ENOENT") return; // already gone, nothing to do
+    console.warn(`  ⚠ provides.files cleanup: cannot stat ${targetPath}: ${errorMessage(err)}`);
     return;
   }
 
@@ -478,8 +479,8 @@ async function removeProvidedFile(
   let actualTarget: string;
   try {
     actualTarget = await readlink(targetPath);
-  } catch (err: any) {
-    console.warn(`  ⚠ provides.files cleanup: readlink failed on ${targetPath}: ${err?.message ?? err}`);
+  } catch (err) {
+    console.warn(`  ⚠ provides.files cleanup: readlink failed on ${targetPath}: ${errorMessage(err)}`);
     return;
   }
 
@@ -492,9 +493,9 @@ async function removeProvidedFile(
 
   try {
     await unlink(targetPath);
-  } catch (err: any) {
-    if (err?.code !== "ENOENT") {
-      console.warn(`  ⚠ provides.files cleanup: unlink failed on ${targetPath}: ${err?.message ?? err}`);
+  } catch (err) {
+    if (isErrno(err) && err.code !== "ENOENT") {
+      console.warn(`  ⚠ provides.files cleanup: unlink failed on ${targetPath}: ${errorMessage(err)}`);
     }
   }
 }

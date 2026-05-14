@@ -48,7 +48,7 @@ function keyPath(name: string): string {
 function validatePrincipal(p: unknown, index: number): asserts p is Principal {
   if (!p || typeof p !== "object") throw new Error(`principals[${index}]: not an object`);
   const r = p as Record<string, unknown>;
-  if (typeof r.id !== "string" || !DID_RE.test(r.id)) throw new Error(`principals[${index}].id: invalid DID "${r.id}"`);
+  if (typeof r.id !== "string" || !DID_RE.test(r.id)) throw new Error(`principals[${index}].id: invalid DID "${String(r.id)}"`);
   if (typeof r.public_key !== "string" || !BASE64_RE.test(r.public_key) || r.public_key.length < 40) {
     throw new Error(`principals[${index}].public_key: invalid (must be base64, ≥40 chars)`);
   }
@@ -60,7 +60,7 @@ function loadRegistry(): PrincipalRegistryFile {
   if (!existsSync(REGISTRY_PATH)) {
     return { version: 1, principals: [], trusted_hubs: [] };
   }
-  const raw = JSON.parse(readFileSync(REGISTRY_PATH, "utf-8"));
+  const raw = JSON.parse(readFileSync(REGISTRY_PATH, "utf-8")) as Partial<PrincipalRegistryFile>;
   if (raw.version !== 1 || !Array.isArray(raw.principals)) {
     throw new Error(`Invalid registry at ${REGISTRY_PATH}: expected version 1 with principals array`);
   }
@@ -178,21 +178,21 @@ export function importPrincipals(filePath: string): void {
 
   let incoming: PrincipalRegistryFile;
   try {
-    const raw = JSON.parse(readFileSync(filePath, "utf-8"));
+    const raw = JSON.parse(readFileSync(filePath, "utf-8")) as Partial<PrincipalRegistryFile>;
     if (raw.version !== 1 || !Array.isArray(raw.principals)) {
       throw new Error("expected { version: 1, principals: [...] }");
     }
     for (let i = 0; i < raw.principals.length; i++) {
       validatePrincipal(raw.principals[i], i);
     }
-    incoming = raw;
+    incoming = raw as PrincipalRegistryFile;
   } catch (err) {
     console.error(`Invalid principals file: ${err instanceof Error ? err.message : String(err)}`);
     process.exitCode = 1;
     return;
   }
 
-  if (incoming.trusted_hubs?.length > 0) {
+  if (incoming.trusted_hubs.length > 0) {
     console.log(`  NOTE: trusted_hubs in import file ignored (security boundary — add manually if needed)`);
   }
 

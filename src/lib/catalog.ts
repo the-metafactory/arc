@@ -7,6 +7,7 @@ import type {
 } from "../types.js";
 import { getSkill } from "./db.js";
 import { parseDependencyRef } from "./source-resolver.js";
+import { isErrno } from "./errors.js";
 import type { Database } from "bun:sqlite";
 
 /**
@@ -18,23 +19,25 @@ export async function loadCatalog(
 ): Promise<CatalogConfig | null> {
   try {
     const content = await readFile(catalogPath, "utf-8");
-    const parsed = YAML.parse(content) as CatalogConfig;
+    const raw = YAML.parse(content) as Partial<CatalogConfig> | null;
 
-    if (!parsed.defaults || !parsed.catalog) {
+    if (!raw?.defaults || !raw.catalog) {
       throw new Error(
         "Invalid catalog.yaml: missing required sections (defaults, catalog)"
       );
     }
 
-    // Ensure arrays exist even if empty in YAML
-    parsed.catalog.skills ??= [];
-    parsed.catalog.agents ??= [];
-    parsed.catalog.prompts ??= [];
-    parsed.catalog.tools ??= [];
+    // Ensure arrays exist even if empty in YAML (the type asserts they're
+    // required, but YAML lets them be omitted).
+    const cat = raw.catalog as Partial<CatalogConfig["catalog"]>;
+    cat.skills ??= [];
+    cat.agents ??= [];
+    cat.prompts ??= [];
+    cat.tools ??= [];
 
-    return parsed;
-  } catch (err: any) {
-    if (err.code === "ENOENT") return null;
+    return raw as CatalogConfig;
+  } catch (err) {
+    if (isErrno(err) && err.code === "ENOENT") return null;
     throw err;
   }
 }
@@ -83,11 +86,11 @@ export function findEntry(
 export function searchCatalog(
   config: CatalogConfig,
   keyword: string
-): Array<{ entry: CatalogEntry; artifactType: ArtifactType }> {
+): { entry: CatalogEntry; artifactType: ArtifactType }[] {
   const lower = keyword.toLowerCase();
-  const results: Array<{ entry: CatalogEntry; artifactType: ArtifactType }> = [];
+  const results: { entry: CatalogEntry; artifactType: ArtifactType }[] = [];
 
-  const sections: Array<{ entries: CatalogEntry[]; type: ArtifactType }> = [
+  const sections: { entries: CatalogEntry[]; type: ArtifactType }[] = [
     { entries: config.catalog.skills, type: "skill" },
     { entries: config.catalog.agents, type: "agent" },
     { entries: config.catalog.prompts, type: "prompt" },
@@ -125,7 +128,7 @@ export function listCatalog(
 ): CatalogListItem[] {
   const items: CatalogListItem[] = [];
 
-  const sections: Array<{ entries: CatalogEntry[]; type: ArtifactType }> = [
+  const sections: { entries: CatalogEntry[]; type: ArtifactType }[] = [
     { entries: config.catalog.skills, type: "skill" },
     { entries: config.catalog.agents, type: "agent" },
     { entries: config.catalog.prompts, type: "prompt" },
@@ -204,8 +207,8 @@ export function removeEntry(
 export function resolveDependencies(
   config: CatalogConfig,
   entryName: string,
-  visited: Set<string> = new Set()
-): Array<{ entry: CatalogEntry; artifactType: ArtifactType }> {
+  visited = new Set<string>()
+): { entry: CatalogEntry; artifactType: ArtifactType }[] {
   if (visited.has(entryName)) {
     throw new Error(`Circular dependency detected: ${entryName}`);
   }
@@ -216,7 +219,7 @@ export function resolveDependencies(
     throw new Error(`Entry "${entryName}" not found in catalog`);
   }
 
-  const result: Array<{ entry: CatalogEntry; artifactType: ArtifactType }> = [];
+  const result: { entry: CatalogEntry; artifactType: ArtifactType }[] = [];
 
   if (found.entry.requires?.length) {
     for (const ref of found.entry.requires) {

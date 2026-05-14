@@ -1,6 +1,7 @@
-import { symlink, unlink, readlink, lstat, mkdir, writeFile, chmod, rename } from "fs/promises";
+import { symlink, unlink, readlink, lstat, mkdir, writeFile, rename } from "fs/promises";
 import { join, dirname, basename } from "path";
 import type { ArcManifest } from "../types.js";
+import { isErrno } from "./errors.js";
 
 /**
  * Create a symlink, ensuring the parent directory exists.
@@ -22,8 +23,8 @@ export async function createSymlink(
     } else if (stat.isFile()) {
       await unlink(linkPath);
     }
-  } catch (err: any) {
-    if (err.code !== "ENOENT") throw err;
+  } catch (err) {
+    if (!isErrno(err) || err.code !== "ENOENT") throw err;
   }
 
   await symlink(target, linkPath);
@@ -41,8 +42,8 @@ export async function removeSymlink(linkPath: string): Promise<boolean> {
       return true;
     }
     return false;
-  } catch (err: any) {
-    if (err.code === "ENOENT") return false;
+  } catch (err) {
+    if (isErrno(err) && err.code === "ENOENT") return false;
     throw err;
   }
 }
@@ -103,7 +104,7 @@ export function extractCliInfo(
  */
 export function extractAllCliInfo(
   manifest: ArcManifest
-): Array<{ binName: string; scriptPath: string; command: string }> {
+): { binName: string; scriptPath: string; command: string }[] {
   if (!manifest.provides?.cli?.length) return [];
 
   return manifest.provides.cli.map((cli) => {
@@ -157,8 +158,8 @@ export async function removeCliShim(
   try {
     await unlink(shimPath);
     return true;
-  } catch (err: any) {
-    if (err.code === "ENOENT") return false;
+  } catch (err) {
+    if (isErrno(err) && err.code === "ENOENT") return false;
     throw err;
   }
 }

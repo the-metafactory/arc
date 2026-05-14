@@ -564,7 +564,7 @@ describe("normalizeCapabilities", () => {
 describe("readManifest — network shorthand (#79)", () => {
   test("string-form network entries parse into object form", async () => {
     const orig = process.stderr.write.bind(process.stderr);
-    process.stderr.write = (() => true) as any;
+    process.stderr.write = (() => true);
     try {
       await Bun.write(
         join(tempDir, MANIFEST_FILENAME),

@@ -3,6 +3,7 @@ import { existsSync } from "fs";
 import { mkdir } from "fs/promises";
 import { homedir } from "os";
 import type { ArtifactType, ArcManifest, ArcPaths, HostAdapter } from "../types.js";
+import { errorMessage, isErrno } from "./errors.js";
 import {
   createSymlink,
   createCliShim,
@@ -77,8 +78,8 @@ export async function createArtifactSymlinks(opts: {
   consumerDir?: string;
   quiet?: boolean;
 }): Promise<{
-  filesCreated: Array<{ source: string; target: string }>;
-  filesMissingSource: Array<{ source: string; target: string }>;
+  filesCreated: { source: string; target: string }[];
+  filesMissingSource: { source: string; target: string }[];
   record: ArtifactSymlinkRecord;
 }> {
   const { type, manifest, arc, host, installDir, quiet } = opts;
@@ -99,7 +100,7 @@ export async function createArtifactSymlinks(opts: {
   // (manifest typo, repo drift) is now stopped with zero filesystem mutation,
   // so install can return cleanly without producing orphan symlinks.
   const declaredFiles = manifest.provides?.files ?? [];
-  const filesMissingSource: Array<{ source: string; target: string }> = [];
+  const filesMissingSource: { source: string; target: string }[] = [];
   for (const file of declaredFiles) {
     const sourcePath = join(installDir, file.source);
     if (!existsSync(sourcePath)) {
@@ -270,7 +271,7 @@ export async function createArtifactSymlinks(opts: {
   // multi-artifact package using a different primary type. See issue #84.
   // The pre-validation pass above guarantees every source exists by the time
   // we get here, so we can fearlessly create symlinks without partial-state risk.
-  const filesCreated: Array<{ source: string; target: string }> = [];
+  const filesCreated: { source: string; target: string }[] = [];
   for (const file of declaredFiles) {
     const sourcePath = join(installDir, file.source);
     const targetPath = file.target.replace(/^~/, homedir());
@@ -302,18 +303,18 @@ export async function rollbackArtifactSymlinks(record: ArtifactSymlinkRecord): P
   for (const link of record.symlinks) {
     try {
       await removeSymlink(link);
-    } catch (err: any) {
-      if (err?.code !== "ENOENT") {
-        console.warn(`  ⚠ rollback: failed to remove symlink ${link}: ${err?.message ?? err}`);
+    } catch (err) {
+      if (!isErrno(err) || err.code !== "ENOENT") {
+        console.warn(`  ⚠ rollback: failed to remove symlink ${link}: ${errorMessage(err)}`);
       }
     }
   }
   for (const name of record.shims.names) {
     try {
       await removeCliShim(record.shims.dir, name);
-    } catch (err: any) {
-      if (err?.code !== "ENOENT") {
-        console.warn(`  ⚠ rollback: failed to remove shim ${name}: ${err?.message ?? err}`);
+    } catch (err) {
+      if (!isErrno(err) || err.code !== "ENOENT") {
+        console.warn(`  ⚠ rollback: failed to remove shim ${name}: ${errorMessage(err)}`);
       }
     }
   }

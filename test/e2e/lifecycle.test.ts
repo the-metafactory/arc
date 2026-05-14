@@ -453,9 +453,9 @@ describe("Full lifecycle: install → list → info → audit → disable → en
 
   test("tests never touch real ~/.claude or ~/.config", () => {
     // Verify test paths don't point to real directories
-    expect(env.host.paths.root).not.toContain(Bun.env.HOME + "/.claude");
+    expect(env.host.paths.root).not.toContain(`${Bun.env.HOME ?? ""}/.claude`);
     expect(env.arc.configRoot).not.toContain(
-      Bun.env.HOME + "/.config/metafactory"
+      `${Bun.env.HOME ?? ""}/.config/metafactory`,
     );
     expect(env.host.paths.root).toContain("arc-test-");
   });
