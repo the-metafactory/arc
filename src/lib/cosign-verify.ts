@@ -13,6 +13,7 @@
 import { writeFile, unlink } from "fs/promises";
 import { join } from "path";
 import type { RegistrySource } from "../types.js";
+import { errorMessage } from "./errors.js";
 import { verifySigstoreBundle, type VerifySigstoreResult } from "./cosign.js";
 
 const FETCH_TIMEOUT_MS = 30_000;
@@ -63,8 +64,8 @@ export async function downloadSigstoreBundle(
     const path = join(tempDir, `arc-bundle-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.bundle`);
     await writeFile(path, body);
     return { path };
-  } catch (err: any) {
-    return { error: `bundle download failed: ${err?.message ?? err}` };
+  } catch (err) {
+    return { error: `bundle download failed: ${errorMessage(err)}` };
   }
 }
 

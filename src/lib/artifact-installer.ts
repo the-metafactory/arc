@@ -3,6 +3,7 @@ import { existsSync } from "fs";
 import { mkdir } from "fs/promises";
 import { homedir } from "os";
 import type { ArtifactType, ArcManifest, ArcPaths, HostAdapter } from "../types.js";
+import { errorMessage, isErrno } from "./errors.js";
 import {
   createSymlink,
   createCliShim,
@@ -302,18 +303,18 @@ export async function rollbackArtifactSymlinks(record: ArtifactSymlinkRecord): P
   for (const link of record.symlinks) {
     try {
       await removeSymlink(link);
-    } catch (err: any) {
-      if (err?.code !== "ENOENT") {
-        console.warn(`  ⚠ rollback: failed to remove symlink ${link}: ${err?.message ?? err}`);
+    } catch (err) {
+      if (!isErrno(err) || err.code !== "ENOENT") {
+        console.warn(`  ⚠ rollback: failed to remove symlink ${link}: ${errorMessage(err)}`);
       }
     }
   }
   for (const name of record.shims.names) {
     try {
       await removeCliShim(record.shims.dir, name);
-    } catch (err: any) {
-      if (err?.code !== "ENOENT") {
-        console.warn(`  ⚠ rollback: failed to remove shim ${name}: ${err?.message ?? err}`);
+    } catch (err) {
+      if (!isErrno(err) || err.code !== "ENOENT") {
+        console.warn(`  ⚠ rollback: failed to remove shim ${name}: ${errorMessage(err)}`);
       }
     }
   }

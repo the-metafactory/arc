@@ -82,7 +82,10 @@ export function toServerManifest(manifest: ArcManifest, scope: string): Record<s
   // Server schema requires { domain }.
   const network = (caps.network ?? []).flatMap((n): { domain: string }[] => {
     if (typeof n === "string") return [{ domain: n }];
-    if (n && typeof (n as any).domain === "string") return [{ domain: (n as any).domain }];
+    if (n && typeof n === "object") {
+      const obj = n as { domain?: unknown };
+      if (typeof obj.domain === "string") return [{ domain: obj.domain }];
+    }
     return [];
   });
 

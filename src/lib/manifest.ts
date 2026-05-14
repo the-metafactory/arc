@@ -135,9 +135,11 @@ export function normalizeNetworkEntry(
   if (typeof entry === "string") {
     return { domain: entry, reason: "" };
   }
-  if (entry && typeof entry === "object" && typeof (entry as any).domain === "string") {
-    const obj = entry as { domain: string; reason?: unknown };
-    return { domain: obj.domain, reason: typeof obj.reason === "string" ? obj.reason : "" };
+  if (entry && typeof entry === "object") {
+    const obj = entry as { domain?: unknown; reason?: unknown };
+    if (typeof obj.domain === "string") {
+      return { domain: obj.domain, reason: typeof obj.reason === "string" ? obj.reason : "" };
+    }
   }
   return null;
 }

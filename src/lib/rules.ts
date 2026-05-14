@@ -92,7 +92,7 @@ async function generateSingleRule(
   let templateContent: string;
   try {
     templateContent = await readFile(templatePath, "utf-8");
-  } catch (_err: any) {
+  } catch {
     return { target, success: false, error: `Template not found: ${tmpl.source}` };
   }
 
