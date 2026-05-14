@@ -158,6 +158,13 @@ export default tseslint.config(
       "**/*.bak.ts",
       "eslint.config.js",
       "scripts/",
+      // Local agent worktrees may live inside .claude/worktrees/ —
+      // they are full repo copies and would double-count every file.
+      ".claude/",
+      ".specify/",
+      ".triage/",
+      "MEMORY/",
+      "Plans/",
     ],
   },
 );
