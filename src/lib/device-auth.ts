@@ -3,6 +3,14 @@ import type { DeviceCodeResponse, DeviceVerifyResponse, DeviceAuthResult } from 
 interface PollOptions {
   interval: number;
   expiresIn: number;
+  /**
+   * Token scope to request. The marketplace server defaults to
+   * `packages:read` when unset; pass `packages:write` to obtain a token
+   * authorised for `arc publish`. The web-side approval step is the
+   * authoritative gate — server may reject if the approver hasn't been
+   * granted the requested scope.
+   */
+  scope?: string;
   onPoll?: (attempt: number, elapsed: number) => void;
 }
 
@@ -52,7 +60,9 @@ export async function pollForToken(
       const response = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ device_code: deviceCode }),
+        body: JSON.stringify(
+          opts.scope ? { device_code: deviceCode, scope: opts.scope } : { device_code: deviceCode },
+        ),
         signal: AbortSignal.timeout(10_000),
       });
 

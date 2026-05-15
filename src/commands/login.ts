@@ -7,6 +7,13 @@ export interface LoginOptions {
   paths: ArcPaths;
   sourceName?: string;
   force?: boolean;
+  /**
+   * Requested token scope. Marketplace server defaults to `packages:read`
+   * if unset. Pass `packages:write` to obtain a token authorised for
+   * `arc publish`. Other values are forwarded as-is so the server's allow
+   * list remains the single source of truth.
+   */
+  scope?: string;
 }
 
 export interface LoginResult {
@@ -58,6 +65,7 @@ export async function login(opts: LoginOptions): Promise<LoginResult> {
   const result = await pollForToken(source.url, deviceCode.device_code, {
     interval: deviceCode.interval,
     expiresIn: deviceCode.expires_in,
+    scope: opts.scope,
     onPoll: (_attempt, elapsed) => {
       const remaining = deviceCode.expires_in - elapsed;
       process.stdout.write(`\rWaiting for approval... (${remaining}s remaining) `);
