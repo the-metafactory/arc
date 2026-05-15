@@ -824,7 +824,7 @@ source
 
 program
   .command("login")
-  .description("Authenticate with metafactory registry (required for publishing only)")
+  .description("Authenticate with metafactory registry (required for installs and publishing)")
   .option("-s, --source <name>", "Target source name (default: first metafactory source)")
   .option("-f, --force", "Re-authenticate even if already logged in")
   .option(
@@ -852,7 +852,7 @@ program
 
 program
   .command("logout")
-  .description("Remove authentication from metafactory source (only affects publishing)")
+  .description("Remove authentication from metafactory source (signed-in installs and publishing will require re-login)")
   .option("-s, --source <name>", "Target source name (default: first metafactory source)")
   .action(async (opts: { source?: string }) => {
     const paths = createArcPaths();
