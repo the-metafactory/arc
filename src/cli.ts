@@ -828,16 +828,16 @@ program
   .option("-s, --source <name>", "Target source name (default: first metafactory source)")
   .option("-f, --force", "Re-authenticate even if already logged in")
   .option(
-    "--scope <scope>",
-    "Requested token scope (e.g. packages:read, packages:write). Server defaults to packages:read.",
+    "--token-scope <scope>",
+    "Requested token scope (e.g. packages:read, packages:write). Server defaults to packages:read. Named --token-scope to avoid collision with `arc publish --scope <namespace>`.",
   )
-  .action(async (opts: { source?: string; force?: boolean; scope?: string }) => {
+  .action(async (opts: { source?: string; force?: boolean; tokenScope?: string }) => {
     const paths = createArcPaths();
     const result = await login({
       paths,
       sourceName: opts.source,
       force: opts.force,
-      scope: opts.scope,
+      scope: opts.tokenScope,
     });
 
     if (result.success) {

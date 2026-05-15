@@ -4,21 +4,49 @@ import { login } from "../../src/commands/login.js";
 import { saveSources } from "../../src/lib/sources.js";
 import type { SourcesConfig } from "../../src/types.js";
 
-// Mock device-auth to prevent real network calls and browser opens
-mock.module("../../src/lib/device-auth.js", () => ({
-  initiateDeviceCode: async () => ({
-    device_code: "test-device-code",
-    user_code: "TEST-CODE",
-    verification_uri: "https://example.com/auth",
-    interval: 1,
-    expires_in: 5,
-  }),
-  pollForToken: async () => ({
-    success: false,
-    error: "Mock: approval timed out",
-  }),
-  openBrowser: () => false,
-}));
+// Baseline device-auth mock — prevents real network calls + browser opens.
+// Tests that need to capture pollForToken args install a per-test mock via
+// `installCapturingDeviceAuth(captured)` and the afterEach below restores
+// this baseline so subsequent tests see a clean module.
+const installBaselineDeviceAuth = () => {
+  mock.module("../../src/lib/device-auth.js", () => ({
+    initiateDeviceCode: async () => ({
+      device_code: "test-device-code",
+      user_code: "TEST-CODE",
+      verification_uri: "https://example.com/auth",
+      interval: 1,
+      expires_in: 5,
+    }),
+    pollForToken: async () => ({
+      success: false,
+      error: "Mock: approval timed out",
+    }),
+    openBrowser: () => false,
+  }));
+};
+installBaselineDeviceAuth();
+
+const installCapturingDeviceAuth = (captured: { scope?: string; seen?: boolean }) => {
+  mock.module("../../src/lib/device-auth.js", () => ({
+    initiateDeviceCode: async () => ({
+      device_code: "test-device-code",
+      user_code: "TEST-CODE",
+      verification_uri: "https://example.com/auth",
+      interval: 1,
+      expires_in: 5,
+    }),
+    pollForToken: async (
+      _baseUrl: string,
+      _deviceCode: string,
+      opts: { scope?: string },
+    ) => {
+      captured.scope = opts.scope;
+      captured.seen = true;
+      return { success: false, error: "Mock: approval timed out" };
+    },
+    openBrowser: () => false,
+  }));
+};
 
 let env: TestEnv;
 
@@ -109,28 +137,16 @@ describe("login - already logged in", () => {
 });
 
 describe("login - scope option", () => {
-  test("forwards opts.scope to pollForToken", async () => {
-    const captured: { scope?: string } = {};
+  // Restore the baseline mock after each capturing-mock test so subsequent
+  // describe blocks (existing or added later) don't inherit the capturing
+  // version — mock.module replaces globally for the test process.
+  afterEach(() => {
+    installBaselineDeviceAuth();
+  });
 
-    // Capture pollForToken args via a per-test mock override
-    mock.module("../../src/lib/device-auth.js", () => ({
-      initiateDeviceCode: async () => ({
-        device_code: "test-device-code",
-        user_code: "TEST-CODE",
-        verification_uri: "https://example.com/auth",
-        interval: 1,
-        expires_in: 5,
-      }),
-      pollForToken: async (
-        _baseUrl: string,
-        _deviceCode: string,
-        opts: { scope?: string },
-      ) => {
-        captured.scope = opts.scope;
-        return { success: false, error: "Mock: approval timed out" };
-      },
-      openBrowser: () => false,
-    }));
+  test("forwards opts.scope to pollForToken", async () => {
+    const captured: { scope?: string; seen?: boolean } = {};
+    installCapturingDeviceAuth(captured);
 
     await saveSources(env.arc.sourcesPath, metafactorySource());
     await login({ paths: env.arc, scope: "packages:write" });
@@ -139,27 +155,8 @@ describe("login - scope option", () => {
   });
 
   test("omits scope from pollForToken when not provided", async () => {
-    const captured: { scope?: string; seen: boolean } = { seen: false };
-
-    mock.module("../../src/lib/device-auth.js", () => ({
-      initiateDeviceCode: async () => ({
-        device_code: "test-device-code",
-        user_code: "TEST-CODE",
-        verification_uri: "https://example.com/auth",
-        interval: 1,
-        expires_in: 5,
-      }),
-      pollForToken: async (
-        _baseUrl: string,
-        _deviceCode: string,
-        opts: { scope?: string },
-      ) => {
-        captured.scope = opts.scope;
-        captured.seen = true;
-        return { success: false, error: "Mock: approval timed out" };
-      },
-      openBrowser: () => false,
-    }));
+    const captured: { scope?: string; seen?: boolean } = {};
+    installCapturingDeviceAuth(captured);
 
     await saveSources(env.arc.sourcesPath, metafactorySource());
     await login({ paths: env.arc });
