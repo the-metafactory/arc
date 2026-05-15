@@ -107,3 +107,64 @@ describe("login - already logged in", () => {
     expect(result.error).not.toContain("Already logged in");
   });
 });
+
+describe("login - scope option", () => {
+  test("forwards opts.scope to pollForToken", async () => {
+    const captured: { scope?: string } = {};
+
+    // Capture pollForToken args via a per-test mock override
+    mock.module("../../src/lib/device-auth.js", () => ({
+      initiateDeviceCode: async () => ({
+        device_code: "test-device-code",
+        user_code: "TEST-CODE",
+        verification_uri: "https://example.com/auth",
+        interval: 1,
+        expires_in: 5,
+      }),
+      pollForToken: async (
+        _baseUrl: string,
+        _deviceCode: string,
+        opts: { scope?: string },
+      ) => {
+        captured.scope = opts.scope;
+        return { success: false, error: "Mock: approval timed out" };
+      },
+      openBrowser: () => false,
+    }));
+
+    await saveSources(env.arc.sourcesPath, metafactorySource());
+    await login({ paths: env.arc, scope: "packages:write" });
+
+    expect(captured.scope).toBe("packages:write");
+  });
+
+  test("omits scope from pollForToken when not provided", async () => {
+    const captured: { scope?: string; seen: boolean } = { seen: false };
+
+    mock.module("../../src/lib/device-auth.js", () => ({
+      initiateDeviceCode: async () => ({
+        device_code: "test-device-code",
+        user_code: "TEST-CODE",
+        verification_uri: "https://example.com/auth",
+        interval: 1,
+        expires_in: 5,
+      }),
+      pollForToken: async (
+        _baseUrl: string,
+        _deviceCode: string,
+        opts: { scope?: string },
+      ) => {
+        captured.scope = opts.scope;
+        captured.seen = true;
+        return { success: false, error: "Mock: approval timed out" };
+      },
+      openBrowser: () => false,
+    }));
+
+    await saveSources(env.arc.sourcesPath, metafactorySource());
+    await login({ paths: env.arc });
+
+    expect(captured.seen).toBe(true);
+    expect(captured.scope).toBeUndefined();
+  });
+});

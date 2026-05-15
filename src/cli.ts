@@ -827,9 +827,18 @@ program
   .description("Authenticate with metafactory registry (required for publishing only)")
   .option("-s, --source <name>", "Target source name (default: first metafactory source)")
   .option("-f, --force", "Re-authenticate even if already logged in")
-  .action(async (opts: { source?: string; force?: boolean }) => {
+  .option(
+    "--scope <scope>",
+    "Requested token scope (e.g. packages:read, packages:write). Server defaults to packages:read.",
+  )
+  .action(async (opts: { source?: string; force?: boolean; scope?: string }) => {
     const paths = createArcPaths();
-    const result = await login({ paths, sourceName: opts.source, force: opts.force });
+    const result = await login({
+      paths,
+      sourceName: opts.source,
+      force: opts.force,
+      scope: opts.scope,
+    });
 
     if (result.success) {
       console.log(`Logged in to ${result.sourceName}`);
