@@ -1,0 +1,291 @@
+import { describe, test, expect, beforeEach, afterEach } from "bun:test";
+import {
+  DEFAULT_NATS_URL,
+  ensureBroker,
+  parseNatsUrl,
+  __setSpawnRunnerForTests,
+  __setProbeForTests,
+  __setPlatformForTests,
+  type SpawnResult,
+} from "../../src/lib/nats-broker.js";
+
+/**
+ * Unit tests for the NATS broker bootstrap helper (arc#152).
+ *
+ * Every test stubs the spawn runner, TCP probe, and platform detector so the
+ * suite never actually shells out, opens a socket, or branches on the host
+ * OS — pure deterministic behavior.
+ */
+
+interface SpawnCall {
+  cmd: string[];
+}
+
+let spawnCalls: SpawnCall[] = [];
+
+function stubSpawn(routes: { match: string[]; result: SpawnResult }[]) {
+  spawnCalls = [];
+  __setSpawnRunnerForTests((cmd) => {
+    spawnCalls.push({ cmd });
+    for (const route of routes) {
+      if (route.match.length === cmd.length && route.match.every((m, i) => m === cmd[i])) {
+        return route.result;
+      }
+    }
+    return { exitCode: 127, stdout: "", stderr: `unmocked: ${cmd.join(" ")}` };
+  });
+}
+
+beforeEach(() => {
+  spawnCalls = [];
+});
+
+afterEach(() => {
+  __setSpawnRunnerForTests(null);
+  __setProbeForTests(null);
+  __setPlatformForTests(null);
+});
+
+describe("parseNatsUrl", () => {
+  test("strips nats:// prefix and parses host:port", () => {
+    expect(parseNatsUrl("nats://127.0.0.1:4222")).toEqual({ host: "127.0.0.1", port: 4222 });
+  });
+
+  test("accepts bare host:port without prefix", () => {
+    expect(parseNatsUrl("example.com:9999")).toEqual({ host: "example.com", port: 9999 });
+  });
+
+  test("defaults to port 4222 when omitted", () => {
+    expect(parseNatsUrl("nats://example.com")).toEqual({ host: "example.com", port: 4222 });
+  });
+
+  test("falls back to default port when malformed", () => {
+    expect(parseNatsUrl("nats://host:abc")).toEqual({ host: "host", port: 4222 });
+  });
+});
+
+describe("ensureBroker — broker already reachable", () => {
+  test("noop when local broker reachable, no NATS_URL set", async () => {
+    __setProbeForTests(async () => true);
+    __setPlatformForTests(() => "darwin");
+    stubSpawn([]);
+
+    const result = await ensureBroker({ env: {}, quiet: true });
+
+    expect(result.ok).toBe(true);
+    expect(result.status).toBe("already-running");
+    expect(result.url).toBe(DEFAULT_NATS_URL);
+    expect(result.remoteRequested).toBe(false);
+    expect(spawnCalls.length).toBe(0);
+  });
+
+  test("noop when remote NATS_URL reachable", async () => {
+    __setProbeForTests(async (host, port) => host === "remote.example.com" && port === 4222);
+    __setPlatformForTests(() => "linux");
+    stubSpawn([]);
+
+    const result = await ensureBroker({
+      env: { NATS_URL: "nats://remote.example.com:4222" },
+      quiet: true,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.status).toBe("already-running");
+    expect(result.url).toBe("nats://remote.example.com:4222");
+    expect(result.remoteRequested).toBe(true);
+    expect(spawnCalls.length).toBe(0);
+  });
+});
+
+describe("ensureBroker — remote NATS_URL unreachable", () => {
+  test("does NOT auto-bootstrap; returns clear error", async () => {
+    __setProbeForTests(async () => false);
+    __setPlatformForTests(() => "darwin");
+    stubSpawn([]);
+
+    const result = await ensureBroker({
+      env: { NATS_URL: "nats://remote.example.com:4222" },
+      quiet: true,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe("remote-unreachable");
+    expect(result.remoteRequested).toBe(true);
+    expect(result.message).toContain("NATS_URL=nats://remote.example.com:4222");
+    expect(result.message).toContain("will not auto-bootstrap");
+    expect(spawnCalls.length).toBe(0);
+  });
+});
+
+describe("ensureBroker — darwin bootstrap path", () => {
+  test("brew install + brew services start when local broker missing", async () => {
+    __setProbeForTests(async () => false);
+    __setPlatformForTests(() => "darwin");
+    stubSpawn([
+      { match: ["which", "brew"], result: { exitCode: 0, stdout: "/opt/homebrew/bin/brew", stderr: "" } },
+      { match: ["brew", "install", "nats-server"], result: { exitCode: 0, stdout: "installed", stderr: "" } },
+      { match: ["brew", "services", "start", "nats-server"], result: { exitCode: 0, stdout: "started", stderr: "" } },
+    ]);
+
+    const result = await ensureBroker({ env: {}, quiet: true });
+
+    expect(result.ok).toBe(true);
+    expect(result.status).toBe("bootstrapped");
+    expect(result.remoteRequested).toBe(false);
+    expect(result.message).toContain("brew services");
+    expect(spawnCalls.map((c) => c.cmd.join(" "))).toEqual([
+      "which brew",
+      "brew install nats-server",
+      "brew services start nats-server",
+    ]);
+  });
+
+  test("fails fast when Homebrew is missing", async () => {
+    __setProbeForTests(async () => false);
+    __setPlatformForTests(() => "darwin");
+    stubSpawn([
+      { match: ["which", "brew"], result: { exitCode: 1, stdout: "", stderr: "" } },
+    ]);
+
+    const result = await ensureBroker({ env: {}, quiet: true });
+
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe("bootstrap-failed");
+    expect(result.message).toContain("Homebrew not found");
+  });
+
+  test("propagates brew install failure", async () => {
+    __setProbeForTests(async () => false);
+    __setPlatformForTests(() => "darwin");
+    stubSpawn([
+      { match: ["which", "brew"], result: { exitCode: 0, stdout: "/opt/homebrew/bin/brew", stderr: "" } },
+      { match: ["brew", "install", "nats-server"], result: { exitCode: 1, stdout: "", stderr: "Network error fetching formula" } },
+    ]);
+
+    const result = await ensureBroker({ env: {}, quiet: true });
+
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe("bootstrap-failed");
+    expect(result.message).toContain("brew install nats-server failed");
+    expect(result.message).toContain("Network error");
+  });
+
+  test("propagates brew services start failure with retry hint", async () => {
+    __setProbeForTests(async () => false);
+    __setPlatformForTests(() => "darwin");
+    stubSpawn([
+      { match: ["which", "brew"], result: { exitCode: 0, stdout: "/opt/homebrew/bin/brew", stderr: "" } },
+      { match: ["brew", "install", "nats-server"], result: { exitCode: 0, stdout: "", stderr: "" } },
+      { match: ["brew", "services", "start", "nats-server"], result: { exitCode: 1, stdout: "", stderr: "launchctl bootstrap failed" } },
+    ]);
+
+    const result = await ensureBroker({ env: {}, quiet: true });
+
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe("bootstrap-failed");
+    expect(result.message).toContain("brew services start nats-server failed");
+    expect(result.message).toContain("Retry manually");
+  });
+});
+
+describe("ensureBroker — linux bootstrap path", () => {
+  test("systemctl --user enable --now succeeds", async () => {
+    __setProbeForTests(async () => false);
+    __setPlatformForTests(() => "linux");
+    stubSpawn([
+      { match: ["which", "systemctl"], result: { exitCode: 0, stdout: "/usr/bin/systemctl", stderr: "" } },
+      { match: ["which", "nats-server"], result: { exitCode: 0, stdout: "/usr/local/bin/nats-server", stderr: "" } },
+      { match: ["systemctl", "--user", "enable", "--now", "nats-server.service"], result: { exitCode: 0, stdout: "", stderr: "" } },
+    ]);
+
+    const result = await ensureBroker({ env: {}, quiet: true });
+
+    expect(result.ok).toBe(true);
+    expect(result.status).toBe("bootstrapped");
+    expect(result.message).toContain("systemd");
+  });
+
+  test("fails clearly when systemctl is missing", async () => {
+    __setProbeForTests(async () => false);
+    __setPlatformForTests(() => "linux");
+    stubSpawn([
+      { match: ["which", "systemctl"], result: { exitCode: 1, stdout: "", stderr: "" } },
+    ]);
+
+    const result = await ensureBroker({ env: {}, quiet: true });
+
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe("bootstrap-failed");
+    expect(result.message).toContain("requires systemctl");
+  });
+
+  test("fails clearly when nats-server binary is missing", async () => {
+    __setProbeForTests(async () => false);
+    __setPlatformForTests(() => "linux");
+    stubSpawn([
+      { match: ["which", "systemctl"], result: { exitCode: 0, stdout: "/usr/bin/systemctl", stderr: "" } },
+      { match: ["which", "nats-server"], result: { exitCode: 1, stdout: "", stderr: "" } },
+    ]);
+
+    const result = await ensureBroker({ env: {}, quiet: true });
+
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe("bootstrap-failed");
+    expect(result.message).toContain("nats-server binary not found");
+  });
+
+  test("propagates systemctl enable failure", async () => {
+    __setProbeForTests(async () => false);
+    __setPlatformForTests(() => "linux");
+    stubSpawn([
+      { match: ["which", "systemctl"], result: { exitCode: 0, stdout: "/usr/bin/systemctl", stderr: "" } },
+      { match: ["which", "nats-server"], result: { exitCode: 0, stdout: "/usr/local/bin/nats-server", stderr: "" } },
+      { match: ["systemctl", "--user", "enable", "--now", "nats-server.service"], result: { exitCode: 1, stdout: "", stderr: "Unit nats-server.service not found." } },
+    ]);
+
+    const result = await ensureBroker({ env: {}, quiet: true });
+
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe("bootstrap-failed");
+    expect(result.message).toContain("Unit nats-server.service not found");
+  });
+});
+
+describe("ensureBroker — unsupported platform", () => {
+  test("returns unsupported-platform on windows", async () => {
+    __setProbeForTests(async () => false);
+    __setPlatformForTests(() => "win32");
+    stubSpawn([]);
+
+    const result = await ensureBroker({ env: {}, quiet: true });
+
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe("unsupported-platform");
+    expect(result.message).toContain("win32");
+  });
+});
+
+describe("ensureBroker — idempotency", () => {
+  test("second call against a now-running broker is a noop", async () => {
+    __setPlatformForTests(() => "darwin");
+
+    // First call: not reachable, bootstrap path.
+    let reachable = false;
+    __setProbeForTests(async () => reachable);
+    stubSpawn([
+      { match: ["which", "brew"], result: { exitCode: 0, stdout: "/opt/homebrew/bin/brew", stderr: "" } },
+      { match: ["brew", "install", "nats-server"], result: { exitCode: 0, stdout: "", stderr: "" } },
+      { match: ["brew", "services", "start", "nats-server"], result: { exitCode: 0, stdout: "", stderr: "" } },
+    ]);
+    const first = await ensureBroker({ env: {}, quiet: true });
+    expect(first.status).toBe("bootstrapped");
+
+    // After bootstrap, broker is up; second call must not spawn anything.
+    reachable = true;
+    spawnCalls = [];
+    const second = await ensureBroker({ env: {}, quiet: true });
+    expect(second.ok).toBe(true);
+    expect(second.status).toBe("already-running");
+    expect(spawnCalls.length).toBe(0);
+  });
+});

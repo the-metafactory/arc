@@ -125,6 +125,8 @@ export async function createMockSkillRepo(
       preuninstall?: { path: string; content: string }[];
       postuninstall?: { path: string; content: string }[];
     };
+    /** Runtime broker requirements (arc#152). e.g. `{ nats: true }`. */
+    requires?: { nats?: boolean };
   }
 ): Promise<MockSkillRepo> {
   const repoDir = join(root, `mock-${opts.name}`);
@@ -251,6 +253,7 @@ export async function createMockSkillRepo(
             .map(([phase, arr]) => [phase, arr.map((s) => s.path)]),
         ),
       } : {}),
+      ...(opts.requires ? { requires: opts.requires } : {}),
     };
 
     // Write as YAML manually (avoid dependency on yaml in test helper)

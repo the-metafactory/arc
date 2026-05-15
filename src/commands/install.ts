@@ -28,6 +28,7 @@ import {
 } from "../lib/artifact-installer.js";
 import { wireExtensions } from "../lib/extensions.js";
 import { extractRepoName } from "../lib/repo-name.js";
+import { ensureBroker } from "../lib/nats-broker.js";
 import {
   type HostOverrides,
   orderTargetsForInstall,
@@ -202,6 +203,24 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
   // 2a. Library detection — delegate to per-artifact installs
   if (manifest.type === "library") {
     return installLibrary(opts, installPath, manifest);
+  }
+
+  // 2a'. Runtime broker check (arc#152) — packages that route over the
+  // shared NATS bus declare `requires.nats: true`. Verify a broker is up
+  // (or bootstrap one locally) BEFORE we touch the filesystem; a postinstall
+  // that tries to publish-on-bus would otherwise silently no-op on a host
+  // that lost its broker registration after reboot.
+  if (manifest.requires?.nats) {
+    const brokerResult = await ensureBroker({ quiet: opts.yes });
+    if (!brokerResult.ok) {
+      Bun.spawnSync(["rm", "-rf", installPath]);
+      return {
+        success: false,
+        error:
+          `Package '${manifest.name}' requires a running NATS broker (requires.nats: true), ` +
+          `but arc could not verify or bootstrap one. ${brokerResult.message}`,
+      };
+    }
   }
 
   // 2b. Install package dependencies (other arc packages)
@@ -555,6 +574,21 @@ export async function installSingleArtifact(
   libraryName: string,
 ): Promise<InstallResult> {
   const { arc, host, db, repoUrl } = opts;
+
+  // Runtime broker check (arc#152) — same gate as the standalone install
+  // path. Library artifacts that declare `requires.nats: true` get the
+  // broker probe before any symlinks land.
+  if (manifest.requires?.nats) {
+    const brokerResult = await ensureBroker({ quiet: opts.yes });
+    if (!brokerResult.ok) {
+      return {
+        success: false,
+        error:
+          `Artifact '${manifest.name}' requires a running NATS broker (requires.nats: true), ` +
+          `but arc could not verify or bootstrap one. ${brokerResult.message}`,
+      };
+    }
+  }
 
   // Display capabilities per-artifact
   const risk = assessRisk(manifest);
