@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.27.1
+
+### Fixed
+
+- **`arc login` help text and install-time error are now actionable** (closes [#156](https://github.com/the-metafactory/arc/issues/156)).
+  - `arc login` description previously claimed "required for publishing only"; install also needs authentication. Updated to "required for installs and publishing".
+  - `arc logout` description likewise expanded to acknowledge that signed-in installs are affected.
+  - 401/403 from a metafactory storage endpoint now hints at the next step: if no bearer was sent, `Run \`arc login\` first`; if a bearer was sent and rejected, `Token rejected — run \`arc login --force\` to refresh.` HTTP status code included for diagnosis.
+
 ## 0.24.0
 
 ### Changed

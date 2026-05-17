@@ -374,6 +374,32 @@ export interface ArcManifest {
   description?: string;
   /** SPDX license identifier */
   license?: string;
+  /**
+   * Canonical source repository URL. Forwarded to the metafactory registry
+   * at publish time so the package landing page can resolve relative README
+   * image paths against the repo's raw content
+   * (the-metafactory/meta-factory#501).
+   *
+   * Common shapes accepted by the registry's `extractRepoSlug`:
+   *   - `https://github.com/owner/repo[.git]`
+   *   - `git+https://github.com/owner/repo.git`
+   *   - `git@github.com:owner/repo.git`
+   *   - `github:owner/repo`
+   *   - `owner/repo`
+   */
+  repository?: string;
+  /** Optional public homepage / docs URL. Forwarded as-is to the registry. */
+  homepage?: string;
+  /** Free-form search keywords. Forwarded to the registry for discovery. */
+  keywords?: string[];
+  /**
+   * Discovery category. The registry pins an enumeration —
+   * `text-processing | security | api-integration | data-ops | devtools |
+   * research | communication | infrastructure` — but arc forwards the raw
+   * string and lets the server validate, so the source of truth stays in
+   * one place.
+   */
+  category?: string;
 }
 
 /** Trust tier for installed packages */

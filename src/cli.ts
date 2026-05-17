@@ -2,7 +2,8 @@
 
 import { Command } from "commander";
 import { createArcPaths, ensureDirectories, getDefaultHost } from "./lib/paths.js";
-import { openDatabase } from "./lib/db.js";
+import { openDatabase, getSkill } from "./lib/db.js";
+import { SymlinkConflictError } from "./lib/symlinks.js";
 import { install, parseNameVersion } from "./commands/install.js";
 import { list, formatList, formatListJson } from "./commands/list.js";
 import { info, formatInfo, formatInfoJson } from "./commands/info.js";
@@ -38,6 +39,7 @@ import type { CatalogEntry, ArtifactType, PackageTier, RegistrySource, SourceTyp
 import { login } from "./commands/login.js";
 import { logout } from "./commands/logout.js";
 import { addBot, reissueBot, listBots, removeBot, setupOperator } from "./commands/nats.js";
+import { provisionStreams, provisionConsumer } from "./commands/jetstream.js";
 import {
   ARC_NATS_SCHEMA,
   emitJson,
@@ -46,6 +48,7 @@ import {
   type ReissueBotJson,
   type RemoveBotJson,
   type SetupOperatorJson,
+  type ProvisionJson,
 } from "./lib/json-response.js";
 import { generateIdentity, exportPrincipals, importPrincipals, listPrincipals } from "./commands/identity.js";
 import { bundle, formatBundle } from "./commands/bundle.js";
@@ -111,7 +114,8 @@ program
   .description("Install a skill from git URL, or by name from the registry")
   .option("-y, --yes", "Skip confirmation prompt")
   .option("--pin <version>", "Pin to a specific version (git tag)")
-  .action(async (nameOrUrl: string, opts: { yes?: boolean; pin?: string }) => {
+  .option("--strict-signing", "Refuse to install if Sigstore signature is missing on an official-tier package")
+  .action(async (nameOrUrl: string, opts: { yes?: boolean; pin?: string; strictSigning?: boolean }) => {
     // Non-TTY guard: fail loud rather than silently half-installing
     if (!opts.yes && !process.stdin.isTTY) {
       console.error("Error: arc install requires an interactive terminal for capability confirmation.");
@@ -171,6 +175,22 @@ program
       }
 
       console.log(`Found ${formatPackageRef(pkgRef)} v${resolved.version} in ${resolved.source.name} [${resolved.source.tier}]`);
+
+      // arc#158: bail before download if a row already exists for this name.
+      // Resolved name is known here (no clone needed), so we save the bytes.
+      const existingRow = getSkill(db, resolved.name);
+      if (existingRow && !existingRow.library_name) {
+        let hint: string;
+        if (existingRow.status === "disabled") {
+          hint = `Run \`arc enable ${resolved.name}\` to re-enable it, or \`arc remove ${resolved.name}\` first if you want a clean install.`;
+        } else if (existingRow.version === resolved.version) {
+          hint = `Already at v${resolved.version}. Run \`arc remove ${resolved.name}\` first to reinstall.`;
+        } else {
+          hint = `Run \`arc upgrade ${resolved.name}\`, or \`arc remove ${resolved.name}\` first if the existing install can't be upgraded in place.`;
+        }
+        console.error(`'${resolved.name}' v${existingRow.version} is already installed (status: ${existingRow.status}). ${hint}`);
+        process.exit(1);
+      }
 
       // Download. Anonymous by default (DD-80); the resolved source is passed
       // through so an auth-gated metafactory storage endpoint receives the
@@ -269,8 +289,25 @@ program
         }
         process.exit(1);
       }
+      // arc#160: a missing Sigstore signature on an official-tier source is
+      // a real risk, not a side note. Promote it to a prominent warning, and
+      // let --strict-signing turn it into a hard failure.
+      let sigstoreVerified = false;
       if (sigstoreResult.verified === true) {
         console.log(`Sigstore signature verified (${sigstoreResult.reason})`);
+        sigstoreVerified = true;
+      } else if (resolved.source.tier === "official") {
+        console.warn(`⚠️  Sigstore signature MISSING for official-tier package`);
+        console.warn(`   ${sigstoreResult.reason}`);
+        console.warn(`   SHA-256 and registry signature are verified, but the package itself is not Sigstore-signed.`);
+        console.warn(`   This means the identity that produced the bytes cannot be cryptographically attested.`);
+        if (opts.strictSigning) {
+          console.error(`Refusing to install: --strict-signing is set and Sigstore signature is missing.`);
+          if (await Bun.file(download.tempPath).exists()) {
+            Bun.spawnSync(["rm", "-f", download.tempPath]);
+          }
+          process.exit(1);
+        }
       } else {
         console.warn(`Sigstore signature: ${sigstoreResult.reason}`);
       }
@@ -296,7 +333,13 @@ program
         sourceTier: resolved.source.tier,
       });
       if (result.success) {
-        console.log(`Installed ${result.name} v${result.version} (verified)`);
+        // arc#160: don't claim "(verified)" on the final line when only the
+        // registry signature and checksum were validated — Sigstore is the
+        // signature that attests to producer identity.
+        const verifyLabel = sigstoreVerified
+          ? "(verified)"
+          : "(SHA-256 + registry signature verified; Sigstore signature MISSING)";
+        console.log(`Installed ${result.name} v${result.version} ${verifyLabel}`);
       } else {
         console.error(`${result.error}`);
         process.exit(1);
@@ -824,12 +867,21 @@ source
 
 program
   .command("login")
-  .description("Authenticate with metafactory registry (required for publishing only)")
+  .description("Authenticate with metafactory registry (required for installs and publishing)")
   .option("-s, --source <name>", "Target source name (default: first metafactory source)")
   .option("-f, --force", "Re-authenticate even if already logged in")
-  .action(async (opts: { source?: string; force?: boolean }) => {
+  .option(
+    "--token-scope <scope>",
+    "Requested token scope (e.g. packages:read, packages:write). Server defaults to packages:read. Named --token-scope to avoid collision with `arc publish --scope <namespace>`.",
+  )
+  .action(async (opts: { source?: string; force?: boolean; tokenScope?: string }) => {
     const paths = createArcPaths();
-    const result = await login({ paths, sourceName: opts.source, force: opts.force });
+    const result = await login({
+      paths,
+      sourceName: opts.source,
+      force: opts.force,
+      scope: opts.tokenScope,
+    });
 
     if (result.success) {
       console.log(`Logged in to ${result.sourceName}`);
@@ -843,7 +895,7 @@ program
 
 program
   .command("logout")
-  .description("Remove authentication from metafactory source (only affects publishing)")
+  .description("Remove authentication from metafactory source (signed-in installs and publishing will require re-login)")
   .option("-s, --source <name>", "Target source name (default: first metafactory source)")
   .action(async (opts: { source?: string }) => {
     const paths = createArcPaths();
@@ -1359,6 +1411,114 @@ nats
     await setupOperator(account, botNames, { force: opts.force });
   });
 
+/**
+ * Shared dispatch helper for the JetStream provisioning verbs. The two
+ * verbs differ only in (a) the orchestrator they call and (b) how the
+ * success payload maps to the {@link ProvisionJson} envelope; everything
+ * else — the try/catch shape, the dual JSON / human output path, the
+ * `emitJson` + `process.exit` choreography — is identical. Extracted so
+ * the next change to exit-code mapping or `classifyError` handling
+ * applies to both verbs in one place (Sage cycle-1 Maintainability finding).
+ */
+async function runNatsProvisionCommand<R>(args: {
+  json: boolean | undefined;
+  run: () => Promise<R>;
+  toResources: (r: R) => { resources: ProvisionJson["resources"]; natsUrl: string };
+  printHuman: (r: R) => void;
+}): Promise<never> {
+  if (args.json) {
+    try {
+      const r = await args.run();
+      const { resources, natsUrl } = args.toResources(r);
+      emitJson({ schema: ARC_NATS_SCHEMA, ok: true, resources, natsUrl });
+      process.exit(0);
+    } catch (err) {
+      emitJson({ schema: ARC_NATS_SCHEMA, ok: false, error: classifyError(err) });
+      process.exit(1);
+    }
+  }
+  try {
+    const r = await args.run();
+    args.printHuman(r);
+    process.exit(0);
+  } catch (err) {
+    const classified = classifyError(err);
+    console.error(`Error: ${classified.message}`);
+    process.exit(1);
+  }
+}
+
+nats
+  .command("provision-streams")
+  .description("Idempotently create the CODE_REVIEW JetStream stream + optional per-agent consumer")
+  .option("--nats-url <url>", "NATS broker URL (defaults to $NATS_URL or nats://127.0.0.1:4222)")
+  .option("--stream <name>", "Stream name override (default: CODE_REVIEW)")
+  .option("--network <network>", "Network segment of the consumer name (with --agent)")
+  .option("--agent <agent>", "Agent segment of the consumer name (with --network)")
+  .option("--json", "Emit a single line of stable JSON (schema: arc.nats.v1)")
+  .action(async (opts: { natsUrl?: string; stream?: string; network?: string; agent?: string; json?: boolean }) => {
+    if ((opts.network && !opts.agent) || (!opts.network && opts.agent)) {
+      const msg = "--network and --agent must be supplied together";
+      if (opts.json) {
+        emitJson({ schema: ARC_NATS_SCHEMA, ok: false, error: { code: "VALIDATION_ERROR", message: msg } });
+        process.exit(1);
+      }
+      console.error(`Error: ${msg}`);
+      process.exit(1);
+    }
+    const callOpts = {
+      ...(opts.natsUrl !== undefined && { natsUrl: opts.natsUrl }),
+      ...(opts.stream !== undefined && { streamName: opts.stream }),
+      ...(opts.network && opts.agent && { consumer: { network: opts.network, agent: opts.agent } }),
+    };
+    await runNatsProvisionCommand({
+      json: opts.json,
+      run: () => provisionStreams(callOpts),
+      toResources: (r) => ({ resources: r.resources, natsUrl: r.natsUrl }),
+      printHuman: (r) => {
+        for (const res of r.resources) {
+          const tag = res.created ? "created" : "exists";
+          const where = res.stream ? ` (stream=${res.stream})` : "";
+          console.log(`  ${tag} ${res.kind} ${res.name}${where}`);
+        }
+        console.log(`Provisioning complete against ${r.natsUrl}.`);
+      },
+    });
+  });
+
+nats
+  .command("provision-consumer")
+  .description("Idempotently create a per-(network, agent) durable consumer on the CODE_REVIEW stream")
+  .requiredOption("--network <network>", "Network segment of the consumer name")
+  .requiredOption("--agent <agent>", "Agent segment of the consumer name")
+  .option("--nats-url <url>", "NATS broker URL (defaults to $NATS_URL or nats://127.0.0.1:4222)")
+  .option("--stream <name>", "Stream name override (default: CODE_REVIEW)")
+  .option("--filter-subject <subject>", "Optional consumer filter subject")
+  .option("--json", "Emit a single line of stable JSON (schema: arc.nats.v1)")
+  .action(async (opts: {
+    network: string; agent: string;
+    natsUrl?: string; stream?: string; filterSubject?: string;
+    json?: boolean;
+  }) => {
+    const callOpts = {
+      network: opts.network,
+      agent: opts.agent,
+      ...(opts.natsUrl !== undefined && { natsUrl: opts.natsUrl }),
+      ...(opts.stream !== undefined && { stream: opts.stream }),
+      ...(opts.filterSubject !== undefined && { filterSubject: opts.filterSubject }),
+    };
+    await runNatsProvisionCommand({
+      json: opts.json,
+      run: () => provisionConsumer(callOpts),
+      toResources: (r) => ({ resources: [r.resource], natsUrl: r.natsUrl }),
+      printHuman: (r) => {
+        const tag = r.resource.created ? "created" : "exists";
+        console.log(`  ${tag} consumer ${r.resource.name} (stream=${r.resource.stream})`);
+        console.log(`Provisioning complete against ${r.natsUrl}.`);
+      },
+    });
+  });
+
 // ── Identity management commands ──────────────────────────
 
 const identity = program
@@ -1395,5 +1555,16 @@ identity
   .action((file: string) => {
     importPrincipals(file);
   });
+
+// arc#163: Commander surfaces async-action rejections as unhandled rejections.
+// Catch SymlinkConflictError specifically so the user sees the actionable
+// message rather than a stack trace. Other errors keep their current behavior.
+process.on("unhandledRejection", (err) => {
+  if (err instanceof SymlinkConflictError) {
+    console.error(`Error: ${err.message}`);
+    process.exit(1);
+  }
+  throw err;
+});
 
 program.parse();

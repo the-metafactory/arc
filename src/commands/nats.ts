@@ -68,7 +68,13 @@ function nsc(args: string[]): string {
   const stdout = result.stdout.trim();
   const stderr = result.stderr.trim();
   if (result.exitCode !== 0) {
-    throw new Error(`nsc ${args[0]} failed: ${stderr || stdout || "unknown error"}`);
+    // arc#169: throw a typed error so consumers of --json get the precise
+    // NSC_COMMAND_FAILED code instead of UNKNOWN (outside try blocks) or
+    // having the addBot catch-all reclassify as ROLLBACK_FAILED.
+    throw new ArcNatsCommandError(
+      "NSC_COMMAND_FAILED",
+      `nsc ${args[0]} failed: ${stderr || stdout || "unknown error"}`,
+    );
   }
   return stdout;
 }
@@ -78,7 +84,10 @@ function nscWithStderr(args: string[]): string {
   if (result.exitCode !== 0) {
     const stderr = result.stderr.trim();
     const stdout = result.stdout.trim();
-    throw new Error(`nsc ${args[0]} failed: ${stderr || stdout || "unknown error"}`);
+    throw new ArcNatsCommandError(
+      "NSC_COMMAND_FAILED",
+      `nsc ${args[0]} failed: ${stderr || stdout || "unknown error"}`,
+    );
   }
   return (result.stdout + result.stderr).trim();
 }
@@ -94,6 +103,21 @@ let nscInstallCheck: () => boolean = () => {
 export function __setNscInstallCheckForTests(next: (() => boolean) | null): void {
   assertTestModeForSeam("__setNscInstallCheckForTests");
   nscInstallCheck = next ?? (() => Bun.spawnSync(["which", "nsc"], { stdout: "pipe" }).exitCode === 0);
+}
+
+/**
+ * Test-only direct accessors for the two private nsc wrappers.
+ * Tests use these to assert that both wrappers throw the typed error on
+ * non-zero exit without having to route through addBot's call graph.
+ */
+export function __nscForTests(args: string[]): string {
+  assertTestModeForSeam("__nscForTests");
+  return nsc(args);
+}
+
+export function __nscWithStderrForTests(args: string[]): string {
+  assertTestModeForSeam("__nscWithStderrForTests");
+  return nscWithStderr(args);
 }
 
 function assertTestModeForSeam(seamName: string): void {
@@ -133,7 +157,14 @@ function validateBotName(name: string, json = false): void {
 
 function validateSubject(subject: string): void {
   if (!NATS_SUBJECT_RE.test(subject)) {
-    throw new Error(`Invalid NATS subject: "${subject}" — only alphanumeric, dots, wildcards, hyphens, underscores allowed`);
+    // arc#136: must be ArcNatsCommandError("VALIDATION_ERROR") so --json mode
+    // reports the right code. A plain Error falls into the catch-all that
+    // rewrites it as ROLLBACK_FAILED, which is misleading for a pre-create
+    // input-validation failure.
+    throw new ArcNatsCommandError(
+      "VALIDATION_ERROR",
+      `Invalid NATS subject: "${subject}" — only alphanumeric, dots, wildcards, hyphens, underscores allowed`,
+    );
   }
 }
 
@@ -323,22 +354,25 @@ export async function addBot(name: string, opts: AddBotOptions): Promise<AddBotR
     if (!json) console.log(`Removed existing user: ${name}`);
   }
 
+  // arc#136 fail-fast: validate every subject before any nsc state changes,
+  // so a bad --pub/--sub doesn't trigger a real `nsc add user` + rollback
+  // round-trip for what is purely an input-validation failure. Split here
+  // (rather than re-splitting inside the try below) so the same list is used
+  // twice without divergence.
+  const pubSubjects = opts.pub ? opts.pub.split(",").map((s) => s.trim()) : [];
+  const subSubjects = opts.sub ? opts.sub.split(",").map((s) => s.trim()) : [];
+  for (const subj of pubSubjects) validateSubject(subj);
+  for (const subj of subSubjects) validateSubject(subj);
+
   nsc(["add", "user", "-a", account, "-n", name]);
 
   let credsContent: string;
   try {
-    if (opts.pub) {
-      for (const subj of opts.pub.split(",").map((s) => s.trim())) {
-        validateSubject(subj);
-        nsc(["edit", "user", "-a", account, "-n", name, "--allow-pub", subj]);
-      }
+    for (const subj of pubSubjects) {
+      nsc(["edit", "user", "-a", account, "-n", name, "--allow-pub", subj]);
     }
-
-    if (opts.sub) {
-      for (const subj of opts.sub.split(",").map((s) => s.trim())) {
-        validateSubject(subj);
-        nsc(["edit", "user", "-a", account, "-n", name, "--allow-sub", subj]);
-      }
+    for (const subj of subSubjects) {
+      nsc(["edit", "user", "-a", account, "-n", name, "--allow-sub", subj]);
     }
 
     credsContent = nsc(["generate", "creds", "-a", account, "-n", name]);
