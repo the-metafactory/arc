@@ -3,7 +3,7 @@ import { mkdir, writeFile, rm, lstat, readlink } from "fs/promises";
 import { existsSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
-import { createSymlink, removeSymlink } from "../../src/lib/symlinks.js";
+import { createSymlink, removeSymlink, SymlinkConflictError } from "../../src/lib/symlinks.js";
 
 let root: string;
 
@@ -63,13 +63,22 @@ describe("createSymlink", () => {
   // arc#163: install must not silently destroy a regular file at the link path
   // (uninstall treats non-symlinks as operator-owned state — install needs to
   // be symmetric).
-  test("arc#163: refuses to overwrite a regular file", async () => {
+  test("arc#163: refuses to overwrite a regular file (typed SymlinkConflictError)", async () => {
     const target = join(root, "real");
     const link = join(root, "link");
     await writeFile(target, "package data");
     await writeFile(link, "operator data");
 
-    await expect(createSymlink(target, link)).rejects.toThrow(/regular file/);
+    let err: unknown;
+    try {
+      await createSymlink(target, link);
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(SymlinkConflictError);
+    expect((err as SymlinkConflictError).code).toBe("ARC_SYMLINK_CONFLICT");
+    expect((err as SymlinkConflictError).linkPath).toBe(link);
+    expect((err as SymlinkConflictError).message).toContain("regular file");
 
     // The operator's file must still be there, unmodified.
     expect(existsSync(link)).toBe(true);
