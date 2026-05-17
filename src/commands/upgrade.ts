@@ -15,6 +15,7 @@ import { runScript } from "../lib/scripts.js";
 import { registerHooks, removeHooks, resolveHooksFromManifest } from "../lib/hooks.js";
 import { generateRules } from "../lib/rules.js";
 import { wireExtensions } from "../lib/extensions.js";
+import { requireBrokerForManifest } from "../lib/nats-broker.js";
 
 export interface UpgradeCheckResult {
   name: string;
@@ -164,6 +165,16 @@ export async function upgradePackage(
   // For library artifacts, git pull must run at the repo root (not artifact subdir)
   const gitCwd = findGitRoot(installPath) ?? installPath;
 
+  // Capture the pre-pull HEAD so the broker-gate failure path below can
+  // roll the repo back to a consistent state — sage cycle-3 important
+  // finding. Without rollback, a broker-failed upgrade leaves the repo
+  // at the new commit while the DB still records the old version,
+  // creating a state-drift hazard for the next operation.
+  const preHeadProbe = Bun.spawnSync(["git", "rev-parse", "HEAD"], {
+    cwd: gitCwd, stdout: "pipe", stderr: "pipe",
+  });
+  const preHeadSha = preHeadProbe.exitCode === 0 ? preHeadProbe.stdout.toString().trim() : null;
+
   // git pull in the cloned repo
   const pullResult = Bun.spawnSync(["git", "pull", "--ff-only"], {
     cwd: gitCwd,
@@ -180,6 +191,39 @@ export async function upgradePackage(
   const manifest = await readManifest(installPath);
   if (!manifest) {
     return { success: false, name, oldVersion: skill.version, error: "No arc-manifest.yaml (or pai-manifest.yaml) after pull" };
+  }
+
+  // Runtime broker check (arc#152) — re-verify the bus dependency. The
+  // upgrade may have ADDED `requires.nats: true` since the last install,
+  // or the broker registration may have been lost since (manual brew
+  // unregister, machine reboot, …). Idempotent: when reachable, just logs.
+  const brokerGate = await requireBrokerForManifest(manifest, {
+    noun: "Package",
+    contextClause: " during upgrade",
+  });
+  if (!brokerGate.ok) {
+    // Roll the repo back to its pre-pull HEAD so the on-disk + DB state
+    // stay consistent. Best-effort: if reset itself fails we surface the
+    // broker error (the real cause) AND the rollback failure so the
+    // operator sees both. Without preHeadSha we can't safely reset, so
+    // we log the inconsistency clearly.
+    let rollbackNote = "";
+    if (preHeadSha !== null) {
+      const resetRes = Bun.spawnSync(["git", "reset", "--hard", preHeadSha], {
+        cwd: gitCwd, stdout: "pipe", stderr: "pipe",
+      });
+      if (resetRes.exitCode !== 0) {
+        rollbackNote = ` Additionally, post-failure rollback to ${preHeadSha} failed: ${resetRes.stderr.toString().trim()}`;
+      }
+    } else {
+      rollbackNote = ` Pre-pull HEAD was not captured; on-disk repo may be ahead of recorded version.`;
+    }
+    return {
+      success: false,
+      name,
+      oldVersion: skill.version,
+      error: brokerGate.error + rollbackNote,
+    };
   }
 
   const oldVersion = skill.version;

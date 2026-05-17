@@ -1,5 +1,6 @@
 import { join } from "path";
 import { existsSync } from "fs";
+import { rm } from "node:fs/promises";
 import type {
   ArcPaths,
   ArcManifest,
@@ -28,6 +29,7 @@ import {
 } from "../lib/artifact-installer.js";
 import { wireExtensions } from "../lib/extensions.js";
 import { extractRepoName } from "../lib/repo-name.js";
+import { requireBrokerForManifest } from "../lib/nats-broker.js";
 import {
   type HostOverrides,
   orderTargetsForInstall,
@@ -231,6 +233,26 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
   // 2a. Library detection — delegate to per-artifact installs
   if (manifest.type === "library") {
     return installLibrary(opts, installPath, manifest);
+  }
+
+  // 2a'. Runtime broker check (arc#152) — packages that route over the
+  // shared NATS bus declare `requires.nats: true`. Verify a broker is up
+  // (or bootstrap one locally) BEFORE we touch the filesystem; a postinstall
+  // that tries to publish-on-bus would otherwise silently no-op on a host
+  // that lost its broker registration after reboot.
+  const brokerGate = await requireBrokerForManifest(manifest, {
+    quiet: opts.yes,
+    noun: "Package",
+  });
+  if (!brokerGate.ok) {
+    // Async rollback of the cloned repo — sage cycle-3 performance
+    // suggestion. The earlier Bun.spawnSync(["rm","-rf",…]) blocked the
+    // event loop on potentially-large checkouts. `force: true` keeps
+    // the existing best-effort semantics (no throw on missing path).
+    await rm(installPath, { recursive: true, force: true }).catch(() => {
+      /* secondary to the broker gate failure; surface the original error */
+    });
+    return { success: false, error: brokerGate.error };
   }
 
   // 2b. Install package dependencies (other arc packages)
@@ -584,6 +606,15 @@ export async function installSingleArtifact(
   libraryName: string,
 ): Promise<InstallResult> {
   const { arc, host, db, repoUrl } = opts;
+
+  // Runtime broker check (arc#152) — same gate as the standalone install
+  // path. Library artifacts that declare `requires.nats: true` get the
+  // broker probe before any symlinks land.
+  const brokerGate = await requireBrokerForManifest(manifest, {
+    quiet: opts.yes,
+    noun: "Artifact",
+  });
+  if (!brokerGate.ok) return { success: false, error: brokerGate.error };
 
   // Display capabilities per-artifact
   const risk = assessRisk(manifest);
