@@ -105,9 +105,43 @@ export function __setPlatformForTests(next: PlatformFn | null): void {
 
 /**
  * Parse `nats://host:port` (or bare `host:port` / `host`) into endpoint parts.
- * Falls back to default port 4222 when the URL omits one.
+ * Falls back to default port 4222 when the URL omits one or when the port
+ * is unparseable / out of range.
+ *
+ * Handles `nats://user:pass@host:port` correctly — sage cycle-2 important
+ * finding: the original regex-strip + `lastIndexOf(":")` parser treated
+ * the auth `user:pass@host` as the host segment, breaking valid
+ * operator-supplied URLs with embedded credentials. The WHATWG `URL`
+ * parser handles scheme + auth + host + port in one shot; the bare-
+ * `host:port` fallback preserves callers that pass a non-scheme string.
+ *
+ * Port validation — sage cycle-2 security finding: any parsed integer
+ * used to reach `socket.connect(port, host)`, which throws on out-of-
+ * range values (e.g. `999999`) and surfaces as an unstructured crash
+ * rather than the documented `bootstrap-failed` result. Reject ports
+ * outside 1-65535 by falling back to the default — same posture as the
+ * NaN branch.
  */
 export function parseNatsUrl(url: string): { host: string; port: number } {
+  const isValidPort = (n: number): boolean => Number.isInteger(n) && n >= 1 && n <= 65535;
+  // Scheme URLs go through the WHATWG parser. Convert `nats://` → `tcp://`
+  // because WHATWG's URL parser rejects unknown schemes for hostname
+  // extraction on some runtimes; `tcp://` is treated as a generic special
+  // scheme and the hostname / port surface cleanly.
+  if (/^nats:\/\//.test(url)) {
+    try {
+      const parsed = new URL(url.replace(/^nats:/, "tcp:"));
+      const host = parsed.hostname;
+      const portStr = parsed.port;
+      if (portStr === "") return { host, port: 4222 };
+      const port = parseInt(portStr, 10);
+      return isValidPort(port) ? { host, port } : { host, port: 4222 };
+    } catch {
+      // Malformed scheme URL → fall through to bare-form parser below
+      // rather than throwing from the probe path.
+    }
+  }
+  // Bare `host:port` / `host` fallback.
   const stripped = url.replace(/^nats:\/\//, "").replace(/\/.*$/, "");
   const lastColon = stripped.lastIndexOf(":");
   if (lastColon === -1) {
@@ -116,9 +150,7 @@ export function parseNatsUrl(url: string): { host: string; port: number } {
   const host = stripped.slice(0, lastColon);
   const portStr = stripped.slice(lastColon + 1);
   const port = parseInt(portStr, 10);
-  if (Number.isNaN(port)) {
-    // Malformed port → use the host part and fall back to the default port
-    // rather than treating the whole `host:abc` as a hostname.
+  if (!isValidPort(port)) {
     return { host, port: 4222 };
   }
   return { host, port };

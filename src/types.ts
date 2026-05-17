@@ -221,10 +221,15 @@ export interface LifecycleScripts {
  *
  * `nats: true` opts the package into the broker check at install/upgrade time.
  * arc probes `NATS_URL` (env or default `nats://127.0.0.1:4222`); if
- * unreachable AND no `NATS_URL` override is set, it bootstraps a local
- * broker via the OS package manager (brew on macOS, apt/systemd on Linux)
- * and registers it for auto-start. If `NATS_URL` is set but unreachable,
- * arc surfaces a clear error instead of overriding operator intent.
+ * unreachable AND no `NATS_URL` override is set, the bootstrap path runs:
+ *   - macOS: `brew install nats-server` + `brew services start` (registers
+ *     for auto-start across reboots).
+ *   - Linux: requires an existing `nats-server` binary plus a systemd user
+ *     unit; arc runs `systemctl --user enable --now nats-server.service`
+ *     to start + register it. arc does NOT auto-`apt-get install` (would
+ *     require root and surprise operators with custom install paths).
+ * If `NATS_URL` is set but unreachable, arc surfaces a clear error instead
+ * of overriding operator intent.
  */
 export interface RuntimeRequirements {
   nats?: boolean;

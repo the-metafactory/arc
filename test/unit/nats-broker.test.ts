@@ -63,6 +63,35 @@ describe("parseNatsUrl", () => {
   test("falls back to default port when malformed", () => {
     expect(parseNatsUrl("nats://host:abc")).toEqual({ host: "host", port: 4222 });
   });
+
+  test("parses auth-bearing URL — host is the actual hostname, not user:pass@host (sage cycle-2)", () => {
+    // Operator-supplied URLs with embedded credentials are valid. The
+    // original regex-strip + lastIndexOf parser treated `user:pass@host`
+    // as the host segment, which made every auth-bearing remote broker
+    // fail the probe. Pin the WHATWG-URL-backed parser's correct behaviour.
+    expect(parseNatsUrl("nats://user:pass@remote.example.com:4222"))
+      .toEqual({ host: "remote.example.com", port: 4222 });
+  });
+
+  test("parses auth-bearing URL without explicit port — defaults to 4222", () => {
+    expect(parseNatsUrl("nats://user:pass@host.example.com"))
+      .toEqual({ host: "host.example.com", port: 4222 });
+  });
+
+  test("rejects out-of-range ports — falls back to default 4222 (sage cycle-2 security)", () => {
+    // `socket.connect(999999, host)` throws on most runtimes; the parser
+    // must reject before reaching the probe so the structured
+    // `broker_unreachable` / `bootstrap-failed` taxonomy stays intact.
+    expect(parseNatsUrl("nats://host:999999")).toEqual({ host: "host", port: 4222 });
+    expect(parseNatsUrl("nats://host:0")).toEqual({ host: "host", port: 4222 });
+    expect(parseNatsUrl("nats://host:-1")).toEqual({ host: "host", port: 4222 });
+    expect(parseNatsUrl("host:99999")).toEqual({ host: "host", port: 4222 });
+  });
+
+  test("accepts valid port boundary values", () => {
+    expect(parseNatsUrl("nats://host:1")).toEqual({ host: "host", port: 1 });
+    expect(parseNatsUrl("nats://host:65535")).toEqual({ host: "host", port: 65535 });
+  });
 });
 
 describe("ensureBroker — broker already reachable", () => {
