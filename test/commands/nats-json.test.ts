@@ -179,6 +179,76 @@ describe("addBot --json: error envelope", () => {
     expect(err).toBeInstanceOf(ArcNatsCommandError);
     expect((err as ArcNatsCommandError).code).toBe("VALIDATION_ERROR");
   });
+
+  // arc#136: validateSubject used to throw a plain Error, which the addBot
+  // catch-all rewrote as ROLLBACK_FAILED — the wrong code for an input
+  // validation failure. The fix makes it throw VALIDATION_ERROR directly,
+  // AND hoists validation above `nsc add user` so a bad subject never
+  // triggers a real create + rollback round-trip in the first place.
+  test("arc#136: VALIDATION_ERROR for an invalid --pub subject; fail-fast, no add/delete user", async () => {
+    const calls: string[] = [];
+    const handler = buildRunner({
+      "describe user": (a) => a.includes("-J") ? ok(FAKE_USER_JWT_JSON) : fail("user not found"),
+      "add user": () => ok("added"),
+      "edit user": () => ok("edited"),
+      "delete user": () => ok("deleted"),
+      "generate creds": () => ok(FAKE_CREDS),
+    });
+    __setNscRunnerForTests((args) => {
+      calls.push(`${args[0]} ${args[1] ?? ""}`.trim());
+      return handler(args);
+    });
+
+    let err: unknown;
+    try {
+      await addBot(TEST_BOT, {
+        account: TEST_ACCOUNT,
+        output: CUSTOM_OUT,
+        json: true,
+        pub: "valid.subject,bad subject with spaces",
+      });
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(ArcNatsCommandError);
+    expect((err as ArcNatsCommandError).code).toBe("VALIDATION_ERROR");
+    expect((err as ArcNatsCommandError).message).toContain("Invalid NATS subject");
+    // Fail-fast: validation happens BEFORE any state-changing nsc calls,
+    // so neither `add user` nor the rollback `delete user` ran.
+    expect(calls).not.toContain("add user");
+    expect(calls).not.toContain("delete user");
+  });
+
+  test("arc#136: VALIDATION_ERROR for an invalid --sub subject; fail-fast", async () => {
+    const calls: string[] = [];
+    const handler = buildRunner({
+      "describe user": (a) => a.includes("-J") ? ok(FAKE_USER_JWT_JSON) : fail("user not found"),
+      "add user": () => ok("added"),
+      "edit user": () => ok("edited"),
+      "delete user": () => ok("deleted"),
+      "generate creds": () => ok(FAKE_CREDS),
+    });
+    __setNscRunnerForTests((args) => {
+      calls.push(`${args[0]} ${args[1] ?? ""}`.trim());
+      return handler(args);
+    });
+
+    let err: unknown;
+    try {
+      await addBot(TEST_BOT, {
+        account: TEST_ACCOUNT,
+        output: CUSTOM_OUT,
+        json: true,
+        sub: "ok.subject,$(evil-shell-meta)",
+      });
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(ArcNatsCommandError);
+    expect((err as ArcNatsCommandError).code).toBe("VALIDATION_ERROR");
+    expect(calls).not.toContain("add user");
+    expect(calls).not.toContain("delete user");
+  });
 });
 
 // ── reissueBot ────────────────────────────────────────────────────────────
