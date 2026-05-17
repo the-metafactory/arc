@@ -5,7 +5,11 @@ import { isErrno } from "./errors.js";
 
 /**
  * Create a symlink, ensuring the parent directory exists.
- * If a symlink already exists at the target, removes it first.
+ * If a symlink already exists at the target, removes it first. If a regular
+ * file is in the way, refuses (arc#163) — uninstall treats non-symlinks as
+ * operator-owned state, so install must too. Directories are renamed aside
+ * (`.pre-arc`) so a manually-installed skill being replaced by arc isn't
+ * destroyed silently.
  */
 export async function createSymlink(
   target: string,
@@ -21,7 +25,13 @@ export async function createSymlink(
       // Back up existing directory (e.g., manually-installed skill being replaced by arc)
       await rename(linkPath, linkPath + ".pre-arc");
     } else if (stat.isFile()) {
-      await unlink(linkPath);
+      // arc#163: refuse rather than silently deleting operator-owned data.
+      // The uninstall path already treats a regular file at a symlink target
+      // as untouchable; install needs to be symmetric.
+      throw new Error(
+        `Refusing to symlink over existing regular file at ${linkPath}. ` +
+          `Move or delete this file manually, then re-run the install.`,
+      );
     }
   } catch (err) {
     if (!isErrno(err) || err.code !== "ENOENT") throw err;
