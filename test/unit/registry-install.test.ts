@@ -398,6 +398,61 @@ describe("downloadPackage", () => {
     }
   });
 
+  // arc#157: branch-coverage for the hint inside the 401/403 handler.
+  // The hint differs based on whether arc sent an Authorization header.
+  test("401 without token hints to run `arc login`", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mockFetch(async () => new Response("Unauthorized", { status: 401 }));
+
+    try {
+      const result = await downloadPackage("https://example.com/pkg.tar.gz", env.arc.reposDir);
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("Access denied");
+      expect(result.error).toContain("arc login");
+      expect(result.error).not.toContain("--force");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("401 with token hints to `arc login --force` (token rejected)", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mockFetch(async () => new Response("Unauthorized", { status: 401 }));
+
+    try {
+      const result = await downloadPackage(
+        "https://example.com/pkg.tar.gz",
+        env.arc.reposDir,
+        metafactorySource("expired-token"),
+      );
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("Access denied");
+      expect(result.error).toContain("Token rejected");
+      expect(result.error).toContain("arc login --force");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("403 with token hints to `arc login --force`", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mockFetch(async () => new Response("Forbidden", { status: 403 }));
+
+    try {
+      const result = await downloadPackage(
+        "https://example.com/pkg.tar.gz",
+        env.arc.reposDir,
+        metafactorySource("stale-token"),
+      );
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("Access denied");
+      expect(result.error).toContain("HTTP 403");
+      expect(result.error).toContain("arc login --force");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test("returns error on 404", async () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = mockFetch(async () => new Response("Not found", { status: 404 }));

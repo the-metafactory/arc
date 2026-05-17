@@ -352,9 +352,8 @@ export async function downloadPackage(
       });
 
       if (response.status === 401 || response.status === 403) {
-        // Different hint depending on whether arc had a token to begin with.
-        // No token → user just needs to log in (install requires auth per DD-46).
-        // Token present → token was rejected (expired/revoked/wrong DB) → re-login.
+        // No token → user needs to log in. Token present → token was rejected
+        // (expired/revoked/wrong DB) → re-login.
         const hint = headers.Authorization
           ? "Token rejected — run `arc login --force` to refresh."
           : "Run `arc login` first (install requires authentication).";
