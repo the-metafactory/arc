@@ -522,7 +522,26 @@ async function installSkillEntry(
     return { success: false, error: `Refusing to install: name "${entry.name}" would escape install directory` };
   }
 
-  const isRefresh = getSkill(db, entry.name) !== null;
+  // arc#170: distinguish "refresh of THIS catalog entry" from "row exists
+  // from somewhere else". If a foreign install (e.g. `arc install` from a
+  // direct URL, or a different catalog source) registered the same name,
+  // catalog use must refuse rather than silently overwrite — the existing
+  // `isRefresh` path below unconditionally DELETEs the row before INSERT,
+  // which would clobber operator state.
+  const existingRow = getSkill(db, entry.name);
+  const isRefresh = existingRow !== null && existingRow.install_source === entry.source;
+  if (existingRow && !isRefresh) {
+    let hint: string;
+    if (existingRow.status === "disabled") {
+      hint = `Run \`arc enable ${entry.name}\` to re-enable it, or \`arc remove ${entry.name}\` first if you want a clean install from this catalog entry.`;
+    } else {
+      hint = `Run \`arc remove ${entry.name}\` first if you want to replace it with this catalog entry's source.`;
+    }
+    return {
+      success: false,
+      error: `'${entry.name}' v${existingRow.version} is already installed from a different source (${existingRow.install_source ?? "direct"}; status: ${existingRow.status}). ${hint}`,
+    };
+  }
 
   if (resolved.type === "local") {
     // For CLI skills: find the repo root (walk up from skill dir to find arc-manifest.yaml)

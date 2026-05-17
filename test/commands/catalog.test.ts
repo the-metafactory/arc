@@ -334,6 +334,77 @@ describe("catalogUse", () => {
     expect(result.success).toBe(false);
     expect(result.error).toContain("not found");
   });
+
+  // arc#170: refuse rather than silently overwrite when a row for the same
+  // name already exists from a different source (e.g. a prior `arc install`
+  // from a direct URL, or another catalog entry).
+  test("arc#170: refuses to overwrite a foreign install of the same name", async () => {
+    await createMockSkillDir(env.root, "mock-skills/Research", { name: "Research" });
+    await saveCatalog(env.arc.catalogPath, sampleCatalog(env.root));
+
+    // Pre-existing row with a *different* install_source — simulates
+    // `arc install` from a direct URL (or a different catalog source).
+    const now = new Date().toISOString();
+    env.db
+      .prepare(
+        `INSERT INTO skills (name, version, repo_url, install_path, skill_dir, status, artifact_type, tier, install_source, installed_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "Research",
+        "1.0.0",
+        "git@github.com:other/research.git",
+        "/legacy/path",
+        "/legacy/path",
+        "active",
+        "skill",
+        "custom",
+        "git@github.com:other/research.git",
+        now,
+        now,
+      );
+
+    const result = await catalogUse(env.arc, env.host, env.db, "Research");
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("already installed from a different source");
+    expect(result.error).toContain("arc remove");
+
+    // Critical: the foreign DB row must not have been overwritten.
+    const row = getSkill(env.db, "Research");
+    expect(row).not.toBeNull();
+    expect(row!.install_source).toBe("git@github.com:other/research.git");
+    expect(row!.version).toBe("1.0.0");
+  });
+
+  test("arc#170: same-name disabled foreign install hints at `arc enable`", async () => {
+    await createMockSkillDir(env.root, "mock-skills/Research", { name: "Research" });
+    await saveCatalog(env.arc.catalogPath, sampleCatalog(env.root));
+
+    const now = new Date().toISOString();
+    env.db
+      .prepare(
+        `INSERT INTO skills (name, version, repo_url, install_path, skill_dir, status, artifact_type, tier, install_source, installed_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "Research",
+        "1.0.0",
+        "git@github.com:other/research.git",
+        "/legacy/path",
+        "/legacy/path",
+        "disabled",
+        "skill",
+        "custom",
+        "git@github.com:other/research.git",
+        now,
+        now,
+      );
+
+    const result = await catalogUse(env.arc, env.host, env.db, "Research");
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("arc enable");
+    expect(result.error).toContain("disabled");
+  });
 });
 
 describe("catalogSync", () => {
