@@ -330,22 +330,25 @@ export async function addBot(name: string, opts: AddBotOptions): Promise<AddBotR
     if (!json) console.log(`Removed existing user: ${name}`);
   }
 
+  // arc#136 fail-fast: validate every subject before any nsc state changes,
+  // so a bad --pub/--sub doesn't trigger a real `nsc add user` + rollback
+  // round-trip for what is purely an input-validation failure. Split here
+  // (rather than re-splitting inside the try below) so the same list is used
+  // twice without divergence.
+  const pubSubjects = opts.pub ? opts.pub.split(",").map((s) => s.trim()) : [];
+  const subSubjects = opts.sub ? opts.sub.split(",").map((s) => s.trim()) : [];
+  for (const subj of pubSubjects) validateSubject(subj);
+  for (const subj of subSubjects) validateSubject(subj);
+
   nsc(["add", "user", "-a", account, "-n", name]);
 
   let credsContent: string;
   try {
-    if (opts.pub) {
-      for (const subj of opts.pub.split(",").map((s) => s.trim())) {
-        validateSubject(subj);
-        nsc(["edit", "user", "-a", account, "-n", name, "--allow-pub", subj]);
-      }
+    for (const subj of pubSubjects) {
+      nsc(["edit", "user", "-a", account, "-n", name, "--allow-pub", subj]);
     }
-
-    if (opts.sub) {
-      for (const subj of opts.sub.split(",").map((s) => s.trim())) {
-        validateSubject(subj);
-        nsc(["edit", "user", "-a", account, "-n", name, "--allow-sub", subj]);
-      }
+    for (const subj of subSubjects) {
+      nsc(["edit", "user", "-a", account, "-n", name, "--allow-sub", subj]);
     }
 
     credsContent = nsc(["generate", "creds", "-a", account, "-n", name]);
