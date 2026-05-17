@@ -199,6 +199,24 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
     };
   }
 
+  // arc#158: catch same-name installs the repo_url check missed (e.g. legacy
+  // tarball install whose stored repo_url no longer matches the registry one).
+  // Without this, recordInstall would crash on the PRIMARY KEY constraint
+  // after all the work was done.
+  if (!opts.libraryName) {
+    const existingByName = getSkill(db, manifest.name);
+    if (existingByName && !existingByName.library_name) {
+      const sameVersion = existingByName.version === manifest.version;
+      const hint = sameVersion
+        ? `Run \`arc remove ${manifest.name}\` first to reinstall.`
+        : `Run \`arc upgrade ${manifest.name}\`, or \`arc remove ${manifest.name}\` first if the existing install can't be upgraded in place.`;
+      return {
+        success: false,
+        error: `'${manifest.name}' v${existingByName.version} is already installed (status: ${existingByName.status}). ${hint}`,
+      };
+    }
+  }
+
   // 2a. Library detection — delegate to per-artifact installs
   if (manifest.type === "library") {
     return installLibrary(opts, installPath, manifest);

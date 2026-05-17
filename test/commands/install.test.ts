@@ -466,6 +466,49 @@ describe("install command", () => {
     expect(result.error).toContain("already installed");
   });
 
+  test("arc#158: rejects same-name install from a different repo URL without crashing", async () => {
+    // Simulate the bug case: a row for the same name exists but with a
+    // different repo_url (e.g., legacy tarball install registered as
+    // "@scope/name@1.0.0", now the user tries a fresh git URL). Previously
+    // this surfaced as a SQLite UNIQUE constraint stack trace from
+    // recordInstall. The fix returns an actionable error instead.
+    const now = new Date().toISOString();
+    env.db
+      .prepare(
+        `INSERT INTO skills (name, version, repo_url, install_path, skill_dir, status, artifact_type, tier, installed_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "DupeSkill",
+        "0.1.3",
+        "@metafactory/DupeSkill@0.1.3",
+        "/legacy/path",
+        "/legacy/path",
+        "active",
+        "skill",
+        "official",
+        now,
+        now,
+      );
+
+    const repo = await createMockSkillRepo(env.root, {
+      name: "DupeSkill",
+      version: "0.1.4",
+    });
+
+    const result = await install({
+      arc: env.arc, host: env.host,
+      db: env.db,
+      repoUrl: repo.url,
+      yes: true,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("already installed");
+    expect(result.error).toContain("0.1.3");
+    expect(result.error).toMatch(/arc upgrade|arc remove/);
+  });
+
   test("installs pinned version by checking out git tag", async () => {
     const repo = await createMockSkillRepo(env.root, {
       name: "VersionedSkill",
