@@ -85,19 +85,38 @@ export async function connectJsm(url: string = DEFAULT_NATS_URL): Promise<
   | { ok: false; reason: "broker_unreachable"; cause: string }
 > {
   let nc: NatsConnection;
+  // Hold the timeout handle so the success path clears it. Without
+  // clearTimeout, non-JSON CLI invocations (which don't call process.exit
+  // on success) keep the event loop alive for the full 2s window after the
+  // command logically completes — Sage cycle-1 Performance finding.
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
   try {
     nc = await Promise.race([
       connect({ servers: url, name: "arc-jetstream-provision", reconnect: false }),
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error("NATS connect timeout (2s)")), 2000),
-      ),
+      new Promise<never>((_, reject) => {
+        timeoutHandle = setTimeout(() => reject(new Error("NATS connect timeout (2s)")), 2000);
+      }),
     ]);
   } catch (err) {
     const cause = err instanceof Error ? err.message : String(err);
     return { ok: false, reason: "broker_unreachable", cause };
+  } finally {
+    if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
   }
-  const jsm = await jetstreamManager(nc);
-  return { ok: true, nc, jsm };
+  // JetStream manager init can fail with a connected broker — most often
+  // when JetStream is disabled on the broker or the account lacks JS
+  // permissions. Surface as `broker_unreachable` (broker is technically
+  // reachable but the JS subsystem behaves as if it isn't) with the real
+  // cause string, and close `nc` so the caller doesn't leak the socket
+  // — Sage cycle-1 CodeQuality finding.
+  try {
+    const jsm = await jetstreamManager(nc);
+    return { ok: true, nc, jsm };
+  } catch (err) {
+    const cause = err instanceof Error ? err.message : String(err);
+    await nc.close().catch(() => { /* secondary to the JSM init failure */ });
+    return { ok: false, reason: "broker_unreachable", cause: `JetStream manager init failed: ${cause}` };
+  }
 }
 
 /**

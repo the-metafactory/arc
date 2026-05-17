@@ -1411,6 +1411,43 @@ nats
     await setupOperator(account, botNames, { force: opts.force });
   });
 
+/**
+ * Shared dispatch helper for the JetStream provisioning verbs. The two
+ * verbs differ only in (a) the orchestrator they call and (b) how the
+ * success payload maps to the {@link ProvisionJson} envelope; everything
+ * else — the try/catch shape, the dual JSON / human output path, the
+ * `emitJson` + `process.exit` choreography — is identical. Extracted so
+ * the next change to exit-code mapping or `classifyError` handling
+ * applies to both verbs in one place (Sage cycle-1 Maintainability finding).
+ */
+async function runNatsProvisionCommand<R>(args: {
+  json: boolean | undefined;
+  run: () => Promise<R>;
+  toResources: (r: R) => { resources: ProvisionJson["resources"]; natsUrl: string };
+  printHuman: (r: R) => void;
+}): Promise<never> {
+  if (args.json) {
+    try {
+      const r = await args.run();
+      const { resources, natsUrl } = args.toResources(r);
+      emitJson({ schema: ARC_NATS_SCHEMA, ok: true, resources, natsUrl });
+      process.exit(0);
+    } catch (err) {
+      emitJson({ schema: ARC_NATS_SCHEMA, ok: false, error: classifyError(err) });
+      process.exit(1);
+    }
+  }
+  try {
+    const r = await args.run();
+    args.printHuman(r);
+    process.exit(0);
+  } catch (err) {
+    const classified = classifyError(err);
+    console.error(`Error: ${classified.message}`);
+    process.exit(1);
+  }
+}
+
 nats
   .command("provision-streams")
   .description("Idempotently create the CODE_REVIEW JetStream stream + optional per-agent consumer")
@@ -1434,36 +1471,19 @@ nats
       ...(opts.stream !== undefined && { streamName: opts.stream }),
       ...(opts.network && opts.agent && { consumer: { network: opts.network, agent: opts.agent } }),
     };
-    if (opts.json) {
-      try {
-        const r = await provisionStreams(callOpts);
-        const payload: ProvisionJson = {
-          schema: ARC_NATS_SCHEMA,
-          ok: true,
-          resources: r.resources,
-          natsUrl: r.natsUrl,
-        };
-        emitJson(payload);
-        process.exit(0);
-      } catch (err) {
-        emitJson({ schema: ARC_NATS_SCHEMA, ok: false, error: classifyError(err) });
-        process.exit(1);
-      }
-      return;
-    }
-    try {
-      const r = await provisionStreams(callOpts);
-      for (const res of r.resources) {
-        const tag = res.created ? "created" : "exists";
-        const where = res.stream ? ` (stream=${res.stream})` : "";
-        console.log(`  ${tag} ${res.kind} ${res.name}${where}`);
-      }
-      console.log(`Provisioning complete against ${r.natsUrl}.`);
-    } catch (err) {
-      const classified = classifyError(err);
-      console.error(`Error: ${classified.message}`);
-      process.exit(1);
-    }
+    await runNatsProvisionCommand({
+      json: opts.json,
+      run: () => provisionStreams(callOpts),
+      toResources: (r) => ({ resources: r.resources, natsUrl: r.natsUrl }),
+      printHuman: (r) => {
+        for (const res of r.resources) {
+          const tag = res.created ? "created" : "exists";
+          const where = res.stream ? ` (stream=${res.stream})` : "";
+          console.log(`  ${tag} ${res.kind} ${res.name}${where}`);
+        }
+        console.log(`Provisioning complete against ${r.natsUrl}.`);
+      },
+    });
   });
 
 nats
@@ -1487,33 +1507,16 @@ nats
       ...(opts.stream !== undefined && { stream: opts.stream }),
       ...(opts.filterSubject !== undefined && { filterSubject: opts.filterSubject }),
     };
-    if (opts.json) {
-      try {
-        const r = await provisionConsumer(callOpts);
-        const payload: ProvisionJson = {
-          schema: ARC_NATS_SCHEMA,
-          ok: true,
-          resources: [r.resource],
-          natsUrl: r.natsUrl,
-        };
-        emitJson(payload);
-        process.exit(0);
-      } catch (err) {
-        emitJson({ schema: ARC_NATS_SCHEMA, ok: false, error: classifyError(err) });
-        process.exit(1);
-      }
-      return;
-    }
-    try {
-      const r = await provisionConsumer(callOpts);
-      const tag = r.resource.created ? "created" : "exists";
-      console.log(`  ${tag} consumer ${r.resource.name} (stream=${r.resource.stream})`);
-      console.log(`Provisioning complete against ${r.natsUrl}.`);
-    } catch (err) {
-      const classified = classifyError(err);
-      console.error(`Error: ${classified.message}`);
-      process.exit(1);
-    }
+    await runNatsProvisionCommand({
+      json: opts.json,
+      run: () => provisionConsumer(callOpts),
+      toResources: (r) => ({ resources: [r.resource], natsUrl: r.natsUrl }),
+      printHuman: (r) => {
+        const tag = r.resource.created ? "created" : "exists";
+        console.log(`  ${tag} consumer ${r.resource.name} (stream=${r.resource.stream})`);
+        console.log(`Provisioning complete against ${r.natsUrl}.`);
+      },
+    });
   });
 
 // ── Identity management commands ──────────────────────────
