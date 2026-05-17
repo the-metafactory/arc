@@ -398,6 +398,113 @@ describe("downloadPackage", () => {
     }
   });
 
+  // arc#157: branch-coverage for the hint inside the 401/403 handler.
+  // The hint differs based on whether arc sent an Authorization header.
+  test("401 without token hints to run `arc login`", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mockFetch(async () => new Response("Unauthorized", { status: 401 }));
+
+    try {
+      const result = await downloadPackage("https://example.com/pkg.tar.gz", env.arc.reposDir);
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("Access denied");
+      expect(result.error).toContain("arc login");
+      expect(result.error).not.toContain("--force");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("401 with token hints to `arc login --force` (token rejected)", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mockFetch(async () => new Response("Unauthorized", { status: 401 }));
+
+    try {
+      const result = await downloadPackage(
+        "https://example.com/pkg.tar.gz",
+        env.arc.reposDir,
+        metafactorySource("expired-token"),
+      );
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("Access denied");
+      expect(result.error).toContain("Token rejected");
+      expect(result.error).toContain("arc login --force");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("403 with token hints to `arc login --force`", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mockFetch(async () => new Response("Forbidden", { status: 403 }));
+
+    try {
+      const result = await downloadPackage(
+        "https://example.com/pkg.tar.gz",
+        env.arc.reposDir,
+        metafactorySource("stale-token"),
+      );
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("Access denied");
+      expect(result.error).toContain("HTTP 403");
+      expect(result.error).toContain("arc login --force");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("403 without token hints to run `arc login` (symmetric with 401)", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mockFetch(async () => new Response("Forbidden", { status: 403 }));
+
+    try {
+      const result = await downloadPackage("https://example.com/pkg.tar.gz", env.arc.reposDir);
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("Access denied");
+      expect(result.error).toContain("HTTP 403");
+      expect(result.error).toContain("arc login");
+      expect(result.error).not.toContain("--force");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  // Token is only attached for metafactory-type sources (see registry-install.ts
+  // attachAuth logic). A registry-type source carrying a token never sends it,
+  // so a 401 from such a source must fall into the no-token hint branch.
+  test("401 from non-metafactory source with token falls into no-token hint", async () => {
+    const originalFetch = globalThis.fetch;
+    let capturedAuth: string | null = null;
+    globalThis.fetch = mockFetch(async (_input: any, init?: any) => {
+      const headers = new Headers(init?.headers);
+      capturedAuth = headers.get("Authorization");
+      return new Response("Unauthorized", { status: 401 });
+    });
+
+    try {
+      const registrySource: RegistrySource = {
+        name: "registry-test",
+        url: "https://example.com",
+        tier: "official",
+        enabled: true,
+        type: "registry",
+        token: "would-be-ignored",
+      };
+      const result = await downloadPackage(
+        "https://example.com/pkg.tar.gz",
+        env.arc.reposDir,
+        registrySource,
+      );
+      expect(capturedAuth).toBeNull(); // token must not have been sent
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("Access denied");
+      expect(result.error).toContain("arc login");
+      expect(result.error).not.toContain("--force"); // no-token branch, not token-rejected
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test("returns error on 404", async () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = mockFetch(async () => new Response("Not found", { status: 404 }));
@@ -506,24 +613,9 @@ describe("downloadPackage", () => {
     }
   });
 
-  test("auth-gated 401 still surfaces Access denied error", async () => {
-    // Even with a token in hand, the server can reject (expired/invalid).
-    // Caller-facing error message stays the same.
-    const originalFetch = globalThis.fetch;
-    globalThis.fetch = mockFetch(async () => new Response("Unauthorized", { status: 401 }));
-
-    try {
-      const result = await downloadPackage(
-        "https://example.com/pkg.tar.gz",
-        env.arc.reposDir,
-        metafactorySource("expired-token"),
-      );
-      expect(result.success).toBe(false);
-      expect(result.error).toContain("Access denied");
-    } finally {
-      globalThis.fetch = originalFetch;
-    }
-  });
+  // (Note: the older "auth-gated 401 still surfaces Access denied" test was
+  // removed — its assertions are a strict subset of "401 with token hints to
+  // `arc login --force`" above.)
 
   // Defense-in-depth: if storage 302s to a presigned URL on a different
   // origin (R2/S3/CDN), the bearer token must not reach the redirect target.
