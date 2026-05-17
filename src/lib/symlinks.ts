@@ -4,8 +4,33 @@ import type { ArcManifest } from "../types.js";
 import { isErrno } from "./errors.js";
 
 /**
+ * Thrown by {@link createSymlink} (arc#163) when a regular file already
+ * occupies the link target. Distinct from `ErrnoException` so callers can
+ * `instanceof`-discriminate to print a friendly hint without grep-matching
+ * the message.
+ */
+export class SymlinkConflictError extends Error {
+  readonly code = "ARC_SYMLINK_CONFLICT" as const;
+  readonly linkPath: string;
+  constructor(linkPath: string) {
+    super(
+      `Refusing to symlink over existing regular file at ${linkPath}. ` +
+        `Move or delete this file manually, then re-run the install.`,
+    );
+    this.name = "SymlinkConflictError";
+    this.linkPath = linkPath;
+  }
+}
+
+/**
  * Create a symlink, ensuring the parent directory exists.
- * If a symlink already exists at the target, removes it first.
+ * If a symlink already exists at the target, removes it first. If a regular
+ * file is in the way, refuses (arc#163) — uninstall treats non-symlinks as
+ * operator-owned state, so install must too. Directories are renamed aside
+ * (`.pre-arc`) so a manually-installed skill being replaced by arc isn't
+ * destroyed silently.
+ *
+ * Throws {@link SymlinkConflictError} on regular-file conflict.
  */
 export async function createSymlink(
   target: string,
@@ -21,7 +46,7 @@ export async function createSymlink(
       // Back up existing directory (e.g., manually-installed skill being replaced by arc)
       await rename(linkPath, linkPath + ".pre-arc");
     } else if (stat.isFile()) {
-      await unlink(linkPath);
+      throw new SymlinkConflictError(linkPath);
     }
   } catch (err) {
     if (!isErrno(err) || err.code !== "ENOENT") throw err;
