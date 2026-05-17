@@ -9,13 +9,15 @@
  *      `nats://127.0.0.1:4222`) via a short-timeout TCP connect.
  *   2. If reachable → noop.
  *   3. If unreachable AND `NATS_URL` is unset → bootstrap a local broker
- *      with the platform's package manager:
+ *      via the platform's service manager:
  *        - macOS: `brew install nats-server` (idempotent) + `brew services
  *          start nats-server` (registers for auto-start across reboots).
- *        - Linux: best-effort `apt-get install -y nats-server` (when apt is
- *          present) followed by a systemd user unit. The Linux path is
- *          conservative — if any step fails, we surface a clear actionable
- *          error rather than partial-bootstrapping.
+ *        - Linux: requires an existing `nats-server` binary plus a systemd
+ *          user unit; arc runs `systemctl --user enable --now nats-server.service`
+ *          to start + register it for auto-start. arc does NOT auto-`apt-get
+ *          install` — that would need root and surprise operators with custom
+ *          install paths. Missing binary / missing unit / unsupported runtime
+ *          → clear actionable error rather than partial-bootstrapping.
  *   4. If unreachable AND `NATS_URL` is set → return an error. The operator
  *      explicitly asked for a remote broker; arc must not silently bring
  *      up a local one and override that intent.

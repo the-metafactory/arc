@@ -1,5 +1,6 @@
 import { join } from "path";
 import { existsSync } from "fs";
+import { rm } from "node:fs/promises";
 import type {
   ArcPaths,
   ArcManifest,
@@ -215,7 +216,13 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
     noun: "Package",
   });
   if (!brokerGate.ok) {
-    Bun.spawnSync(["rm", "-rf", installPath]);
+    // Async rollback of the cloned repo — sage cycle-3 performance
+    // suggestion. The earlier Bun.spawnSync(["rm","-rf",…]) blocked the
+    // event loop on potentially-large checkouts. `force: true` keeps
+    // the existing best-effort semantics (no throw on missing path).
+    await rm(installPath, { recursive: true, force: true }).catch(() => {
+      /* secondary to the broker gate failure; surface the original error */
+    });
     return { success: false, error: brokerGate.error };
   }
 

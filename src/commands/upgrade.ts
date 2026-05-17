@@ -165,6 +165,16 @@ export async function upgradePackage(
   // For library artifacts, git pull must run at the repo root (not artifact subdir)
   const gitCwd = findGitRoot(installPath) ?? installPath;
 
+  // Capture the pre-pull HEAD so the broker-gate failure path below can
+  // roll the repo back to a consistent state — sage cycle-3 important
+  // finding. Without rollback, a broker-failed upgrade leaves the repo
+  // at the new commit while the DB still records the old version,
+  // creating a state-drift hazard for the next operation.
+  const preHeadProbe = Bun.spawnSync(["git", "rev-parse", "HEAD"], {
+    cwd: gitCwd, stdout: "pipe", stderr: "pipe",
+  });
+  const preHeadSha = preHeadProbe.exitCode === 0 ? preHeadProbe.stdout.toString().trim() : null;
+
   // git pull in the cloned repo
   const pullResult = Bun.spawnSync(["git", "pull", "--ff-only"], {
     cwd: gitCwd,
@@ -192,7 +202,28 @@ export async function upgradePackage(
     contextClause: " during upgrade",
   });
   if (!brokerGate.ok) {
-    return { success: false, name, oldVersion: skill.version, error: brokerGate.error };
+    // Roll the repo back to its pre-pull HEAD so the on-disk + DB state
+    // stay consistent. Best-effort: if reset itself fails we surface the
+    // broker error (the real cause) AND the rollback failure so the
+    // operator sees both. Without preHeadSha we can't safely reset, so
+    // we log the inconsistency clearly.
+    let rollbackNote = "";
+    if (preHeadSha !== null) {
+      const resetRes = Bun.spawnSync(["git", "reset", "--hard", preHeadSha], {
+        cwd: gitCwd, stdout: "pipe", stderr: "pipe",
+      });
+      if (resetRes.exitCode !== 0) {
+        rollbackNote = ` Additionally, post-failure rollback to ${preHeadSha} failed: ${resetRes.stderr.toString().trim()}`;
+      }
+    } else {
+      rollbackNote = ` Pre-pull HEAD was not captured; on-disk repo may be ahead of recorded version.`;
+    }
+    return {
+      success: false,
+      name,
+      oldVersion: skill.version,
+      error: brokerGate.error + rollbackNote,
+    };
   }
 
   const oldVersion = skill.version;
