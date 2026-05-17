@@ -5,6 +5,7 @@ version: 0.27.2
 type: tool
 tier: core
 description: Agentic component package manager — install, manage, and distribute AI agent skills
+repository: the-metafactory/arc
 
 author:
   name: jcfischer
