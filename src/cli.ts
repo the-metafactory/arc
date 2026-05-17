@@ -177,10 +177,14 @@ program
       // Resolved name is known here (no clone needed), so we save the bytes.
       const existingRow = getSkill(db, resolved.name);
       if (existingRow && !existingRow.library_name) {
-        const sameVersion = existingRow.version === resolved.version;
-        const hint = sameVersion
-          ? `Run \`arc remove ${resolved.name}\` first to reinstall.`
-          : `Run \`arc upgrade ${resolved.name}\`, or \`arc remove ${resolved.name}\` first if the existing install can't be upgraded in place.`;
+        let hint: string;
+        if (existingRow.status === "disabled") {
+          hint = `Run \`arc enable ${resolved.name}\` to re-enable it, or \`arc remove ${resolved.name}\` first if you want a clean install.`;
+        } else if (existingRow.version === resolved.version) {
+          hint = `Already at v${resolved.version}. Run \`arc remove ${resolved.name}\` first to reinstall.`;
+        } else {
+          hint = `Run \`arc upgrade ${resolved.name}\`, or \`arc remove ${resolved.name}\` first if the existing install can't be upgraded in place.`;
+        }
         console.error(`'${resolved.name}' v${existingRow.version} is already installed (status: ${existingRow.status}). ${hint}`);
         process.exit(1);
       }

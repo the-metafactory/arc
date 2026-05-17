@@ -507,6 +507,87 @@ describe("install command", () => {
     expect(result.error).toContain("already installed");
     expect(result.error).toContain("0.1.3");
     expect(result.error).toMatch(/arc upgrade|arc remove/);
+
+    // arc#158 review: clone leak — the install path we just cloned must be
+    // cleaned up, mirroring the other early-exit paths in install.ts.
+    const repoDir = join(env.arc.reposDir, "mock-DupeSkill");
+    expect(existsSync(repoDir)).toBe(false);
+  });
+
+  test("arc#158: disabled-status duplicate hints at `arc enable`", async () => {
+    const now = new Date().toISOString();
+    env.db
+      .prepare(
+        `INSERT INTO skills (name, version, repo_url, install_path, skill_dir, status, artifact_type, tier, installed_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "DisabledSkill",
+        "0.1.0",
+        "@metafactory/DisabledSkill@0.1.0",
+        "/legacy/path",
+        "/legacy/path",
+        "disabled",
+        "skill",
+        "official",
+        now,
+        now,
+      );
+
+    const repo = await createMockSkillRepo(env.root, {
+      name: "DisabledSkill",
+      version: "0.2.0",
+    });
+
+    const result = await install({
+      arc: env.arc, host: env.host,
+      db: env.db,
+      repoUrl: repo.url,
+      yes: true,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("status: disabled");
+    expect(result.error).toContain("arc enable");
+  });
+
+  test("arc#158: same-version duplicate hints to remove first (not upgrade)", async () => {
+    const now = new Date().toISOString();
+    env.db
+      .prepare(
+        `INSERT INTO skills (name, version, repo_url, install_path, skill_dir, status, artifact_type, tier, installed_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "SameVersionSkill",
+        "1.0.0",
+        "@metafactory/SameVersionSkill@1.0.0",
+        "/legacy/path",
+        "/legacy/path",
+        "active",
+        "skill",
+        "official",
+        now,
+        now,
+      );
+
+    const repo = await createMockSkillRepo(env.root, {
+      name: "SameVersionSkill",
+      version: "1.0.0",
+    });
+
+    const result = await install({
+      arc: env.arc, host: env.host,
+      db: env.db,
+      repoUrl: repo.url,
+      yes: true,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("Already at v1.0.0");
+    expect(result.error).toContain("arc remove");
+    // No `arc upgrade` suggestion when versions match — that would just no-op.
+    expect(result.error).not.toContain("arc upgrade");
   });
 
   test("installs pinned version by checking out git tag", async () => {
