@@ -126,6 +126,11 @@ export function __setPlatformForTests(next: PlatformFn | null): void {
  */
 export function parseNatsUrl(url: string): { host: string; port: number } {
   const isValidPort = (n: number): boolean => Number.isInteger(n) && n >= 1 && n <= 65535;
+  // Strip URL-style brackets from IPv6 host literals. WHATWG `hostname`
+  // returns `"[::1]"` for `nats://[::1]:4222`, but `net.Socket.connect`
+  // expects the bare address `"::1"` — sage cycle-4 IPv6 parse finding.
+  const stripIpv6 = (h: string): string =>
+    h.startsWith("[") && h.endsWith("]") ? h.slice(1, -1) : h;
   // Scheme URLs go through the WHATWG parser. Convert `nats://` → `tcp://`
   // because WHATWG's URL parser rejects unknown schemes for hostname
   // extraction on some runtimes; `tcp://` is treated as a generic special
@@ -133,7 +138,7 @@ export function parseNatsUrl(url: string): { host: string; port: number } {
   if (/^nats:\/\//.test(url)) {
     try {
       const parsed = new URL(url.replace(/^nats:/, "tcp:"));
-      const host = parsed.hostname;
+      const host = stripIpv6(parsed.hostname);
       const portStr = parsed.port;
       if (portStr === "") return { host, port: 4222 };
       const port = parseInt(portStr, 10);
@@ -147,15 +152,44 @@ export function parseNatsUrl(url: string): { host: string; port: number } {
   const stripped = url.replace(/^nats:\/\//, "").replace(/\/.*$/, "");
   const lastColon = stripped.lastIndexOf(":");
   if (lastColon === -1) {
-    return { host: stripped, port: 4222 };
+    return { host: stripIpv6(stripped), port: 4222 };
   }
-  const host = stripped.slice(0, lastColon);
+  const host = stripIpv6(stripped.slice(0, lastColon));
   const portStr = stripped.slice(lastColon + 1);
   const port = parseInt(portStr, 10);
   if (!isValidPort(port)) {
     return { host, port: 4222 };
   }
   return { host, port };
+}
+
+/**
+ * Redact embedded credentials from a NATS URL before printing/logging.
+ *
+ * Sage cycle-4 security finding: `nats://user:pass@host:4222` flowed
+ * verbatim into the success-path stdout (`✓ NATS broker present at ${url}`)
+ * and the remote-unreachable error message (`NATS_URL=${url} is set but
+ * the broker is unreachable`). Operators piping stderr into log
+ * aggregators or pasting install errors into chat would leak the
+ * password.
+ *
+ * Behaviour:
+ *   - WHATWG-parseable URLs: rebuild with `username`/`password` stripped.
+ *   - Bare-form / un-parseable: regex-strip the `user:pass@` segment.
+ *   - Falls through gracefully if neither matches.
+ */
+export function redactNatsUrl(url: string): string {
+  try {
+    const parsed = new URL(url.replace(/^nats:/, "tcp:"));
+    if (parsed.username !== "" || parsed.password !== "") {
+      parsed.username = "";
+      parsed.password = "";
+      return parsed.toString().replace(/^tcp:/, "nats:");
+    }
+    return url;
+  } catch {
+    return url.replace(/(\w+:\/\/)[^@/]+@/, "$1");
+  }
 }
 
 export type EnsureBrokerStatus =
@@ -201,13 +235,13 @@ export async function ensureBroker(
   const reachable = await probe(host, port);
   if (reachable) {
     if (!opts.quiet) {
-      console.log(`  ✓ NATS broker present at ${url}`);
+      console.log(`  ✓ NATS broker present at ${redactNatsUrl(url)}`);
     }
     return {
       ok: true,
       status: "already-running",
       url,
-      message: `broker reachable at ${url}`,
+      message: `broker reachable at ${redactNatsUrl(url)}`,
       remoteRequested,
     };
   }
@@ -218,7 +252,7 @@ export async function ensureBroker(
       status: "remote-unreachable",
       url,
       message:
-        `NATS_URL=${url} is set but the broker is unreachable. ` +
+        `NATS_URL=${redactNatsUrl(url)} is set but the broker is unreachable. ` +
         `arc will not auto-bootstrap when a remote broker is explicitly configured — ` +
         `start the remote broker, fix connectivity, or unset NATS_URL to bootstrap locally.`,
       remoteRequested,
@@ -277,7 +311,7 @@ async function awaitBrokerReady(url: string, manualCommand: string): Promise<Ens
     status: "bootstrap-failed",
     url,
     message:
-      `Bootstrap command returned success but the broker at ${url} did not become reachable ` +
+      `Bootstrap command returned success but the broker at ${redactNatsUrl(url)} did not become reachable ` +
       `within ${backoffsMs.reduce((a, b) => a + b, 0)}ms. ` +
       `Inspect the service log and retry manually: ${manualCommand}`,
     remoteRequested: false,
