@@ -111,6 +111,15 @@ export function toServerManifest(manifest: ArcManifest, scope: string): Record<s
   if (subprocess.length) serverCaps.subprocess = subprocess;
   if (environment.length) serverCaps.environment = environment;
 
+  // Optional discovery / provenance metadata forwarded as-is to the registry
+  // when the publisher set it in arc-manifest.yaml. Server-side validation
+  // (MetafactoryManifest in meta-factory/src/types/manifest.ts) enforces the
+  // accepted shapes; arc stays a thin pass-through so the source of truth
+  // remains on one side. The `repository` field opens the same-repo image
+  // rewrite for README rendering (the-metafactory/meta-factory#501 / #502 /
+  // #505) — without it, relative `<img src="docs/...">` paths in the
+  // published README cannot be resolved against the repo's raw content and
+  // surface as broken-image icons on the package landing page.
   return {
     schema: "metafactory/v1",
     name: `@${scope}/${manifest.name}`,
@@ -119,6 +128,12 @@ export function toServerManifest(manifest: ArcManifest, scope: string): Record<s
     author: { name: manifest.author?.name ?? scope },
     license: manifest.license ?? "MIT",
     ...(manifest.description ? { description: manifest.description } : {}),
+    ...(manifest.repository ? { repository: manifest.repository } : {}),
+    ...(manifest.homepage ? { homepage: manifest.homepage } : {}),
+    ...(manifest.keywords && manifest.keywords.length > 0
+      ? { keywords: manifest.keywords }
+      : {}),
+    ...(manifest.category ? { category: manifest.category } : {}),
     capabilities: serverCaps,
   };
 }

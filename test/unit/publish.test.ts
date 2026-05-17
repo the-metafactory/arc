@@ -363,3 +363,92 @@ describe("toServerManifest — network capability coercion", () => {
     expect((server.capabilities as any).network).toBeUndefined();
   });
 });
+
+// Forwards optional discovery / provenance metadata from arc-manifest.yaml
+// to the registry. Without this, `repository` (and friends) never reach
+// MetafactoryManifest, the registry treats every package as
+// repository-less, and the same-repo image rewrite for README rendering
+// stays closed (the-metafactory/meta-factory#501 / #502 / #505).
+describe("toServerManifest — optional metadata forwarding", () => {
+  test("forwards repository when set", () => {
+    const m = makeManifest({
+      repository: "https://github.com/the-metafactory/soma",
+    });
+    const server = toServerManifest(m, "metafactory");
+    expect(server.repository).toBe("https://github.com/the-metafactory/soma");
+  });
+
+  test("omits repository when absent (no empty-string poisoning)", () => {
+    const m = makeManifest();
+    const server = toServerManifest(m, "metafactory");
+    expect("repository" in server).toBe(false);
+  });
+
+  test("omits repository when empty string", () => {
+    const m = makeManifest({ repository: "" });
+    const server = toServerManifest(m, "metafactory");
+    expect("repository" in server).toBe(false);
+  });
+
+  test("forwards homepage when set", () => {
+    const m = makeManifest({ homepage: "https://soma.metafactory.ai" });
+    const server = toServerManifest(m, "metafactory");
+    expect(server.homepage).toBe("https://soma.metafactory.ai");
+  });
+
+  test("omits homepage when absent", () => {
+    const m = makeManifest();
+    const server = toServerManifest(m, "metafactory");
+    expect("homepage" in server).toBe(false);
+  });
+
+  test("forwards keywords array when non-empty", () => {
+    const m = makeManifest({ keywords: ["pai", "memory", "identity"] });
+    const server = toServerManifest(m, "metafactory");
+    expect(server.keywords).toEqual(["pai", "memory", "identity"]);
+  });
+
+  test("omits keywords when absent", () => {
+    const m = makeManifest();
+    const server = toServerManifest(m, "metafactory");
+    expect("keywords" in server).toBe(false);
+  });
+
+  test("omits keywords when empty array (no [] poisoning)", () => {
+    const m = makeManifest({ keywords: [] });
+    const server = toServerManifest(m, "metafactory");
+    expect("keywords" in server).toBe(false);
+  });
+
+  test("forwards category when set", () => {
+    const m = makeManifest({ category: "devtools" });
+    const server = toServerManifest(m, "metafactory");
+    expect(server.category).toBe("devtools");
+  });
+
+  test("omits category when absent", () => {
+    const m = makeManifest();
+    const server = toServerManifest(m, "metafactory");
+    expect("category" in server).toBe(false);
+  });
+
+  test("forwards every optional metadata field together", () => {
+    const m = makeManifest({
+      description: "Soma in one line",
+      repository: "https://github.com/the-metafactory/soma",
+      homepage: "https://meta-factory.ai/package/@metafactory/soma",
+      keywords: ["pai", "soma"],
+      category: "devtools",
+    });
+    const server = toServerManifest(m, "metafactory");
+    expect(server.description).toBe("Soma in one line");
+    expect(server.repository).toBe(
+      "https://github.com/the-metafactory/soma",
+    );
+    expect(server.homepage).toBe(
+      "https://meta-factory.ai/package/@metafactory/soma",
+    );
+    expect(server.keywords).toEqual(["pai", "soma"]);
+    expect(server.category).toBe("devtools");
+  });
+});
