@@ -50,6 +50,7 @@ Consumers can branch on either exit code or `ok` — both signals are authoritat
 | Code | When |
 |---|---|
 | `NSC_NOT_INSTALLED` | `nsc` binary missing from `$PATH`. Install: `brew install nats-io/nats-tools/nsc`. |
+| `NSC_COMMAND_FAILED` | An `nsc <subcommand>` exited non-zero (e.g. signing-key missing, permission denied, malformed account state). The error `message` field carries the nsc subcommand name and the captured stderr. |
 | `USER_NOT_FOUND` | Bot user does not exist under the named account (revoke / reissue path). |
 | `ACCOUNT_NOT_FOUND` | Operator account cannot be detected (no nsc config, no `--account` flag). |
 | `ALREADY_EXISTS` | User or creds file already exists at the target path and `--force` was not passed. |

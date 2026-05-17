@@ -68,7 +68,13 @@ function nsc(args: string[]): string {
   const stdout = result.stdout.trim();
   const stderr = result.stderr.trim();
   if (result.exitCode !== 0) {
-    throw new Error(`nsc ${args[0]} failed: ${stderr || stdout || "unknown error"}`);
+    // arc#169: throw a typed error so consumers of --json get the precise
+    // NSC_COMMAND_FAILED code instead of UNKNOWN (outside try blocks) or
+    // having the addBot catch-all reclassify as ROLLBACK_FAILED.
+    throw new ArcNatsCommandError(
+      "NSC_COMMAND_FAILED",
+      `nsc ${args[0]} failed: ${stderr || stdout || "unknown error"}`,
+    );
   }
   return stdout;
 }
@@ -78,7 +84,10 @@ function nscWithStderr(args: string[]): string {
   if (result.exitCode !== 0) {
     const stderr = result.stderr.trim();
     const stdout = result.stdout.trim();
-    throw new Error(`nsc ${args[0]} failed: ${stderr || stdout || "unknown error"}`);
+    throw new ArcNatsCommandError(
+      "NSC_COMMAND_FAILED",
+      `nsc ${args[0]} failed: ${stderr || stdout || "unknown error"}`,
+    );
   }
   return (result.stdout + result.stderr).trim();
 }
