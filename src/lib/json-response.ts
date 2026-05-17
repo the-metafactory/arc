@@ -33,6 +33,9 @@ export type ArcNatsErrorCode =
   | "VALIDATION_ERROR"      // bot name, subject, flags failed validation
   | "INVALID_USER_KEY"      // `nsc describe user -J` returned malformed data
   | "ROLLBACK_FAILED"       // create/reissue failed mid-way; manual recovery
+  | "BROKER_UNREACHABLE"    // JetStream provisioning: NATS broker not reachable
+  | "STREAM_OP_FAILED"      // JetStream provisioning: stream info/add/update failed
+  | "CONSUMER_OP_FAILED"    // JetStream provisioning: consumer info/add failed
   | "UNKNOWN";              // catch-all for un-mapped failures
 
 export interface ArcNatsError {
@@ -115,6 +118,27 @@ export interface SetupOperatorJson extends JsonOkBase {
 }
 
 /**
+ * `arc nats provision-streams` / `arc nats provision-consumer` result.
+ *
+ * `created` distinguishes first-install from re-run idempotent no-op.
+ * Multiple resources may be touched in a single call (one stream + N
+ * consumers), so `resources` is a list rather than a single field.
+ */
+export interface ProvisionJson extends JsonOkBase {
+  /** Each touched resource, in invocation order. */
+  resources: Array<{
+    kind: "stream" | "consumer";
+    name: string;
+    /** Parent stream for consumers; omitted for streams. */
+    stream?: string;
+    /** `true` iff this call created the resource; `false` for idempotent no-op. */
+    created: boolean;
+  }>;
+  /** NATS server URL the provisioning targeted. */
+  natsUrl: string;
+}
+
+/**
  * Emit a single line of JSON to stdout and return. Caller is responsible for
  * setting the process exit code (0 for ok, 1 for !ok).
  *
@@ -122,7 +146,7 @@ export interface SetupOperatorJson extends JsonOkBase {
  * compile error, not a silent contract violation.
  */
 export function emitJson(
-  payload: AddBotJson | ReissueBotJson | RemoveBotJson | SetupOperatorJson | JsonError,
+  payload: AddBotJson | ReissueBotJson | RemoveBotJson | SetupOperatorJson | ProvisionJson | JsonError,
 ): void {
   process.stdout.write(JSON.stringify(payload) + "\n");
 }

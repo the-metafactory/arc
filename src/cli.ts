@@ -39,6 +39,7 @@ import type { CatalogEntry, ArtifactType, PackageTier, RegistrySource, SourceTyp
 import { login } from "./commands/login.js";
 import { logout } from "./commands/logout.js";
 import { addBot, reissueBot, listBots, removeBot, setupOperator } from "./commands/nats.js";
+import { provisionStreams, provisionConsumer } from "./commands/jetstream.js";
 import {
   ARC_NATS_SCHEMA,
   emitJson,
@@ -47,6 +48,7 @@ import {
   type ReissueBotJson,
   type RemoveBotJson,
   type SetupOperatorJson,
+  type ProvisionJson,
 } from "./lib/json-response.js";
 import { generateIdentity, exportPrincipals, importPrincipals, listPrincipals } from "./commands/identity.js";
 import { bundle, formatBundle } from "./commands/bundle.js";
@@ -1407,6 +1409,114 @@ nats
       return;
     }
     await setupOperator(account, botNames, { force: opts.force });
+  });
+
+/**
+ * Shared dispatch helper for the JetStream provisioning verbs. The two
+ * verbs differ only in (a) the orchestrator they call and (b) how the
+ * success payload maps to the {@link ProvisionJson} envelope; everything
+ * else — the try/catch shape, the dual JSON / human output path, the
+ * `emitJson` + `process.exit` choreography — is identical. Extracted so
+ * the next change to exit-code mapping or `classifyError` handling
+ * applies to both verbs in one place (Sage cycle-1 Maintainability finding).
+ */
+async function runNatsProvisionCommand<R>(args: {
+  json: boolean | undefined;
+  run: () => Promise<R>;
+  toResources: (r: R) => { resources: ProvisionJson["resources"]; natsUrl: string };
+  printHuman: (r: R) => void;
+}): Promise<never> {
+  if (args.json) {
+    try {
+      const r = await args.run();
+      const { resources, natsUrl } = args.toResources(r);
+      emitJson({ schema: ARC_NATS_SCHEMA, ok: true, resources, natsUrl });
+      process.exit(0);
+    } catch (err) {
+      emitJson({ schema: ARC_NATS_SCHEMA, ok: false, error: classifyError(err) });
+      process.exit(1);
+    }
+  }
+  try {
+    const r = await args.run();
+    args.printHuman(r);
+    process.exit(0);
+  } catch (err) {
+    const classified = classifyError(err);
+    console.error(`Error: ${classified.message}`);
+    process.exit(1);
+  }
+}
+
+nats
+  .command("provision-streams")
+  .description("Idempotently create the CODE_REVIEW JetStream stream + optional per-agent consumer")
+  .option("--nats-url <url>", "NATS broker URL (defaults to $NATS_URL or nats://127.0.0.1:4222)")
+  .option("--stream <name>", "Stream name override (default: CODE_REVIEW)")
+  .option("--network <network>", "Network segment of the consumer name (with --agent)")
+  .option("--agent <agent>", "Agent segment of the consumer name (with --network)")
+  .option("--json", "Emit a single line of stable JSON (schema: arc.nats.v1)")
+  .action(async (opts: { natsUrl?: string; stream?: string; network?: string; agent?: string; json?: boolean }) => {
+    if ((opts.network && !opts.agent) || (!opts.network && opts.agent)) {
+      const msg = "--network and --agent must be supplied together";
+      if (opts.json) {
+        emitJson({ schema: ARC_NATS_SCHEMA, ok: false, error: { code: "VALIDATION_ERROR", message: msg } });
+        process.exit(1);
+      }
+      console.error(`Error: ${msg}`);
+      process.exit(1);
+    }
+    const callOpts = {
+      ...(opts.natsUrl !== undefined && { natsUrl: opts.natsUrl }),
+      ...(opts.stream !== undefined && { streamName: opts.stream }),
+      ...(opts.network && opts.agent && { consumer: { network: opts.network, agent: opts.agent } }),
+    };
+    await runNatsProvisionCommand({
+      json: opts.json,
+      run: () => provisionStreams(callOpts),
+      toResources: (r) => ({ resources: r.resources, natsUrl: r.natsUrl }),
+      printHuman: (r) => {
+        for (const res of r.resources) {
+          const tag = res.created ? "created" : "exists";
+          const where = res.stream ? ` (stream=${res.stream})` : "";
+          console.log(`  ${tag} ${res.kind} ${res.name}${where}`);
+        }
+        console.log(`Provisioning complete against ${r.natsUrl}.`);
+      },
+    });
+  });
+
+nats
+  .command("provision-consumer")
+  .description("Idempotently create a per-(network, agent) durable consumer on the CODE_REVIEW stream")
+  .requiredOption("--network <network>", "Network segment of the consumer name")
+  .requiredOption("--agent <agent>", "Agent segment of the consumer name")
+  .option("--nats-url <url>", "NATS broker URL (defaults to $NATS_URL or nats://127.0.0.1:4222)")
+  .option("--stream <name>", "Stream name override (default: CODE_REVIEW)")
+  .option("--filter-subject <subject>", "Optional consumer filter subject")
+  .option("--json", "Emit a single line of stable JSON (schema: arc.nats.v1)")
+  .action(async (opts: {
+    network: string; agent: string;
+    natsUrl?: string; stream?: string; filterSubject?: string;
+    json?: boolean;
+  }) => {
+    const callOpts = {
+      network: opts.network,
+      agent: opts.agent,
+      ...(opts.natsUrl !== undefined && { natsUrl: opts.natsUrl }),
+      ...(opts.stream !== undefined && { stream: opts.stream }),
+      ...(opts.filterSubject !== undefined && { filterSubject: opts.filterSubject }),
+    };
+    await runNatsProvisionCommand({
+      json: opts.json,
+      run: () => provisionConsumer(callOpts),
+      toResources: (r) => ({ resources: [r.resource], natsUrl: r.natsUrl }),
+      printHuman: (r) => {
+        const tag = r.resource.created ? "created" : "exists";
+        console.log(`  ${tag} consumer ${r.resource.name} (stream=${r.resource.stream})`);
+        console.log(`Provisioning complete against ${r.natsUrl}.`);
+      },
+    });
   });
 
 // ── Identity management commands ──────────────────────────
