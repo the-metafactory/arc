@@ -133,7 +133,14 @@ function validateBotName(name: string, json = false): void {
 
 function validateSubject(subject: string): void {
   if (!NATS_SUBJECT_RE.test(subject)) {
-    throw new Error(`Invalid NATS subject: "${subject}" — only alphanumeric, dots, wildcards, hyphens, underscores allowed`);
+    // arc#136: must be ArcNatsCommandError("VALIDATION_ERROR") so --json mode
+    // reports the right code. A plain Error falls into the catch-all that
+    // rewrites it as ROLLBACK_FAILED, which is misleading for a pre-create
+    // input-validation failure.
+    throw new ArcNatsCommandError(
+      "VALIDATION_ERROR",
+      `Invalid NATS subject: "${subject}" — only alphanumeric, dots, wildcards, hyphens, underscores allowed`,
+    );
   }
 }
 

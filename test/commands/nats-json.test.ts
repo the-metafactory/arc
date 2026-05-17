@@ -179,6 +179,60 @@ describe("addBot --json: error envelope", () => {
     expect(err).toBeInstanceOf(ArcNatsCommandError);
     expect((err as ArcNatsCommandError).code).toBe("VALIDATION_ERROR");
   });
+
+  // arc#136: validateSubject used to throw a plain Error, which the addBot
+  // catch-all rewrote as ROLLBACK_FAILED — the wrong code for an input
+  // validation failure. The fix makes it throw VALIDATION_ERROR directly.
+  test("arc#136: VALIDATION_ERROR (not ROLLBACK_FAILED) for an invalid --pub subject", async () => {
+    const runner = buildRunner({
+      "describe user": (args) => args.includes("-J") ? ok(FAKE_USER_JWT_JSON) : fail("user not found"),
+      "add user": () => ok("added"),
+      "edit user": () => ok("edited"),
+      "delete user": () => ok("deleted"),
+      "generate creds": () => ok(FAKE_CREDS),
+    });
+    __setNscRunnerForTests(runner);
+
+    let err: unknown;
+    try {
+      await addBot(TEST_BOT, {
+        account: TEST_ACCOUNT,
+        output: CUSTOM_OUT,
+        json: true,
+        pub: "valid.subject,bad subject with spaces",
+      });
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(ArcNatsCommandError);
+    expect((err as ArcNatsCommandError).code).toBe("VALIDATION_ERROR");
+    expect((err as ArcNatsCommandError).message).toContain("Invalid NATS subject");
+  });
+
+  test("arc#136: VALIDATION_ERROR for an invalid --sub subject", async () => {
+    const runner = buildRunner({
+      "describe user": (args) => args.includes("-J") ? ok(FAKE_USER_JWT_JSON) : fail("user not found"),
+      "add user": () => ok("added"),
+      "edit user": () => ok("edited"),
+      "delete user": () => ok("deleted"),
+      "generate creds": () => ok(FAKE_CREDS),
+    });
+    __setNscRunnerForTests(runner);
+
+    let err: unknown;
+    try {
+      await addBot(TEST_BOT, {
+        account: TEST_ACCOUNT,
+        output: CUSTOM_OUT,
+        json: true,
+        sub: "ok.subject,$(evil-shell-meta)",
+      });
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(ArcNatsCommandError);
+    expect((err as ArcNatsCommandError).code).toBe("VALIDATION_ERROR");
+  });
 });
 
 // ── reissueBot ────────────────────────────────────────────────────────────
