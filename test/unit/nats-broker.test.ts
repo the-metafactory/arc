@@ -3,6 +3,7 @@ import {
   DEFAULT_NATS_URL,
   ensureBroker,
   parseNatsUrl,
+  requireBrokerForManifest,
   __setSpawnRunnerForTests,
   __setProbeForTests,
   __setPlatformForTests,
@@ -119,7 +120,14 @@ describe("ensureBroker — remote NATS_URL unreachable", () => {
 
 describe("ensureBroker — darwin bootstrap path", () => {
   test("brew install + brew services start when local broker missing", async () => {
-    __setProbeForTests(async () => false);
+    // Stateful probe: first call (initial reachability) → false → triggers
+    // bootstrap. Subsequent calls (post-`brew services start` readiness
+    // re-probe added in sage cycle-2) → true → confirms the broker came up.
+    let probeCalls = 0;
+    __setProbeForTests(async () => {
+      probeCalls++;
+      return probeCalls > 1;
+    });
     __setPlatformForTests(() => "darwin");
     stubSpawn([
       { match: ["which", "brew"], result: { exitCode: 0, stdout: "/opt/homebrew/bin/brew", stderr: "" } },
@@ -190,7 +198,14 @@ describe("ensureBroker — darwin bootstrap path", () => {
 
 describe("ensureBroker — linux bootstrap path", () => {
   test("systemctl --user enable --now succeeds", async () => {
-    __setProbeForTests(async () => false);
+    // Stateful probe: same shape as the darwin success test — first call
+    // false (triggers bootstrap), subsequent true (post-systemctl readiness
+    // re-probe added in sage cycle-2).
+    let probeCalls = 0;
+    __setProbeForTests(async () => {
+      probeCalls++;
+      return probeCalls > 1;
+    });
     __setPlatformForTests(() => "linux");
     stubSpawn([
       { match: ["which", "systemctl"], result: { exitCode: 0, stdout: "/usr/bin/systemctl", stderr: "" } },
@@ -266,12 +281,40 @@ describe("ensureBroker — unsupported platform", () => {
 });
 
 describe("ensureBroker — idempotency", () => {
+  test("post-bootstrap readiness re-probe — never reaches success → bootstrap-failed (sage cycle-2)", async () => {
+    // `brew services start` exits 0 but launchd takes time to spin up the
+    // process — sage cycle-1 important finding. Pin the new behaviour:
+    // when every readiness probe after the start command times out, the
+    // helper returns `bootstrap-failed` with the manual recovery command,
+    // not a misleading `bootstrapped` success.
+    __setProbeForTests(async () => false); // initial false + every retry false
+    __setPlatformForTests(() => "darwin");
+    stubSpawn([
+      { match: ["which", "brew"], result: { exitCode: 0, stdout: "/opt/homebrew/bin/brew", stderr: "" } },
+      { match: ["brew", "install", "nats-server"], result: { exitCode: 0, stdout: "", stderr: "" } },
+      { match: ["brew", "services", "start", "nats-server"], result: { exitCode: 0, stdout: "", stderr: "" } },
+    ]);
+
+    const result = await ensureBroker({ env: {}, quiet: true });
+
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe("bootstrap-failed");
+    expect(result.message).toContain("did not become reachable");
+    expect(result.message).toContain("retry manually: brew services start nats-server");
+  });
+
   test("second call against a now-running broker is a noop", async () => {
     __setPlatformForTests(() => "darwin");
 
-    // First call: not reachable, bootstrap path.
-    let reachable = false;
-    __setProbeForTests(async () => reachable);
+    // First call: not reachable on the first probe (triggers bootstrap),
+    // reachable on subsequent probes (post-bootstrap readiness check added
+    // in sage cycle-2). Switching to `true` permanently after the initial
+    // probe also covers the idempotent second call below.
+    let probeCalls = 0;
+    __setProbeForTests(async () => {
+      probeCalls++;
+      return probeCalls > 1;
+    });
     stubSpawn([
       { match: ["which", "brew"], result: { exitCode: 0, stdout: "/opt/homebrew/bin/brew", stderr: "" } },
       { match: ["brew", "install", "nats-server"], result: { exitCode: 0, stdout: "", stderr: "" } },
@@ -280,12 +323,59 @@ describe("ensureBroker — idempotency", () => {
     const first = await ensureBroker({ env: {}, quiet: true });
     expect(first.status).toBe("bootstrapped");
 
-    // After bootstrap, broker is up; second call must not spawn anything.
-    reachable = true;
+    // After bootstrap, broker is up; second call must not spawn anything
+    // (probe still returns true from the stateful counter set above).
     spawnCalls = [];
     const second = await ensureBroker({ env: {}, quiet: true });
     expect(second.ok).toBe(true);
     expect(second.status).toBe("already-running");
     expect(spawnCalls.length).toBe(0);
+  });
+});
+
+describe("requireBrokerForManifest — shared install/upgrade gate (sage cycle-2)", () => {
+  test("manifest without requires.nats → ok:true without probing", async () => {
+    // Pin that the gate short-circuits BEFORE probe — important because
+    // install paths call this on every package, most of which don't need
+    // a broker. Counted probe stub confirms zero calls.
+    let probeCalls = 0;
+    __setProbeForTests(async () => {
+      probeCalls++;
+      return true;
+    });
+    const result = await requireBrokerForManifest({ name: "no-bus-pkg" });
+    expect(result.ok).toBe(true);
+    expect(probeCalls).toBe(0);
+  });
+
+  test("manifest with requires.nats=true + reachable broker → ok:true", async () => {
+    __setProbeForTests(async () => true);
+    const result = await requireBrokerForManifest(
+      { name: "bus-pkg", requires: { nats: true } },
+      { quiet: true },
+    );
+    expect(result.ok).toBe(true);
+  });
+
+  test("manifest with requires.nats + unreachable + NATS_URL set → ok:false carrying formatted error", async () => {
+    __setProbeForTests(async () => false);
+    process.env.NATS_URL = "nats://nonexistent.test:4222";
+    try {
+      const result = await requireBrokerForManifest(
+        { name: "bus-pkg", requires: { nats: true } },
+        { quiet: true, noun: "Artifact", contextClause: " during upgrade" },
+      );
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        // The formatted error composes the noun + name + clause + raw
+        // ensureBroker message — the exact shape callers (install /
+        // upgrade) used to construct inline.
+        expect(result.error).toContain("Artifact 'bus-pkg' requires a running NATS broker");
+        expect(result.error).toContain("during upgrade");
+        expect(result.error).toContain("NATS_URL=nats://nonexistent.test:4222");
+      }
+    } finally {
+      delete process.env.NATS_URL;
+    }
   });
 });

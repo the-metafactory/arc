@@ -15,7 +15,7 @@ import { runScript } from "../lib/scripts.js";
 import { registerHooks, removeHooks, resolveHooksFromManifest } from "../lib/hooks.js";
 import { generateRules } from "../lib/rules.js";
 import { wireExtensions } from "../lib/extensions.js";
-import { ensureBroker } from "../lib/nats-broker.js";
+import { requireBrokerForManifest } from "../lib/nats-broker.js";
 
 export interface UpgradeCheckResult {
   name: string;
@@ -187,18 +187,12 @@ export async function upgradePackage(
   // upgrade may have ADDED `requires.nats: true` since the last install,
   // or the broker registration may have been lost since (manual brew
   // unregister, machine reboot, …). Idempotent: when reachable, just logs.
-  if (manifest.requires?.nats) {
-    const brokerResult = await ensureBroker({});
-    if (!brokerResult.ok) {
-      return {
-        success: false,
-        name,
-        oldVersion: skill.version,
-        error:
-          `Package '${name}' requires a running NATS broker (requires.nats: true), ` +
-          `but arc could not verify or bootstrap one during upgrade. ${brokerResult.message}`,
-      };
-    }
+  const brokerGate = await requireBrokerForManifest(manifest, {
+    noun: "Package",
+    contextClause: " during upgrade",
+  });
+  if (!brokerGate.ok) {
+    return { success: false, name, oldVersion: skill.version, error: brokerGate.error };
   }
 
   const oldVersion = skill.version;

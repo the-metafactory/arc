@@ -4,6 +4,21 @@
 
 The single source of truth for every package. Declares name, version, type, capabilities, dependencies, and what the package provides. Legacy `pai-manifest.yaml` is still recognized but `arc-manifest.yaml` takes precedence.
 
+### Runtime Requirements (`requires`)
+
+Optional block declaring runtime dependencies arc must verify (or bootstrap) before installing the package.
+
+```yaml
+requires:
+  nats: true   # package routes over the shared NATS bus; arc verifies a
+               # broker is reachable (or bootstraps one locally on macOS
+               # via brew / Linux via systemctl --user) before install
+               # or upgrade. NATS_URL set + unreachable = hard fail with
+               # actionable error; operator intent wins over auto-bootstrap.
+```
+
+Packages that opt out (`requires:` absent or `nats: false`) never invoke the broker gate. See `src/lib/nats-broker.ts` for the platform-specific bootstrap logic and `arc#152` for the operational rationale.
+
 ### Artifact Types
 
 | Type | Installed To | What It Is |

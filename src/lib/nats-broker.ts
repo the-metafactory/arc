@@ -194,10 +194,10 @@ export async function ensureBroker(
   // No remote configured + local unreachable → bootstrap path
   const plat = platformFn();
   if (plat === "darwin") {
-    return bootstrapDarwin(url, opts.quiet);
+    return await bootstrapDarwin(url, opts.quiet);
   }
   if (plat === "linux") {
-    return bootstrapLinux(url, opts.quiet);
+    return await bootstrapLinux(url, opts.quiet);
   }
 
   return {
@@ -216,7 +216,41 @@ function which(cmd: string): boolean {
   return r.exitCode === 0;
 }
 
-function bootstrapDarwin(url: string, quiet?: boolean): EnsureBrokerResult {
+/**
+ * Post-bootstrap reachability check. Sage cycle-1 important finding:
+ * `brew services start` (and `systemctl --user enable --now`) can return
+ * exit 0 before the broker's TCP listener is actually accepting
+ * connections, so a downstream `arc install` step can still hit
+ * "connection refused" against a freshly-bootstrapped broker. Probe with
+ * a short retry/backoff loop so the bootstrap success path returns
+ * `ok: true` only after the broker is observably reachable; otherwise
+ * surface a `bootstrap-failed` result with the manual recovery command.
+ *
+ * Total wait bound: ~6 attempts × 200ms initial + linear backoff to
+ * ~1s ≈ 3.5s worst case. Local nats-server reaches readiness within
+ * a few hundred ms; this is paranoia, not regular runtime.
+ */
+async function awaitBrokerReady(url: string, manualCommand: string): Promise<EnsureBrokerResult | null> {
+  const { host, port } = parseNatsUrl(url);
+  const backoffsMs = [200, 300, 500, 700, 1000, 1000];
+  for (const wait of backoffsMs) {
+    await new Promise((r) => setTimeout(r, wait));
+    const reachable = await probe(host, port);
+    if (reachable) return null; // null = success, caller proceeds
+  }
+  return {
+    ok: false,
+    status: "bootstrap-failed",
+    url,
+    message:
+      `Bootstrap command returned success but the broker at ${url} did not become reachable ` +
+      `within ${backoffsMs.reduce((a, b) => a + b, 0)}ms. ` +
+      `Inspect the service log and retry manually: ${manualCommand}`,
+    remoteRequested: false,
+  };
+}
+
+async function bootstrapDarwin(url: string, quiet?: boolean): Promise<EnsureBrokerResult> {
   if (!which("brew")) {
     return {
       ok: false,
@@ -257,6 +291,13 @@ function bootstrapDarwin(url: string, quiet?: boolean): EnsureBrokerResult {
     };
   }
 
+  // Sage cycle-1 fix: confirm reachability before declaring success —
+  // `brew services start` exits 0 before launchd has fully started the
+  // process, so a downstream install step can still hit "connection
+  // refused" against an apparently-bootstrapped broker.
+  const readinessFailure = await awaitBrokerReady(url, "brew services start nats-server");
+  if (readinessFailure !== null) return readinessFailure;
+
   if (!quiet) console.log("  ✓ NATS broker bootstrapped via Homebrew, registered for auto-start");
 
   return {
@@ -268,7 +309,7 @@ function bootstrapDarwin(url: string, quiet?: boolean): EnsureBrokerResult {
   };
 }
 
-function bootstrapLinux(url: string, quiet?: boolean): EnsureBrokerResult {
+async function bootstrapLinux(url: string, quiet?: boolean): Promise<EnsureBrokerResult> {
   // Linux conservatively: only proceed when systemctl --user is present.
   // We do NOT auto-`apt-get install` because that needs root and would surprise
   // operators who keep nats-server in a non-package location. Surface a clear
@@ -318,6 +359,15 @@ function bootstrapLinux(url: string, quiet?: boolean): EnsureBrokerResult {
     };
   }
 
+  // Sage cycle-1 fix: same reasoning as the darwin path — `systemctl --user
+  // enable --now` returns success once the unit is started but the broker
+  // may not yet be accepting connections.
+  const readinessFailure = await awaitBrokerReady(
+    url,
+    "systemctl --user enable --now nats-server.service",
+  );
+  if (readinessFailure !== null) return readinessFailure;
+
   if (!quiet) console.log("  ✓ NATS broker enabled via systemd user unit");
 
   return {
@@ -326,5 +376,63 @@ function bootstrapLinux(url: string, quiet?: boolean): EnsureBrokerResult {
     url,
     message: `bootstrapped local nats-server via systemd user unit (auto-start enabled)`,
     remoteRequested: false,
+  };
+}
+
+/**
+ * Minimal manifest projection needed to decide whether the broker gate
+ * applies. Inline shape (rather than importing the full ArcManifest type)
+ * keeps this lib decoupled from `src/types.ts` — the broker helper has
+ * no reason to know about every other arc-manifest field.
+ */
+export interface BrokerGateManifest {
+  name: string;
+  requires?: { nats?: boolean };
+}
+
+export interface BrokerGateContext {
+  /** Suppress informational stdout — typically the `--yes` install flow. */
+  quiet?: boolean;
+  /**
+   * Caller-shape used in the error string: "Package" for top-level
+   * `install`/`upgrade`, "Artifact" for per-library installs. Pure
+   * display — the structured failure result still carries the raw
+   * `EnsureBrokerResult.message` for callers that want detail.
+   */
+  noun?: "Package" | "Artifact";
+  /** Additional clause appended to the error message (e.g. "during upgrade"). */
+  contextClause?: string;
+}
+
+export type BrokerGateOutcome =
+  | { ok: true }
+  | { ok: false; error: string };
+
+/**
+ * Shared gate for `arc install` / `arc upgrade` / `installSingleArtifact`.
+ * Returns `{ ok: true }` when the manifest doesn't require a broker or
+ * when `ensureBroker` succeeds; returns a formatted `error` string
+ * otherwise so callers compose it into their own InstallResult /
+ * UpgradeResult shape.
+ *
+ * Sage cycle-1 Maintainability suggestion: centralises the three near-
+ * duplicate sites that build the same `${noun} '${name}' requires a
+ * running NATS broker…` failure message.
+ */
+export async function requireBrokerForManifest(
+  manifest: BrokerGateManifest,
+  ctx: BrokerGateContext = {},
+): Promise<BrokerGateOutcome> {
+  if (!manifest.requires?.nats) return { ok: true };
+  const opts: EnsureBrokerOptions = ctx.quiet === undefined ? {} : { quiet: ctx.quiet };
+  const brokerResult = await ensureBroker(opts);
+  if (brokerResult.ok) return { ok: true };
+  const noun = ctx.noun ?? "Package";
+  const clause = ctx.contextClause ?? "";
+  return {
+    ok: false,
+    error:
+      `${noun} '${manifest.name}' requires a running NATS broker (requires.nats: true), ` +
+      `but arc could not verify or bootstrap one${clause}. ${brokerResult.message}`,
   };
 }
