@@ -2,7 +2,7 @@
 
 import { Command } from "commander";
 import { createArcPaths, ensureDirectories, getDefaultHost } from "./lib/paths.js";
-import { openDatabase } from "./lib/db.js";
+import { openDatabase, getSkill } from "./lib/db.js";
 import { SymlinkConflictError } from "./lib/symlinks.js";
 import { install, parseNameVersion } from "./commands/install.js";
 import { list, formatList, formatListJson } from "./commands/list.js";
@@ -112,7 +112,8 @@ program
   .description("Install a skill from git URL, or by name from the registry")
   .option("-y, --yes", "Skip confirmation prompt")
   .option("--pin <version>", "Pin to a specific version (git tag)")
-  .action(async (nameOrUrl: string, opts: { yes?: boolean; pin?: string }) => {
+  .option("--strict-signing", "Refuse to install if Sigstore signature is missing on an official-tier package")
+  .action(async (nameOrUrl: string, opts: { yes?: boolean; pin?: string; strictSigning?: boolean }) => {
     // Non-TTY guard: fail loud rather than silently half-installing
     if (!opts.yes && !process.stdin.isTTY) {
       console.error("Error: arc install requires an interactive terminal for capability confirmation.");
@@ -172,6 +173,22 @@ program
       }
 
       console.log(`Found ${formatPackageRef(pkgRef)} v${resolved.version} in ${resolved.source.name} [${resolved.source.tier}]`);
+
+      // arc#158: bail before download if a row already exists for this name.
+      // Resolved name is known here (no clone needed), so we save the bytes.
+      const existingRow = getSkill(db, resolved.name);
+      if (existingRow && !existingRow.library_name) {
+        let hint: string;
+        if (existingRow.status === "disabled") {
+          hint = `Run \`arc enable ${resolved.name}\` to re-enable it, or \`arc remove ${resolved.name}\` first if you want a clean install.`;
+        } else if (existingRow.version === resolved.version) {
+          hint = `Already at v${resolved.version}. Run \`arc remove ${resolved.name}\` first to reinstall.`;
+        } else {
+          hint = `Run \`arc upgrade ${resolved.name}\`, or \`arc remove ${resolved.name}\` first if the existing install can't be upgraded in place.`;
+        }
+        console.error(`'${resolved.name}' v${existingRow.version} is already installed (status: ${existingRow.status}). ${hint}`);
+        process.exit(1);
+      }
 
       // Download. Anonymous by default (DD-80); the resolved source is passed
       // through so an auth-gated metafactory storage endpoint receives the
@@ -270,8 +287,25 @@ program
         }
         process.exit(1);
       }
+      // arc#160: a missing Sigstore signature on an official-tier source is
+      // a real risk, not a side note. Promote it to a prominent warning, and
+      // let --strict-signing turn it into a hard failure.
+      let sigstoreVerified = false;
       if (sigstoreResult.verified === true) {
         console.log(`Sigstore signature verified (${sigstoreResult.reason})`);
+        sigstoreVerified = true;
+      } else if (resolved.source.tier === "official") {
+        console.warn(`⚠️  Sigstore signature MISSING for official-tier package`);
+        console.warn(`   ${sigstoreResult.reason}`);
+        console.warn(`   SHA-256 and registry signature are verified, but the package itself is not Sigstore-signed.`);
+        console.warn(`   This means the identity that produced the bytes cannot be cryptographically attested.`);
+        if (opts.strictSigning) {
+          console.error(`Refusing to install: --strict-signing is set and Sigstore signature is missing.`);
+          if (await Bun.file(download.tempPath).exists()) {
+            Bun.spawnSync(["rm", "-f", download.tempPath]);
+          }
+          process.exit(1);
+        }
       } else {
         console.warn(`Sigstore signature: ${sigstoreResult.reason}`);
       }
@@ -297,7 +331,13 @@ program
         sourceTier: resolved.source.tier,
       });
       if (result.success) {
-        console.log(`Installed ${result.name} v${result.version} (verified)`);
+        // arc#160: don't claim "(verified)" on the final line when only the
+        // registry signature and checksum were validated — Sigstore is the
+        // signature that attests to producer identity.
+        const verifyLabel = sigstoreVerified
+          ? "(verified)"
+          : "(SHA-256 + registry signature verified; Sigstore signature MISSING)";
+        console.log(`Installed ${result.name} v${result.version} ${verifyLabel}`);
       } else {
         console.error(`${result.error}`);
         process.exit(1);

@@ -199,6 +199,35 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
     };
   }
 
+  // arc#158: catch same-name installs the repo_url check missed (e.g. legacy
+  // tarball install whose stored repo_url no longer matches the registry one).
+  // Without this, recordInstall would crash on the PRIMARY KEY constraint
+  // after all the work was done.
+  if (!opts.libraryName) {
+    const existingByName = getSkill(db, manifest.name);
+    if (existingByName && !existingByName.library_name) {
+      // Clean up the clone we just made (other early-exits in this function
+      // do the same — preExtractedPath comes from the registry pipeline and
+      // owns its own cleanup).
+      if (!opts.preExtractedPath) {
+        Bun.spawnSync(["rm", "-rf", installPath], { stdout: "pipe", stderr: "pipe" });
+      }
+
+      let hint: string;
+      if (existingByName.status === "disabled") {
+        hint = `Run \`arc enable ${manifest.name}\` to re-enable it, or \`arc remove ${manifest.name}\` first if you want a clean install.`;
+      } else if (existingByName.version === manifest.version) {
+        hint = `Already at v${manifest.version}. Run \`arc remove ${manifest.name}\` first to reinstall.`;
+      } else {
+        hint = `Run \`arc upgrade ${manifest.name}\`, or \`arc remove ${manifest.name}\` first if the existing install can't be upgraded in place.`;
+      }
+      return {
+        success: false,
+        error: `'${manifest.name}' v${existingByName.version} is already installed (status: ${existingByName.status}). ${hint}`,
+      };
+    }
+  }
+
   // 2a. Library detection — delegate to per-artifact installs
   if (manifest.type === "library") {
     return installLibrary(opts, installPath, manifest);
