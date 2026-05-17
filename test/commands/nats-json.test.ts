@@ -23,6 +23,8 @@ import {
   setupOperator,
   __setNscRunnerForTests,
   __setNscInstallCheckForTests,
+  __nscForTests,
+  __nscWithStderrForTests,
   type NscResult,
   type NscRunner,
 } from "../../src/commands/nats.js";
@@ -178,6 +180,96 @@ describe("addBot --json: error envelope", () => {
     }
     expect(err).toBeInstanceOf(ArcNatsCommandError);
     expect((err as ArcNatsCommandError).code).toBe("VALIDATION_ERROR");
+  });
+
+  // arc#169 direct unit tests for the two private wrappers, so the typed-error
+  // contract is asserted independently of the addBot call graph.
+  test("arc#169: nsc() throws NSC_COMMAND_FAILED on non-zero exit", () => {
+    __setNscRunnerForTests(() => fail("signing key missing for account OP_X"));
+    let err: unknown;
+    try {
+      __nscForTests(["add", "user", "-a", "OP_X", "-n", "bot"]);
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(ArcNatsCommandError);
+    expect((err as ArcNatsCommandError).code).toBe("NSC_COMMAND_FAILED");
+    expect((err as ArcNatsCommandError).message).toContain("nsc add failed");
+    expect((err as ArcNatsCommandError).message).toContain("signing key missing");
+  });
+
+  test("arc#169: nscWithStderr() throws NSC_COMMAND_FAILED on non-zero exit", () => {
+    __setNscRunnerForTests(() => fail("nsc env: account context not initialised"));
+    let err: unknown;
+    try {
+      __nscWithStderrForTests(["env"]);
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(ArcNatsCommandError);
+    expect((err as ArcNatsCommandError).code).toBe("NSC_COMMAND_FAILED");
+    expect((err as ArcNatsCommandError).message).toContain("nsc env failed");
+    expect((err as ArcNatsCommandError).message).toContain("account context not initialised");
+  });
+
+  // arc#169: nsc subcommands now throw ArcNatsCommandError("NSC_COMMAND_FAILED")
+  // instead of plain Error. Pre-fix: a failing `nsc add user` (which runs
+  // OUTSIDE the addBot try/catch) surfaced as code "UNKNOWN" at the CLI
+  // boundary because classifyError() falls back for non-typed errors.
+  test("arc#169: NSC_COMMAND_FAILED when `nsc add user` fails outside the rollback try", async () => {
+    const runner = buildRunner({
+      "describe user": () => fail("user not found"),
+      "add user": () => fail("signing key missing for account OP_TEST_JSON"),
+    });
+    __setNscRunnerForTests(runner);
+
+    let err: unknown;
+    try {
+      await addBot(TEST_BOT, { account: TEST_ACCOUNT, output: CUSTOM_OUT, json: true });
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(ArcNatsCommandError);
+    expect((err as ArcNatsCommandError).code).toBe("NSC_COMMAND_FAILED");
+    expect((err as ArcNatsCommandError).message).toContain("nsc add failed");
+    expect((err as ArcNatsCommandError).message).toContain("signing key missing");
+  });
+
+  // Inside the rollback try, the catch-all preserves err.code (per validateSubject
+  // arc#136 fix), so NSC_COMMAND_FAILED flows through with the "rolled back" message
+  // wrapper. Operator gets both: precise code (nsc failed) AND the message
+  // making clear a rollback ran.
+  test("arc#169: NSC_COMMAND_FAILED preserved through rollback when `nsc edit user` fails", async () => {
+    const calls: string[] = [];
+    const handler = buildRunner({
+      "describe user": (a) => a.includes("-J") ? ok(FAKE_USER_JWT_JSON) : fail("user not found"),
+      "add user": () => ok("added"),
+      "edit user": () => fail("permission denied: signing key not unlocked"),
+      "delete user": () => ok("deleted"),
+      "generate creds": () => ok(FAKE_CREDS),
+    });
+    __setNscRunnerForTests((args) => {
+      calls.push(`${args[0]} ${args[1] ?? ""}`.trim());
+      return handler(args);
+    });
+
+    let err: unknown;
+    try {
+      await addBot(TEST_BOT, {
+        account: TEST_ACCOUNT,
+        output: CUSTOM_OUT,
+        json: true,
+        pub: "valid.subject",
+      });
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(ArcNatsCommandError);
+    expect((err as ArcNatsCommandError).code).toBe("NSC_COMMAND_FAILED");
+    expect((err as ArcNatsCommandError).message).toContain("rolled back");
+    expect((err as ArcNatsCommandError).message).toContain("permission denied");
+    // Rollback actually ran: `nsc delete user` was invoked.
+    expect(calls).toContain("delete user");
   });
 
   // arc#136: validateSubject used to throw a plain Error, which the addBot

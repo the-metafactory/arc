@@ -24,6 +24,7 @@ export const ARC_NATS_SCHEMA = "arc.nats.v1" as const;
  */
 export type ArcNatsErrorCode =
   | "NSC_NOT_INSTALLED"     // `nsc` binary missing on PATH
+  | "NSC_COMMAND_FAILED"    // `nsc <subcommand>` exited non-zero (generic shell-out failure)
   | "USER_NOT_FOUND"        // bot user does not exist under the account
   | "ACCOUNT_NOT_FOUND"     // operator account cannot be detected/resolved
   | "ALREADY_EXISTS"        // user / creds file already exists (no --force)
