@@ -16,6 +16,7 @@ import {
   catalogSync,
   formatCatalogList,
   formatCatalogSearch,
+  normalizeCatalogSource,
 } from "../../src/commands/catalog.js";
 
 let env: TestEnv;
@@ -404,6 +405,152 @@ describe("catalogUse", () => {
     expect(result.success).toBe(false);
     expect(result.error).toContain("arc enable");
     expect(result.error).toContain("disabled");
+  });
+
+  test("arc#170: refuses foreign library install of the same name", async () => {
+    await createMockSkillDir(env.root, "mock-skills/Research", { name: "Research" });
+    await saveCatalog(env.arc.catalogPath, sampleCatalog(env.root));
+
+    // Prior row from a library install (install_source: "library:foo",
+    // library_name: "foo"). The error message should surface the library
+    // name rather than the raw "library:foo" string.
+    const now = new Date().toISOString();
+    env.db
+      .prepare(
+        `INSERT INTO skills (name, version, repo_url, install_path, skill_dir, status, artifact_type, tier, install_source, library_name, installed_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "Research",
+        "0.3.0",
+        "git@github.com:foo/foo-library.git",
+        "/legacy/path",
+        "/legacy/path",
+        "active",
+        "skill",
+        "custom",
+        "library:foo",
+        "foo",
+        now,
+        now,
+      );
+
+    const result = await catalogUse(env.arc, env.host, env.db, "Research");
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("library:foo");
+    expect(result.error).toContain("arc remove");
+  });
+
+  test("arc#170: refuses foreign install when the conflicting row is from a different catalog source", async () => {
+    await createMockSkillDir(env.root, "mock-skills/Research", { name: "Research" });
+    await saveCatalog(env.arc.catalogPath, sampleCatalog(env.root));
+
+    // Foreign install was registered by a different catalog entry whose
+    // `source:` points at a different repo. install_source format is exactly
+    // what catalog.ts records (the raw catalog `source` string).
+    const now = new Date().toISOString();
+    const foreignSource = "https://github.com/other-org/other-research/blob/main/SKILL.md";
+    env.db
+      .prepare(
+        `INSERT INTO skills (name, version, repo_url, install_path, skill_dir, status, artifact_type, tier, install_source, installed_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "Research",
+        "1.0.0",
+        foreignSource,
+        "/legacy/path",
+        "/legacy/path",
+        "active",
+        "skill",
+        "custom",
+        foreignSource,
+        now,
+        now,
+      );
+
+    const result = await catalogUse(env.arc, env.host, env.db, "Research");
+    expect(result.success).toBe(false);
+    expect(result.error).toContain(foreignSource);
+    expect(result.error).toContain("different source");
+  });
+
+  test("arc#170: format drift (trailing .git / slash / case) still counts as a refresh of the same source", async () => {
+    await createMockSkillDir(env.root, "mock-skills/Research", { name: "Research" });
+    await saveCatalog(env.arc.catalogPath, sampleCatalog(env.root));
+
+    // The catalog entry's source (set in sampleCatalog) for `Research` is a
+    // *local* path — those normalise to themselves. Verify the equality
+    // discriminator survives a trailing-slash drift.
+    const cat = sampleCatalog(env.root);
+    const original = cat.catalog.skills.find((s) => s.name === "Research")!.source;
+
+    const now = new Date().toISOString();
+    env.db
+      .prepare(
+        `INSERT INTO skills (name, version, repo_url, install_path, skill_dir, status, artifact_type, tier, install_source, installed_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "Research",
+        "1.0.0",
+        original,
+        "/legacy/path",
+        "/legacy/path",
+        "active",
+        "skill",
+        "custom",
+        // Drift: trailing slash + uppercase scheme variant simulating yaml edit
+        original + "/",
+        now,
+        now,
+      );
+
+    // Refresh should succeed — same logical source despite the trailing /.
+    const result = await catalogUse(env.arc, env.host, env.db, "Research");
+    expect(result.success).toBe(true);
+  });
+});
+
+describe("normalizeCatalogSource", () => {
+  test("strips trailing .git", () => {
+    expect(normalizeCatalogSource("https://github.com/o/r.git")).toBe(
+      "https://github.com/o/r",
+    );
+    expect(normalizeCatalogSource("https://github.com/o/r.git/")).toBe(
+      "https://github.com/o/r",
+    );
+  });
+
+  test("strips trailing slashes", () => {
+    expect(normalizeCatalogSource("https://example.com/path///")).toBe(
+      "https://example.com/path",
+    );
+  });
+
+  test("lowercases protocol + host on http(s) URLs only", () => {
+    expect(normalizeCatalogSource("HTTPS://GitHub.com/Org/Repo")).toBe(
+      "https://github.com/Org/Repo",
+    );
+    // Local paths are unchanged
+    expect(normalizeCatalogSource("/Users/Foo/Bar.md")).toBe("/Users/Foo/Bar.md");
+    // SSH-style URLs: leave case intact (host part is technical, drift unlikely)
+    expect(normalizeCatalogSource("git@github.com:Org/Repo.git")).toBe(
+      "git@github.com:Org/Repo",
+    );
+  });
+
+  test("idempotent", () => {
+    const s = "https://github.com/o/r/blob/main/skill.md";
+    expect(normalizeCatalogSource(normalizeCatalogSource(s))).toBe(
+      normalizeCatalogSource(s),
+    );
+  });
+
+  test("trims whitespace", () => {
+    expect(normalizeCatalogSource("  https://example.com/x.git  ")).toBe(
+      "https://example.com/x",
+    );
   });
 });
 

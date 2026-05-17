@@ -22,6 +22,25 @@ import { readManifest } from "../lib/manifest.js";
 import { recordInstall, getSkill } from "../lib/db.js";
 import { createSymlink, createCliShim } from "../lib/symlinks.js";
 
+// ── Source-string normalisation (arc#170 review) ───────────────
+//
+// `install_source` is stored verbatim from catalog.yaml. Yaml edits between
+// install and refresh (https↔http, trailing `/` or `.git`, casing in the
+// protocol+host part) would otherwise misclassify a legitimate `catalogSync`
+// refresh as a foreign install and refuse it. This helper canonicalises both
+// sides of the equality comparison; it deliberately does NOT touch path /
+// branch / SSH-host text since drift there reflects real operator intent.
+export function normalizeCatalogSource(source: string): string {
+  let s = source.trim();
+  // Strip trailing `.git` (with optional trailing slash).
+  s = s.replace(/\.git\/?$/i, "");
+  // Strip trailing slashes.
+  s = s.replace(/\/+$/, "");
+  // Lowercase protocol + host portion of http(s) URLs only.
+  s = s.replace(/^(https?:\/\/[^/]+)/i, (m) => m.toLowerCase());
+  return s;
+}
+
 // ── Result types ──────────────────────────────────────────────
 
 export interface CatalogListResult {
@@ -529,7 +548,10 @@ async function installSkillEntry(
   // `isRefresh` path below unconditionally DELETEs the row before INSERT,
   // which would clobber operator state.
   const existingRow = getSkill(db, entry.name);
-  const isRefresh = existingRow !== null && existingRow.install_source === entry.source;
+  const isRefresh =
+    existingRow !== null &&
+    existingRow.install_source !== null &&
+    normalizeCatalogSource(existingRow.install_source) === normalizeCatalogSource(entry.source);
   if (existingRow && !isRefresh) {
     let hint: string;
     if (existingRow.status === "disabled") {
@@ -537,9 +559,12 @@ async function installSkillEntry(
     } else {
       hint = `Run \`arc remove ${entry.name}\` first if you want to replace it with this catalog entry's source.`;
     }
+    const sourceLabel = existingRow.library_name
+      ? `library:${existingRow.library_name}`
+      : existingRow.install_source ?? "direct";
     return {
       success: false,
-      error: `'${entry.name}' v${existingRow.version} is already installed from a different source (${existingRow.install_source ?? "direct"}; status: ${existingRow.status}). ${hint}`,
+      error: `'${entry.name}' v${existingRow.version} is already installed from a different source (${sourceLabel}; status: ${existingRow.status}). ${hint}`,
     };
   }
 
