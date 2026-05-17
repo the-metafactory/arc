@@ -23,6 +23,8 @@ import {
   setupOperator,
   __setNscRunnerForTests,
   __setNscInstallCheckForTests,
+  __nscForTests,
+  __nscWithStderrForTests,
   type NscResult,
   type NscRunner,
 } from "../../src/commands/nats.js";
@@ -178,6 +180,36 @@ describe("addBot --json: error envelope", () => {
     }
     expect(err).toBeInstanceOf(ArcNatsCommandError);
     expect((err as ArcNatsCommandError).code).toBe("VALIDATION_ERROR");
+  });
+
+  // arc#169 direct unit tests for the two private wrappers, so the typed-error
+  // contract is asserted independently of the addBot call graph.
+  test("arc#169: nsc() throws NSC_COMMAND_FAILED on non-zero exit", () => {
+    __setNscRunnerForTests(() => fail("signing key missing for account OP_X"));
+    let err: unknown;
+    try {
+      __nscForTests(["add", "user", "-a", "OP_X", "-n", "bot"]);
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(ArcNatsCommandError);
+    expect((err as ArcNatsCommandError).code).toBe("NSC_COMMAND_FAILED");
+    expect((err as ArcNatsCommandError).message).toContain("nsc add failed");
+    expect((err as ArcNatsCommandError).message).toContain("signing key missing");
+  });
+
+  test("arc#169: nscWithStderr() throws NSC_COMMAND_FAILED on non-zero exit", () => {
+    __setNscRunnerForTests(() => fail("nsc env: account context not initialised"));
+    let err: unknown;
+    try {
+      __nscWithStderrForTests(["env"]);
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(ArcNatsCommandError);
+    expect((err as ArcNatsCommandError).code).toBe("NSC_COMMAND_FAILED");
+    expect((err as ArcNatsCommandError).message).toContain("nsc env failed");
+    expect((err as ArcNatsCommandError).message).toContain("account context not initialised");
   });
 
   // arc#169: nsc subcommands now throw ArcNatsCommandError("NSC_COMMAND_FAILED")

@@ -105,6 +105,21 @@ export function __setNscInstallCheckForTests(next: (() => boolean) | null): void
   nscInstallCheck = next ?? (() => Bun.spawnSync(["which", "nsc"], { stdout: "pipe" }).exitCode === 0);
 }
 
+/**
+ * Test-only direct accessors for the two private nsc wrappers.
+ * Tests use these to assert that both wrappers throw the typed error on
+ * non-zero exit without having to route through addBot's call graph.
+ */
+export function __nscForTests(args: string[]): string {
+  assertTestModeForSeam("__nscForTests");
+  return nsc(args);
+}
+
+export function __nscWithStderrForTests(args: string[]): string {
+  assertTestModeForSeam("__nscWithStderrForTests");
+  return nscWithStderr(args);
+}
+
 function assertTestModeForSeam(seamName: string): void {
   if (process.env.ARC_TEST_MODE !== "1" && process.env.NODE_ENV !== "test") {
     throw new Error(
