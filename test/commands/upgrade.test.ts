@@ -73,6 +73,54 @@ describe("checkUpgrades", () => {
     expect(results[0].upgradable).toBe(true);
   });
 
+  // arc#184 Bug 2: installed-name is the bare slug ("soma") but the registry
+  // entry uses the scoped form ("@metafactory/soma"). checkUpgrades was looking
+  // up by skill.name (bare) against findRegistryEntry which only did an exact
+  // case-insensitive match, so registryVersion stayed null and upgradable was
+  // false — even when the registry advertised a newer version.
+  test("resolves scoped registry entry from bare installed-name (arc#184)", async () => {
+    const repo = await createMockSkillRepo(env.root, {
+      name: "scoped-bug",
+      version: "1.0.0",
+    });
+    await install({ arc: env.arc, host: env.host, db: env.db, repoUrl: repo.url, yes: true });
+
+    // Registry advertises the same package under a SCOPED name. The installed
+    // copy is recorded by its bare slug in the DB (because that's what the
+    // manifest says). checkUpgrades must reconcile the two.
+    const registry: RegistryConfig = {
+      registry: {
+        skills: [
+          {
+            name: "@metafactory/scoped-bug",
+            description: "A scoped package",
+            author: "tester",
+            version: "1.1.0",
+            source: repo.url,
+            type: "community",
+            status: "shipped",
+          },
+        ],
+        agents: [],
+        prompts: [],
+        tools: [],
+      },
+    };
+
+    const regPath = join(env.root, "scoped-registry.yaml");
+    await writeFile(regPath, YAML.stringify(registry));
+    await saveSources(env.arc.sourcesPath, {
+      sources: [{ name: "test", url: `file://${regPath}`, tier: "community", enabled: true }],
+    });
+
+    const results = await checkUpgrades(env.db, env.arc, env.host);
+    expect(results).toHaveLength(1);
+    expect(results[0].name).toBe("scoped-bug");
+    expect(results[0].installedVersion).toBe("1.0.0");
+    expect(results[0].registryVersion).toBe("1.1.0");
+    expect(results[0].upgradable).toBe(true);
+  });
+
   test("reports up-to-date when versions match", async () => {
     const repo = await createMockSkillRepo(env.root, {
       name: "UpToDate",
@@ -152,6 +200,46 @@ describe("upgradePackage", () => {
     expect(result.success).toBe(true);
     expect(result.oldVersion).toBe("1.0.0");
     expect(result.newVersion).toBe("1.0.0");
+  });
+
+  // arc#184 Bug 1: when the install path is a tarball-extract (no `.git`
+  // directory anywhere up the tree), upgradePackage's git pull blows up with
+  // "git pull failed: fatal: not a git repository". The right behavior is to
+  // recognise the tarball-extract install and surface a clear, actionable
+  // error (or, ideally, take the tarball-re-extract path). Until the
+  // tarball-re-extract path lands, the test asserts at minimum that the
+  // failure message tells the user what to do instead of being cryptic.
+  test("returns actionable error for tarball-extract installs (no .git) (arc#184)", async () => {
+    const repo = await createMockSkillRepo(env.root, {
+      name: "TarballExtract",
+      version: "1.0.0",
+    });
+    await install({ arc: env.arc, host: env.host, db: env.db, repoUrl: repo.url, yes: true });
+
+    // Simulate the tarball-extract install layout: the install dir exists
+    // and has a valid manifest but no `.git` directory anywhere up the tree.
+    // This matches what `arc install @scope/name` produces today via
+    // downloadPackage + extractPackage.
+    //
+    // Relies on the test env's reposDir (under the OS temp dir) not being
+    // nested inside a git repo — findGitRoot walks up 10 parents, so a
+    // tmpdir under a git tree would defeat the no-.git simulation. True for
+    // the standard macOS/Linux $TMPDIR; revisit if CI changes the temp root.
+    const { getSkill } = await import("../../src/lib/db.js");
+    const skillRow = getSkill(env.db, "TarballExtract");
+    expect(skillRow).not.toBeNull();
+    Bun.spawnSync(["rm", "-rf", join(skillRow!.install_path, ".git")], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+
+    const result = await upgradePackage(env.db, env.arc, env.host, "TarballExtract");
+    expect(result.success).toBe(false);
+    // The error message must NOT be the raw git output — that's the bug.
+    expect(result.error).not.toContain("not a git repository");
+    // It MUST mention either the tarball/registry-install nature or the
+    // remove-then-install workaround so the user knows what to do.
+    expect(result.error).toMatch(/registry|tarball|remove.*install/i);
   });
 
   test("returns error for unknown package", async () => {

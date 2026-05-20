@@ -161,6 +161,73 @@ describe("findRegistryEntry", () => {
   test("returns null for unknown", () => {
     expect(findRegistryEntry(sampleRegistry(), "Nope")).toBeNull();
   });
+
+  // arc#184: bare-name input resolves a scoped registry entry via the
+  // unscoped-tail fallback.
+  test("resolves a bare name against a scoped entry (arc#184)", () => {
+    const registry: RegistryConfig = {
+      registry: {
+        skills: [
+          {
+            name: "@metafactory/soma",
+            description: "Portable assistant core",
+            author: "jcfischer",
+            source: "https://example.com/soma",
+            type: "community",
+            status: "shipped",
+          },
+        ],
+        agents: [],
+        prompts: [],
+        tools: [],
+      },
+    };
+    const result = findRegistryEntry(registry, "soma");
+    expect(result).not.toBeNull();
+    expect(result!.entry.name).toBe("@metafactory/soma");
+  });
+
+  // arc#184 HIGH (review of PR #185): when two scopes publish the same
+  // package name, an unscoped lookup is ambiguous — return null rather than
+  // silently guessing a scope. An exact-scope lookup still resolves.
+  test("returns null when a bare name is ambiguous across scopes (arc#184)", () => {
+    const registry: RegistryConfig = {
+      registry: {
+        skills: [
+          {
+            name: "@metafactory/soma",
+            description: "The real one",
+            author: "jcfischer",
+            source: "https://example.com/a",
+            type: "community",
+            status: "shipped",
+          },
+          {
+            name: "@other/soma",
+            description: "A different package, same tail",
+            author: "someone",
+            source: "https://example.com/b",
+            type: "community",
+            status: "shipped",
+          },
+        ],
+        agents: [],
+        prompts: [],
+        tools: [],
+      },
+    };
+    // Bare lookup is ambiguous → null.
+    expect(findRegistryEntry(registry, "soma")).toBeNull();
+    // Exact-scope lookup is unambiguous → resolves.
+    const exact = findRegistryEntry(registry, "@metafactory/soma");
+    expect(exact).not.toBeNull();
+    expect(exact!.entry.description).toBe("The real one");
+  });
+
+  test("returns null for empty-string input (arc#184)", () => {
+    expect(findRegistryEntry(sampleRegistry(), "")).toBeNull();
+    expect(findRegistryEntry(sampleRegistry(), "   ")).toBeNull();
+  });
 });
 
 describe("addFromRegistry", () => {

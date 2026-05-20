@@ -74,31 +74,73 @@ export function searchRegistry(
 }
 
 /**
- * Find a specific entry in the registry by exact name.
+ * Find a specific entry in the registry by name.
+ *
+ * Matches in two passes (arc#184): first an exact case-insensitive match,
+ * then — only if the input is unscoped — a fallback match against the
+ * unscoped tail of a scoped entry name. This lets `findRegistryEntry(cfg,
+ * "soma")` resolve to a registry entry whose `name` is `@metafactory/soma`,
+ * which is what `checkUpgrades` needs when the installed-name in the DB is
+ * the bare slug but the registry indexes by scoped name.
+ *
+ * If multiple scoped entries share the same tail (e.g. `@metafactory/soma`
+ * AND `@other/soma`), an unscoped lookup is genuinely ambiguous: the
+ * function returns null rather than silently guessing a scope. The caller
+ * then reports "not found" — a safe, honest outcome — instead of surfacing
+ * a misleading version from an arbitrary scope. An exact-scope match in
+ * pass 1 always beats the pass-2 fallback.
  */
 export function findRegistryEntry(
   config: RegistryConfig,
   name: string
 ): { entry: RegistryEntry; artifactType: ArtifactType } | null {
   const lower = name.toLowerCase();
-  for (const entry of config.registry.skills) {
-    if (entry.name.toLowerCase() === lower) return { entry, artifactType: "skill" };
+  // Empty / whitespace-only input never matches. Guard before pass 2,
+  // where an empty `lower` would otherwise match a malformed `@scope/`
+  // entry whose tail is the empty string.
+  if (lower.trim() === "") return null;
+  const inputIsScoped = lower.startsWith("@");
+
+  const sections: [ArtifactType, RegistryEntry[]][] = [
+    ["skill", config.registry.skills],
+    ["agent", config.registry.agents],
+    ["prompt", config.registry.prompts],
+    ["tool", config.registry.tools],
+    ["component", config.registry.components ?? []],
+    ["rules", config.registry.rules ?? []],
+  ];
+
+  // Pass 1 — exact (case-insensitive) match.
+  for (const [artifactType, entries] of sections) {
+    for (const entry of entries) {
+      if (entry.name.toLowerCase() === lower) return { entry, artifactType };
+    }
   }
-  for (const entry of config.registry.agents) {
-    if (entry.name.toLowerCase() === lower) return { entry, artifactType: "agent" };
+
+  // Pass 2 — unscoped-tail match. Only meaningful when the caller passed an
+  // unscoped name; if they passed `@scope/x` and it didn't match in pass 1,
+  // we don't want to fuzzy-match across scopes.
+  //
+  // Collect ALL tail matches rather than returning the first: if two scopes
+  // publish the same package name, an unscoped lookup cannot pick between
+  // them without guessing. Resolve only when exactly one entry matches.
+  if (!inputIsScoped) {
+    const tailMatches: { entry: RegistryEntry; artifactType: ArtifactType }[] = [];
+    for (const [artifactType, entries] of sections) {
+      for (const entry of entries) {
+        const entryLower = entry.name.toLowerCase();
+        if (!entryLower.startsWith("@")) continue;
+        const slashAt = entryLower.indexOf("/");
+        if (slashAt === -1) continue;
+        const tail = entryLower.slice(slashAt + 1);
+        if (tail === lower) tailMatches.push({ entry, artifactType });
+      }
+    }
+    if (tailMatches.length === 1) return tailMatches[0];
+    // tailMatches.length > 1 → ambiguous across scopes → fall through to
+    // null. Zero matches also falls through.
   }
-  for (const entry of config.registry.prompts) {
-    if (entry.name.toLowerCase() === lower) return { entry, artifactType: "prompt" };
-  }
-  for (const entry of config.registry.tools) {
-    if (entry.name.toLowerCase() === lower) return { entry, artifactType: "tool" };
-  }
-  for (const entry of config.registry.components ?? []) {
-    if (entry.name.toLowerCase() === lower) return { entry, artifactType: "component" };
-  }
-  for (const entry of config.registry.rules ?? []) {
-    if (entry.name.toLowerCase() === lower) return { entry, artifactType: "rules" };
-  }
+
   return null;
 }
 
