@@ -94,7 +94,7 @@ export function findRegistryEntry(
   const lower = name.toLowerCase();
   const inputIsScoped = lower.startsWith("@");
 
-  const sections: Array<[ArtifactType, RegistryEntry[]]> = [
+  const sections: [ArtifactType, RegistryEntry[]][] = [
     ["skill", config.registry.skills],
     ["agent", config.registry.agents],
     ["prompt", config.registry.prompts],
