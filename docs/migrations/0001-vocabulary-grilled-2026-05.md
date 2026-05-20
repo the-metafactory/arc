@@ -347,7 +347,7 @@ Small repo — strictly ordered. The hard review split PR-1 to keep the defect f
 
 ## Roll-out
 
-1. **PR-1 merges.** `reviewConsumerName` now emits `cortex-review-consumer-{principal}-{stack}-{assistant}`. No live broker is touched yet — arc only *constructs* names; it does not rename existing durables.
+1. **PR-1 merges.** `reviewConsumerName` now emits `cortex-review-consumer-{stack}-{assistant}` (2-segment — see C1). No live broker is touched yet — arc only *constructs* names; it does not rename existing durables.
 2. **Operational step — re-provision the malformed durables (REQUIRED, manual).** Any broker that already has `cortex-review-consumer-metafactory-*` durables (created by the pre-fix arc, cited in the P-VERIFY handover as `cortex-review-consumer-metafactory-echo`) carries **orphaned, malformed** durables after PR-1. They will not self-heal. For each affected broker/account:
    - **Enumerate:** `nats consumer ls CODE_REVIEW` (or `nats stream view`) and identify every malformed durable. **Operator grep predicate:** any durable whose stack or assistant slot holds a *network* token is malformed by definition — concretely, `nats consumer ls CODE_REVIEW | grep -E 'cortex-review-consumer-(metafactory|meta-factory-prod-network|.*-network-)'`; the canonical defect signature is the literal `cortex-review-consumer-metafactory-*`. A name is well-formed only if both segments are `(stack, assistant)` values — a network name (`metafactory`) in either slot means re-provision.
    - **Re-provision the correct durable:** `arc nats provision-consumer --stack <stack> --assistant <assistant>` (post-PR-2 flag names — 2 flags, no `--principal`).
