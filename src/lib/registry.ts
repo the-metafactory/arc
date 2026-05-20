@@ -74,31 +74,58 @@ export function searchRegistry(
 }
 
 /**
- * Find a specific entry in the registry by exact name.
+ * Find a specific entry in the registry by name.
+ *
+ * Matches in two passes (arc#184): first an exact case-insensitive match,
+ * then — only if the input is unscoped — a fallback match against the
+ * unscoped tail of a scoped entry name. This lets `findRegistryEntry(cfg,
+ * "soma")` resolve to a registry entry whose `name` is `@metafactory/soma`,
+ * which is what `checkUpgrades` needs when the installed-name in the DB is
+ * the bare slug but the registry indexes by scoped name.
+ *
+ * If multiple scoped entries share the same tail, the first one encountered
+ * (in skills → agents → prompts → tools → components → rules order) wins.
+ * An exact-scope match always beats a tail-only fallback.
  */
 export function findRegistryEntry(
   config: RegistryConfig,
   name: string
 ): { entry: RegistryEntry; artifactType: ArtifactType } | null {
   const lower = name.toLowerCase();
-  for (const entry of config.registry.skills) {
-    if (entry.name.toLowerCase() === lower) return { entry, artifactType: "skill" };
+  const inputIsScoped = lower.startsWith("@");
+
+  const sections: Array<[ArtifactType, RegistryEntry[]]> = [
+    ["skill", config.registry.skills],
+    ["agent", config.registry.agents],
+    ["prompt", config.registry.prompts],
+    ["tool", config.registry.tools],
+    ["component", config.registry.components ?? []],
+    ["rules", config.registry.rules ?? []],
+  ];
+
+  // Pass 1 — exact (case-insensitive) match.
+  for (const [artifactType, entries] of sections) {
+    for (const entry of entries) {
+      if (entry.name.toLowerCase() === lower) return { entry, artifactType };
+    }
   }
-  for (const entry of config.registry.agents) {
-    if (entry.name.toLowerCase() === lower) return { entry, artifactType: "agent" };
+
+  // Pass 2 — unscoped-tail match. Only meaningful when the caller passed an
+  // unscoped name; if they passed `@scope/x` and it didn't match in pass 1,
+  // we don't want to fuzzy-match across scopes.
+  if (!inputIsScoped) {
+    for (const [artifactType, entries] of sections) {
+      for (const entry of entries) {
+        const entryLower = entry.name.toLowerCase();
+        if (!entryLower.startsWith("@")) continue;
+        const slashAt = entryLower.indexOf("/");
+        if (slashAt === -1) continue;
+        const tail = entryLower.slice(slashAt + 1);
+        if (tail === lower) return { entry, artifactType };
+      }
+    }
   }
-  for (const entry of config.registry.prompts) {
-    if (entry.name.toLowerCase() === lower) return { entry, artifactType: "prompt" };
-  }
-  for (const entry of config.registry.tools) {
-    if (entry.name.toLowerCase() === lower) return { entry, artifactType: "tool" };
-  }
-  for (const entry of config.registry.components ?? []) {
-    if (entry.name.toLowerCase() === lower) return { entry, artifactType: "component" };
-  }
-  for (const entry of config.registry.rules ?? []) {
-    if (entry.name.toLowerCase() === lower) return { entry, artifactType: "rules" };
-  }
+
   return null;
 }
 
