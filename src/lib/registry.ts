@@ -83,15 +83,22 @@ export function searchRegistry(
  * which is what `checkUpgrades` needs when the installed-name in the DB is
  * the bare slug but the registry indexes by scoped name.
  *
- * If multiple scoped entries share the same tail, the first one encountered
- * (in skills → agents → prompts → tools → components → rules order) wins.
- * An exact-scope match always beats a tail-only fallback.
+ * If multiple scoped entries share the same tail (e.g. `@metafactory/soma`
+ * AND `@other/soma`), an unscoped lookup is genuinely ambiguous: the
+ * function returns null rather than silently guessing a scope. The caller
+ * then reports "not found" — a safe, honest outcome — instead of surfacing
+ * a misleading version from an arbitrary scope. An exact-scope match in
+ * pass 1 always beats the pass-2 fallback.
  */
 export function findRegistryEntry(
   config: RegistryConfig,
   name: string
 ): { entry: RegistryEntry; artifactType: ArtifactType } | null {
   const lower = name.toLowerCase();
+  // Empty / whitespace-only input never matches. Guard before pass 2,
+  // where an empty `lower` would otherwise match a malformed `@scope/`
+  // entry whose tail is the empty string.
+  if (lower.trim() === "") return null;
   const inputIsScoped = lower.startsWith("@");
 
   const sections: [ArtifactType, RegistryEntry[]][] = [
@@ -113,7 +120,12 @@ export function findRegistryEntry(
   // Pass 2 — unscoped-tail match. Only meaningful when the caller passed an
   // unscoped name; if they passed `@scope/x` and it didn't match in pass 1,
   // we don't want to fuzzy-match across scopes.
+  //
+  // Collect ALL tail matches rather than returning the first: if two scopes
+  // publish the same package name, an unscoped lookup cannot pick between
+  // them without guessing. Resolve only when exactly one entry matches.
   if (!inputIsScoped) {
+    const tailMatches: { entry: RegistryEntry; artifactType: ArtifactType }[] = [];
     for (const [artifactType, entries] of sections) {
       for (const entry of entries) {
         const entryLower = entry.name.toLowerCase();
@@ -121,9 +133,12 @@ export function findRegistryEntry(
         const slashAt = entryLower.indexOf("/");
         if (slashAt === -1) continue;
         const tail = entryLower.slice(slashAt + 1);
-        if (tail === lower) return { entry, artifactType };
+        if (tail === lower) tailMatches.push({ entry, artifactType });
       }
     }
+    if (tailMatches.length === 1) return tailMatches[0];
+    // tailMatches.length > 1 → ambiguous across scopes → fall through to
+    // null. Zero matches also falls through.
   }
 
   return null;

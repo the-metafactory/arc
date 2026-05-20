@@ -174,15 +174,31 @@ export async function upgradePackage(
   // separately because it needs the install-orchestration code in
   // src/cli.ts factored out into a reusable function. Until that lands,
   // we give the user the documented workaround in one line.
+  //
+  // Detection caveat: findGitRoot walks up to 10 parent directories. A
+  // tarball-extract placed *inside* an unrelated git repo would therefore
+  // be misdetected as a git checkout and skip this branch. The default
+  // install layout (~/.config/metafactory/pkg/repos/<scope>__<name>/) is
+  // not inside a git repo, so this holds in practice; a non-default
+  // reposDir under a git tree is the only way to trip it.
   const gitRoot = findGitRoot(installPath);
   if (gitRoot === null) {
+    // Surface the actual scoped package ref when we can recover it, so the
+    // workaround is copy-pasteable. Registry installs record repo_url as
+    // `@scope/name@version`; strip the trailing `@version` for the hint.
+    // Git installs (repo_url is a URL) fall back to the `@<scope>/` stub.
+    let installRef = `@<scope>/${name}`;
+    if (skill.repo_url.startsWith("@")) {
+      const versionAt = skill.repo_url.lastIndexOf("@");
+      installRef = versionAt > 0 ? skill.repo_url.slice(0, versionAt) : skill.repo_url;
+    }
     return {
       success: false,
       name,
       oldVersion: skill.version,
       error:
         `Cannot upgrade "${name}" in place: install at ${installPath} is a registry tarball-extract, not a git checkout. ` +
-        `Run \`arc remove ${name} && arc install @<scope>/${name} --yes\` to upgrade. ` +
+        `Run \`arc remove ${name} && arc install ${installRef} --yes\` to upgrade. ` +
         `Tracked at https://github.com/the-metafactory/arc/issues/184 for the in-place fix.`,
     };
   }

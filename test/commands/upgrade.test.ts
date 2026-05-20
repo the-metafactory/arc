@@ -220,6 +220,11 @@ describe("upgradePackage", () => {
     // and has a valid manifest but no `.git` directory anywhere up the tree.
     // This matches what `arc install @scope/name` produces today via
     // downloadPackage + extractPackage.
+    //
+    // Relies on the test env's reposDir (under the OS temp dir) not being
+    // nested inside a git repo — findGitRoot walks up 10 parents, so a
+    // tmpdir under a git tree would defeat the no-.git simulation. True for
+    // the standard macOS/Linux $TMPDIR; revisit if CI changes the temp root.
     const { getSkill } = await import("../../src/lib/db.js");
     const skillRow = getSkill(env.db, "TarballExtract");
     expect(skillRow).not.toBeNull();
