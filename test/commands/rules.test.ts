@@ -1,7 +1,7 @@
 import { test, expect, beforeEach, afterEach } from "bun:test";
 import { join } from "path";
 import { readFile, mkdir } from "fs/promises";
-import { createTestEnv, createMockSkillRepo, type TestEnv, type MockSkillRepo } from "../helpers/test-env.js";
+import { createTestEnv, type TestEnv, type MockSkillRepo } from "../helpers/test-env.js";
 import { install } from "../../src/commands/install.js";
 import { upgradePackage } from "../../src/commands/upgrade.js";
 
@@ -21,8 +21,16 @@ afterEach(async () => {
 
 /**
  * Create a mock rules package repo with templates.
+ *
+ * `opts.type` defaults to "rules" but can be overridden to model a package
+ * that ships templates alongside other artefacts (e.g. "governance-overlay"
+ * — the compass case from a-181). The upgrade pipeline should regenerate
+ * templates for any package declaring provides.templates[], regardless of type.
  */
-async function createMockRulesRepo(root: string, opts?: { version?: string }): Promise<MockSkillRepo> {
+async function createMockRulesRepo(
+  root: string,
+  opts?: { version?: string; type?: string },
+): Promise<MockSkillRepo> {
   const repoDir = join(root, "mock-rules-pkg");
 
   // Create templates
@@ -61,7 +69,7 @@ async function createMockRulesRepo(root: string, opts?: { version?: string }): P
     `schema: arc/v1
 name: compass-standards
 version: ${opts?.version ?? "0.3.0"}
-type: rules
+type: ${opts?.type ?? "rules"}
 tier: official
 author:
   name: metafactory
@@ -163,6 +171,66 @@ extra_labels:
   expect(output).toContain("| `network` |");
   // Injection markers should be cleaned up
   expect(output).not.toContain("<!-- inject:");
+});
+
+test("upgrade --force regenerates templates for a non-rules package that provides templates", async () => {
+  // a-181: a package can declare provides.templates[] while having a primary
+  // type other than "rules" (compass ships templates but resolves to a
+  // non-rules artifact type). Both the install pass and the upgrade pipeline
+  // must regenerate the consumer's CLAUDE.md regardless of primary type.
+  const overlayRepo = await createMockRulesRepo(env.root, { type: "component" });
+
+  await Bun.write(
+    join(consumerDir, "agents-md.yaml"),
+    `template: compass-standards
+repo_name: halden
+repo_description: "Overlay consumer"
+sections:
+  - position: "after:description"
+    file: docs/agents-md/architecture.md
+`,
+  );
+  await Bun.write(
+    join(consumerDir, "docs", "agents-md", "architecture.md"),
+    "## Architecture\n\nFirst version.",
+  );
+
+  await install({
+    arc: env.arc, host: env.host,
+    db: env.db,
+    repoUrl: overlayRepo.url,
+    yes: true,
+    consumerDir,
+  });
+
+  // Install-time generation picked up v1.
+  let output = await readFile(join(consumerDir, "CLAUDE.md"), "utf-8");
+  expect(output).toContain("First version.");
+
+  // Section content drifts with no package version bump — the exact case
+  // `arc upgrade compass --force` must handle.
+  await Bun.write(
+    join(consumerDir, "docs", "agents-md", "architecture.md"),
+    "## Architecture\n\nSecond version.",
+  );
+
+  // findConsumerRepos scans BLUEPRINT_DEV_ROOT — point it at the test root
+  // so the consumer dir is discovered.
+  const priorDevRoot = process.env.BLUEPRINT_DEV_ROOT;
+  process.env.BLUEPRINT_DEV_ROOT = env.root;
+  try {
+    const result = await upgradePackage(env.db, env.arc, env.host, "compass-standards", { force: true });
+    expect(result.success).toBe(true);
+  } finally {
+    if (priorDevRoot === undefined) delete process.env.BLUEPRINT_DEV_ROOT;
+    else process.env.BLUEPRINT_DEV_ROOT = priorDevRoot;
+  }
+
+  // Pre-fix: the upgrade gate required type === "rules", so this was a
+  // no-op and CLAUDE.md still said "First version." Post-fix: regenerated.
+  output = await readFile(join(consumerDir, "CLAUDE.md"), "utf-8");
+  expect(output).toContain("Second version.");
+  expect(output).not.toContain("First version.");
 });
 
 test("rules package recorded as rules artifact type in DB", async () => {

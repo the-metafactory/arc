@@ -230,9 +230,13 @@ export async function upgradePackage(
   const newVersion = manifest.version;
 
   if (compareSemver(oldVersion, newVersion) >= 0 && !opts?.force) {
-    // Version matches — but for rules packages, still regenerate templates
-    // (template content may have changed even if version was already bumped)
-    if (manifest.type === "rules" && manifest.provides?.templates?.length) {
+    // Version matches — but if the package provides templates, still
+    // regenerate them: template/section content may have changed even
+    // when the package version was already bumped. Gated on the presence
+    // of provides.templates[] rather than manifest.type, because a
+    // package can legitimately ship templates alongside other artefacts
+    // (e.g. a governance-overlay that also owns CLAUDE.md generation).
+    if (manifest.provides?.templates?.length) {
       const consumerDirs = findConsumerRepos(manifest.provides.templates);
       for (const dir of consumerDirs) {
         await generateRules(installPath, manifest.provides.templates, dir);
@@ -288,9 +292,12 @@ export async function upgradePackage(
     await registerHooks(name, resolvedHooks, settingsPath);
   }
 
-  // Re-generate rules templates if this is a rules package
-  // Scan all repos with matching config files, not just cwd
-  if (manifest.type === "rules" && manifest.provides?.templates?.length) {
+  // Re-generate rule files for any package that provides templates.
+  // Scan all repos with matching config files, not just cwd. Gated on
+  // provides.templates[] rather than manifest.type — the presence of the
+  // declaration is itself the signal that this package owns rules-file
+  // generation, regardless of its primary type.
+  if (manifest.provides?.templates?.length) {
     const consumerDirs = findConsumerRepos(manifest.provides.templates);
     for (const dir of consumerDirs) {
       await generateRules(installPath, manifest.provides.templates, dir);

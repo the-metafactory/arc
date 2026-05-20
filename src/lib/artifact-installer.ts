@@ -123,21 +123,10 @@ export async function createArtifactSymlinks(opts: {
     }
 
     case "rules": {
-      // Rules packages: run template generation in the consumer repo
-      const templates = manifest.provides?.templates ?? [];
-      if (templates.length) {
-        const consumerDir = opts.consumerDir ?? process.cwd();
-        const results = await generateRules(installDir, templates, consumerDir);
-        if (!quiet) {
-          for (const r of results) {
-            if (r.success && r.target) {
-              console.log(`  Generated ${r.target}`);
-            } else if (!r.success) {
-              console.log(`  \u26A0 ${r.target}: ${r.error}`);
-            }
-          }
-        }
-      }
+      // Rules packages have no per-type primary layout. Template generation
+      // is handled by the type-agnostic provides.templates pass below (a-181)
+      // so that a package shipping templates under a different primary type
+      // (e.g. a governance-overlay) regenerates too.
       break;
     }
 
@@ -278,6 +267,29 @@ export async function createArtifactSymlinks(opts: {
     await mkdir(dirname(targetPath), { recursive: true });
     await linkTracked(sourcePath, targetPath);
     filesCreated.push({ source: sourcePath, target: targetPath });
+  }
+
+  // Type-agnostic provides.templates pass (a-181).
+  // Every artifact type that declares provides.templates[] gets rule-file
+  // generation run in the consumer repo. Previously only `type: rules`
+  // honored this, which silently broke packages that ship templates
+  // alongside other artefacts — compass is a governance-overlay that owns
+  // CLAUDE.md generation. The presence of provides.templates[] is itself
+  // the signal; the primary `type` does not gate it. Mirrors the
+  // provides.files pass above (issue #84).
+  const declaredTemplates = manifest.provides?.templates ?? [];
+  if (declaredTemplates.length) {
+    const consumerDir = opts.consumerDir ?? process.cwd();
+    const results = await generateRules(installDir, declaredTemplates, consumerDir);
+    if (!quiet) {
+      for (const r of results) {
+        if (r.success && r.target) {
+          console.log(`  Generated ${r.target}`);
+        } else if (!r.success) {
+          console.log(`  ⚠ ${r.target}: ${r.error}`);
+        }
+      }
+    }
   }
 
   return { filesCreated, filesMissingSource: [], record };
