@@ -205,13 +205,31 @@ export async function createBundle(
 
   const excludeArgs = buildTarArgs(exclusions, includePatterns);
 
+  // Write the archive to a temp dir OUTSIDE packageDir, then move it into
+  // place. Writing the tarball directly into packageDir while archiving `.`
+  // makes the directory change as tar reads it: GNU tar (Linux CI) aborts
+  // with "file changed as we read it" (exit 1), while bsdtar (macOS) tolerates
+  // it — which is exactly why this passed locally but failed in CI. Staging
+  // outside the source tree keeps the read set stable on every platform.
+  const stageDir = await mkdtemp(join(tmpdir(), "arc-bundle-"));
+  const stagedTarball = join(stageDir, "bundle.tar.gz");
+
   const result = Bun.spawnSync(
-    ["tar", "czf", tarballName, ...excludeArgs, "."],
+    ["tar", "czf", stagedTarball, ...excludeArgs, "."],
     { cwd: packageDir, stdout: "pipe", stderr: "pipe" },
   );
 
   if (result.exitCode !== 0) {
+    await rm(stageDir, { recursive: true, force: true }).catch(() => undefined);
     return { success: false, tarballPath: tarballName, sha256: "", sizeBytes: 0, fileCount: 0, manifest, warnings, error: `tar failed: ${result.stderr.toString().trim()}` };
+  }
+
+  // Move the finished archive into its final location, then drop the temp dir.
+  // `mv` (not fs.rename) so a cross-filesystem tmpdir → packageDir move works.
+  const moveResult = Bun.spawnSync(["mv", stagedTarball, tarballName], { stdout: "pipe", stderr: "pipe" });
+  await rm(stageDir, { recursive: true, force: true }).catch(() => undefined);
+  if (moveResult.exitCode !== 0) {
+    return { success: false, tarballPath: tarballName, sha256: "", sizeBytes: 0, fileCount: 0, manifest, warnings, error: `failed to finalize bundle: ${moveResult.stderr.toString().trim()}` };
   }
 
   const { sha256, sizeBytes, fileCount } = await getBundleStats(tarballName);

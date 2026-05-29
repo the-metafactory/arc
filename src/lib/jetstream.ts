@@ -94,7 +94,7 @@ export async function connectJsm(url: string = DEFAULT_NATS_URL): Promise<
     nc = await Promise.race([
       connect({ servers: url, name: "arc-jetstream-provision", reconnect: false }),
       new Promise<never>((_, reject) => {
-        timeoutHandle = setTimeout(() => reject(new Error("NATS connect timeout (2s)")), 2000);
+        timeoutHandle = setTimeout(() => { reject(new Error("NATS connect timeout (2s)")); }, 2000);
       }),
     ]);
   } catch (err) {
@@ -144,7 +144,7 @@ export async function ensureStream(
       status: "already_exists",
       value: {
         name: existing.config.name,
-        subjects: existing.config.subjects ?? [],
+        subjects: existing.config.subjects,
       },
     };
   } catch (err) {
@@ -156,13 +156,13 @@ export async function ensureStream(
     }
   }
   try {
-    const created = await jsm.streams.add(config as StreamConfig);
+    const created = await jsm.streams.add(config);
     return {
       ok: true,
       status: "created",
       value: {
         name: created.config.name,
-        subjects: created.config.subjects ?? [],
+        subjects: created.config.subjects,
       },
     };
   } catch (err) {
@@ -211,7 +211,7 @@ export async function ensureConsumer(
     }
   }
   try {
-    const created = await jsm.consumers.add(stream, config as ConsumerConfig);
+    const created = await jsm.consumers.add(stream, config);
     return {
       ok: true,
       status: "created",
