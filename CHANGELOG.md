@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.30.0
+
+### Fixed
+
+- **Registry-extracted packages are upgradable again** (closes [#187](https://github.com/the-metafactory/arc/issues/187), [#188](https://github.com/the-metafactory/arc/pull/188)). Packages installed via `@scope/name` (e.g. `@metafactory/soma`) could not be upgraded three ways:
+  - `arc upgrade <pkg> --check` falsely reported "up to date" — it resolved the advertised version through the YAML registry index (`findInAllSources`), but registry packages are published to the metafactory HTTP API. `checkUpgrades` now resolves those via `resolveFromRegistry`; git / YAML-registry packages keep the old path.
+  - `arc upgrade <pkg> --force` errored `git pull failed: not a git repository` — a registry tarball has no `.git`. `upgradePackage` now detects registry packages and upgrades them by clean re-download + atomic swap. The new `fetchAndVerifyRegistryPackage` helper verifies with install parity (SHA-256 + Ed25519 registry signature + Sigstore).
+  - The documented `remove`+`install` fallback could strand the user (remove succeeds, reinstall fails on a stale token). The registry upgrade now downloads and verifies **before** touching the working install and restores it on any failure, so an upgrade can never leave the user with no install.
+
+- **CI green on Linux + eslint gate** ([#189](https://github.com/the-metafactory/arc/pull/189)). `createBundle` wrote the tarball into the package dir while archiving `.`, tripping GNU tar's "file changed as we read it" (exit 1) on Linux CI (bsdtar/macOS tolerated it); the archive is now staged in a temp dir outside the source tree and moved into place. Plus 8 mechanical eslint-gate fixes (unnecessary assertions/conditions, `Array<T>`→`T[]`, regex→`String#startsWith`).
+
 ## 0.27.1
 
 ### Fixed
