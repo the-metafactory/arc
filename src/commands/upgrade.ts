@@ -11,6 +11,11 @@ import { createSymlink } from "../lib/symlinks.js";
 import { findGitRoot } from "../lib/paths.js";
 import { loadSources } from "../lib/sources.js";
 import { findInAllSources } from "../lib/remote-registry.js";
+import {
+  parsePackageRef,
+  resolveFromRegistry,
+  fetchAndVerifyRegistryPackage,
+} from "../lib/registry-install.js";
 import { runScript } from "../lib/scripts.js";
 import { registerHooks, removeHooks, resolveHooksFromManifest } from "../lib/hooks.js";
 import { generateRules } from "../lib/rules.js";
@@ -75,10 +80,26 @@ export async function checkUpgrades(
       upgradable: false,
     };
 
-    // Check registry for advertised version
-    const found = await findInAllSources(sources, skill.name, arc.cachePath);
-    if (found?.entry.version) {
-      result.registryVersion = found.entry.version;
+    // Resolve the advertised version. Registry-extracted packages store a
+    // package ref (`@scope/name@version`) in repo_url and are published to the
+    // metafactory HTTP API, NOT the YAML registry index — so findInAllSources
+    // can never see them and --check would falsely report "up to date"
+    // (arc#187 bug 1). Resolve those through resolveFromRegistry instead.
+    // Git / YAML-registry packages keep the findInAllSources path unchanged.
+    const ref = parsePackageRef(skill.repo_url);
+    if (ref) {
+      const resolved = await resolveFromRegistry(
+        { scope: ref.scope, name: ref.name },
+        sources.sources,
+      );
+      if (resolved?.version) {
+        result.registryVersion = resolved.version;
+      }
+    } else {
+      const found = await findInAllSources(sources, skill.name, arc.cachePath);
+      if (found?.entry.version) {
+        result.registryVersion = found.entry.version;
+      }
     }
 
     // Check the actual cloned repo's manifest for current version
@@ -162,35 +183,100 @@ export async function upgradePackage(
     return { success: false, name, oldVersion: skill.version, error: `Install path not found: ${installPath}` };
   }
 
-  // For library artifacts, git pull must run at the repo root (not artifact subdir)
-  const gitCwd = findGitRoot(installPath) ?? installPath;
+  // Two upgrade substrates with different fetch + rollback mechanics (arc#187).
+  // Registry-extracted packages store a package ref in repo_url and have no
+  // `.git`, so `git pull` can never work for them (bug 2). Git-cloned packages
+  // pull. `rollback()` restores the prior on-disk state if a later gate fails;
+  // `commitSwap()` drops the registry backup once the upgrade has committed.
+  const ref = parsePackageRef(skill.repo_url);
+  const isRegistry = ref !== null;
 
-  // Capture the pre-pull HEAD so the broker-gate failure path below can
-  // roll the repo back to a consistent state — sage cycle-3 important
-  // finding. Without rollback, a broker-failed upgrade leaves the repo
-  // at the new commit while the DB still records the old version,
-  // creating a state-drift hazard for the next operation.
-  const preHeadProbe = Bun.spawnSync(["git", "rev-parse", "HEAD"], {
-    cwd: gitCwd, stdout: "pipe", stderr: "pipe",
-  });
-  const preHeadSha = preHeadProbe.exitCode === 0 ? preHeadProbe.stdout.toString().trim() : null;
+  let rollback: () => string;
+  let commitSwap: () => void = () => undefined;
 
-  // git pull in the cloned repo
-  const pullResult = Bun.spawnSync(["git", "pull", "--ff-only"], {
-    cwd: gitCwd,
-    stdout: "pipe",
-    stderr: "pipe",
-  });
+  if (isRegistry) {
+    // Clean, fully-verified re-download (SHA-256 + registry signature +
+    // Sigstore — security parity with install) into a temp dir, then an
+    // atomic swap. Because the download+verify completes BEFORE the working
+    // install is touched, a failed/blocked fetch can never strand the user
+    // with no install — which is the remove+install hazard (bug 3).
+    const sources = await loadSources(arc.sourcesPath);
+    const tmpDirName = `${ref.scope}__${ref.name}.arc-upgrade-tmp`;
+    const fetched = await fetchAndVerifyRegistryPackage({
+      ref: { scope: ref.scope, name: ref.name },
+      sources: sources.sources,
+      reposDir: arc.reposDir,
+      targetDirName: tmpDirName,
+    });
+    if (!fetched.success || !fetched.extractedPath) {
+      return { success: false, name, oldVersion: skill.version, error: fetched.error ?? "registry re-download failed" };
+    }
 
-  if (pullResult.exitCode !== 0) {
-    const stderr = pullResult.stderr.toString().trim();
-    return { success: false, name, oldVersion: skill.version, error: `git pull failed: ${stderr}` };
+    const newPath = fetched.extractedPath;
+    const backupPath = `${installPath}.arc-upgrade-bak`;
+    Bun.spawnSync(["rm", "-rf", backupPath], { stdout: "pipe", stderr: "pipe" });
+    const aside = Bun.spawnSync(["mv", installPath, backupPath], { stdout: "pipe", stderr: "pipe" });
+    if (aside.exitCode !== 0) {
+      Bun.spawnSync(["rm", "-rf", newPath], { stdout: "pipe", stderr: "pipe" });
+      return { success: false, name, oldVersion: skill.version, error: `upgrade swap failed: ${aside.stderr.toString().trim()}` };
+    }
+    const intoPlace = Bun.spawnSync(["mv", newPath, installPath], { stdout: "pipe", stderr: "pipe" });
+    if (intoPlace.exitCode !== 0) {
+      // Restore the working install — never leave the user without one.
+      Bun.spawnSync(["mv", backupPath, installPath], { stdout: "pipe", stderr: "pipe" });
+      Bun.spawnSync(["rm", "-rf", newPath], { stdout: "pipe", stderr: "pipe" });
+      return { success: false, name, oldVersion: skill.version, error: `upgrade swap failed: ${intoPlace.stderr.toString().trim()}` };
+    }
+    rollback = () => {
+      Bun.spawnSync(["rm", "-rf", installPath], { stdout: "pipe", stderr: "pipe" });
+      const r = Bun.spawnSync(["mv", backupPath, installPath], { stdout: "pipe", stderr: "pipe" });
+      return r.exitCode === 0 ? "" : ` Additionally, restore of the prior install failed: ${r.stderr.toString().trim()}`;
+    };
+    commitSwap = () => { Bun.spawnSync(["rm", "-rf", backupPath], { stdout: "pipe", stderr: "pipe" }); };
+  } else {
+    // For library artifacts, git pull must run at the repo root (not artifact subdir)
+    const gitCwd = findGitRoot(installPath) ?? installPath;
+
+    // Capture the pre-pull HEAD so the broker-gate failure path below can
+    // roll the repo back to a consistent state — sage cycle-3 important
+    // finding. Without rollback, a broker-failed upgrade leaves the repo
+    // at the new commit while the DB still records the old version,
+    // creating a state-drift hazard for the next operation.
+    const preHeadProbe = Bun.spawnSync(["git", "rev-parse", "HEAD"], {
+      cwd: gitCwd, stdout: "pipe", stderr: "pipe",
+    });
+    const preHeadSha = preHeadProbe.exitCode === 0 ? preHeadProbe.stdout.toString().trim() : null;
+
+    // git pull in the cloned repo
+    const pullResult = Bun.spawnSync(["git", "pull", "--ff-only"], {
+      cwd: gitCwd,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+
+    if (pullResult.exitCode !== 0) {
+      const stderr = pullResult.stderr.toString().trim();
+      return { success: false, name, oldVersion: skill.version, error: `git pull failed: ${stderr}` };
+    }
+
+    rollback = () => {
+      if (preHeadSha !== null) {
+        const resetRes = Bun.spawnSync(["git", "reset", "--hard", preHeadSha], {
+          cwd: gitCwd, stdout: "pipe", stderr: "pipe",
+        });
+        return resetRes.exitCode === 0
+          ? ""
+          : ` Additionally, post-failure rollback to ${preHeadSha} failed: ${resetRes.stderr.toString().trim()}`;
+      }
+      return ` Pre-pull HEAD was not captured; on-disk repo may be ahead of recorded version.`;
+    };
   }
 
-  // Re-read manifest for new version
+  // Re-read manifest for new version (from the now-current install path).
   const manifest = await readManifest(installPath);
   if (!manifest) {
-    return { success: false, name, oldVersion: skill.version, error: "No arc-manifest.yaml (or pai-manifest.yaml) after pull" };
+    const note = rollback();
+    return { success: false, name, oldVersion: skill.version, error: "No arc-manifest.yaml (or pai-manifest.yaml) after upgrade" + note };
   }
 
   // Runtime broker check (arc#152) — re-verify the bus dependency. The
@@ -202,22 +288,10 @@ export async function upgradePackage(
     contextClause: " during upgrade",
   });
   if (!brokerGate.ok) {
-    // Roll the repo back to its pre-pull HEAD so the on-disk + DB state
-    // stay consistent. Best-effort: if reset itself fails we surface the
-    // broker error (the real cause) AND the rollback failure so the
-    // operator sees both. Without preHeadSha we can't safely reset, so
-    // we log the inconsistency clearly.
-    let rollbackNote = "";
-    if (preHeadSha !== null) {
-      const resetRes = Bun.spawnSync(["git", "reset", "--hard", preHeadSha], {
-        cwd: gitCwd, stdout: "pipe", stderr: "pipe",
-      });
-      if (resetRes.exitCode !== 0) {
-        rollbackNote = ` Additionally, post-failure rollback to ${preHeadSha} failed: ${resetRes.stderr.toString().trim()}`;
-      }
-    } else {
-      rollbackNote = ` Pre-pull HEAD was not captured; on-disk repo may be ahead of recorded version.`;
-    }
+    // Roll the on-disk state back so it stays consistent with the DB.
+    // Best-effort: surface the broker error (the real cause) AND any
+    // rollback failure so the operator sees both.
+    const rollbackNote = rollback();
     return {
       success: false,
       name,
@@ -238,6 +312,7 @@ export async function upgradePackage(
         await generateRules(installPath, manifest.provides.templates, dir);
       }
     }
+    commitSwap();
     return { success: true, name, oldVersion, newVersion: oldVersion };
   }
 
@@ -250,7 +325,8 @@ export async function upgradePackage(
       env: { PAI_OLD_VERSION: oldVersion, PAI_NEW_VERSION: newVersion },
     });
     if (!preResult.success && !preResult.skipped) {
-      return { success: false, name, oldVersion, error: `Preupgrade script failed (exit ${preResult.exitCode})` };
+      const note = rollback();
+      return { success: false, name, oldVersion, error: `Preupgrade script failed (exit ${preResult.exitCode})` + note };
     }
   }
 
@@ -316,7 +392,8 @@ export async function upgradePackage(
       env: { PAI_OLD_VERSION: oldVersion, PAI_NEW_VERSION: newVersion },
     });
     if (!postResult.success && !postResult.skipped) {
-      return { success: false, name, oldVersion, error: `${postHookName} script failed (exit ${postResult.exitCode})` };
+      const note = rollback();
+      return { success: false, name, oldVersion, error: `${postHookName} script failed (exit ${postResult.exitCode})` + note };
     }
   }
 
@@ -350,6 +427,9 @@ export async function upgradePackage(
       for (const s of caps.secrets) insertCap.run(name, "secret", s, "");
     }
   }
+
+  // Upgrade committed — drop the registry backup (no-op for git packages).
+  commitSwap();
 
   return { success: true, name, oldVersion, newVersion };
 }

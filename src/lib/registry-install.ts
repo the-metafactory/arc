@@ -8,6 +8,8 @@ import type {
 } from "../types.js";
 import { getSourceType } from "./sources.js";
 import { fetchMetafactoryPackageDetail } from "./metafactory-api.js";
+import { verifyVersionSignature } from "./registry-signing.js";
+import { verifyPackageSigstore } from "./cosign-verify.js";
 
 // ---------------------------------------------------------------------------
 // Package reference parsing
@@ -495,4 +497,102 @@ export async function extractPackage(
   }
 
   return { success: true, extractedPath };
+}
+
+// ---------------------------------------------------------------------------
+// Verified registry fetch (shared install + upgrade path) — arc#187
+// ---------------------------------------------------------------------------
+
+export interface VerifiedFetchResult {
+  success: boolean;
+  /** Path the verified tarball was extracted to (a temp dir name under reposDir). */
+  extractedPath?: string;
+  /** Resolved registry metadata (version, source, …). */
+  resolved?: ResolvedRegistryPackage;
+  error?: string;
+  quarantine?: QuarantineInfo;
+}
+
+/**
+ * Resolve, download, fully verify, and extract a registry package — arc#187.
+ *
+ * This is the secure registry pipeline factored out of the `arc install`
+ * inline flow (cli.ts) so `arc upgrade` can re-download a registry-extracted
+ * package with the SAME verification guarantees instead of a weaker check.
+ * It performs, in order:
+ *   1. resolveFromRegistry (metafactory API) → version + sha256 + signing block
+ *   2. downloadPackage (anonymous by default; bearer attached for auth'd storage)
+ *   3. SHA-256 checksum verification
+ *   4. Ed25519 registry-signature verification (A-504; fail-closed on `false`)
+ *   5. Sigstore bundle verification (A-503; fail-closed on `false`, `null` = proceed)
+ *   6. extract to `<reposDir>/<targetDirName>`
+ *
+ * The artifact is extracted to a caller-chosen dir name (typically a `.tmp`
+ * sibling of the real install path) so the caller can atomically swap it into
+ * place only after success — never destroying the working install first.
+ *
+ * Unsigned/legacy versions (`verified: null`) proceed, mirroring install-side
+ * graceful degradation. A genuine signature mismatch (`verified: false`)
+ * fails closed. Console output is the caller's responsibility — this function
+ * is silent so it can be used in non-interactive upgrade flows.
+ */
+export async function fetchAndVerifyRegistryPackage(opts: {
+  ref: PackageRef;
+  sources: RegistrySource[];
+  reposDir: string;
+  targetDirName: string;
+}): Promise<VerifiedFetchResult> {
+  const resolved = await resolveFromRegistry(opts.ref, opts.sources);
+  if (!resolved) {
+    return {
+      success: false,
+      error: `Package "${formatPackageRef(opts.ref)}" not found in any metafactory registry.`,
+    };
+  }
+
+  const download = await downloadPackage(resolved.downloadUrl, opts.reposDir, resolved.source);
+  if (!download.success || !download.tempPath) {
+    return { success: false, error: download.error, quarantine: download.quarantine };
+  }
+
+  const checksum = await verifyChecksum(download.tempPath, resolved.sha256);
+  if (!checksum.valid) {
+    await unlink(download.tempPath).catch(() => undefined);
+    return {
+      success: false,
+      error: `Checksum verification failed (expected ${checksum.expected}, got ${checksum.actual}).`,
+    };
+  }
+
+  const sigResult = await verifyVersionSignature(
+    resolved.source,
+    { registry_signature: resolved.registrySignature, registry_key_id: resolved.registryKeyId },
+    resolved.manifestCanonical,
+  );
+  if (sigResult.verified === false) {
+    await unlink(download.tempPath).catch(() => undefined);
+    return { success: false, error: `Registry signature verification failed: ${sigResult.reason}` };
+  }
+
+  const sigstoreResult = await verifyPackageSigstore({
+    source: resolved.source,
+    sha256: resolved.sha256,
+    signing: {
+      signature_bundle_key: resolved.signatureBundleKey,
+      signer_identity: resolved.signerIdentity,
+    },
+    artifactPath: download.tempPath,
+    tempDir: opts.reposDir,
+  });
+  if (sigstoreResult.verified === false) {
+    await unlink(download.tempPath).catch(() => undefined);
+    return { success: false, error: `Sigstore verification failed: ${sigstoreResult.reason}` };
+  }
+
+  const extract = await extractPackage(download.tempPath, opts.reposDir, opts.targetDirName);
+  if (!extract.success) {
+    return { success: false, error: extract.error };
+  }
+
+  return { success: true, extractedPath: extract.extractedPath, resolved };
 }
