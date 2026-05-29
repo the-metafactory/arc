@@ -9,8 +9,9 @@ import {
   formatCheckResults,
   formatUpgradeResults,
 } from "../../src/commands/upgrade.js";
-import { loadSources, saveSources } from "../../src/lib/sources.js";
+import { saveSources } from "../../src/lib/sources.js";
 import { writeFile, mkdir } from "fs/promises";
+import { existsSync } from "fs";
 import { join } from "path";
 import YAML from "yaml";
 import type { RegistryConfig, SourcesConfig } from "../../src/types.js";
@@ -274,6 +275,184 @@ describe("upgradeAll", () => {
     expect(forceResults).toHaveLength(1);
     expect(forceResults[0].name).toBe("ForceAll");
     expect(forceResults[0].success).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// arc#187 — registry-extracted package upgrade path
+// ---------------------------------------------------------------------------
+
+function mockFetch(handler: (input: any, init?: any) => Promise<Response>): typeof fetch {
+  const fn = handler as typeof fetch;
+  (fn as any).preconnect = () => {};
+  return fn;
+}
+
+/**
+ * Build a real gzipped package tarball (single top-level dir containing
+ * arc-manifest.yaml) and return its bytes + sha256 so a mocked metafactory
+ * registry can advertise and serve it. extractPackage strips one path
+ * component, so the manifest must live one level deep.
+ */
+async function buildRegistryFixture(
+  baseDir: string,
+  name: string,
+  version: string,
+): Promise<{ bytes: Uint8Array; sha256: string }> {
+  const stageRoot = join(baseDir, `__fixture-${name}-${version}`);
+  const topDir = join(stageRoot, "pkg");
+  await mkdir(join(topDir, "skill"), { recursive: true });
+  await writeFile(join(topDir, "skill", "SKILL.md"), `---\nname: ${name}\ndescription: fixture\n---\n\n# ${name}\n`);
+  await writeFile(
+    join(topDir, "arc-manifest.yaml"),
+    YAML.stringify({
+      name,
+      version,
+      type: "skill",
+      tier: "custom",
+      author: { name: "t", github: "t" },
+      provides: { skill: [{ trigger: name.toLowerCase() }] },
+      depends_on: { tools: [{ name: "bun", version: ">=1.0.0" }] },
+      capabilities: {
+        filesystem: { read: [], write: [] },
+        network: [],
+        bash: { allowed: false },
+        secrets: [],
+      },
+    }),
+  );
+  const tarPath = join(baseDir, `__fixture-${name}-${version}.tar.gz`);
+  Bun.spawnSync(["tar", "czf", tarPath, "-C", stageRoot, "pkg"], { stdout: "pipe", stderr: "pipe" });
+  const buf = await Bun.file(tarPath).arrayBuffer();
+  const hasher = new Bun.CryptoHasher("sha256");
+  hasher.update(buf);
+  return { bytes: new Uint8Array(buf), sha256: hasher.digest("hex") };
+}
+
+function metafactoryRegistryHandler(opts: {
+  scope: string;
+  name: string;
+  latestVersion: string;
+  sha256: string;
+  tarball?: Uint8Array;
+}) {
+  return async (input: any) => {
+    const url = typeof input === "string" ? input : input.url;
+    if (url.includes("/storage/download/")) {
+      return new Response((opts.tarball ?? new Uint8Array()) as unknown as BodyInit, { status: 200 });
+    }
+    // version detail: /packages/<scope>/<name>@<version>
+    if (/\/packages\/[^/]+\/[^/]+@/.test(url)) {
+      return new Response(JSON.stringify({
+        version: opts.latestVersion,
+        sha256: opts.sha256,
+        manifest_canonical: `{"name":"@${opts.scope}/${opts.name}","version":"${opts.latestVersion}"}`,
+        signing: { registry_signature: null, registry_key_id: null },
+      }), { status: 200 });
+    }
+    // package detail
+    return new Response(JSON.stringify({
+      namespace: `@${opts.scope}`, name: opts.name,
+      display_name: null, description: "", type: "skill", license: "MIT",
+      latest_version: opts.latestVersion, versions: [opts.latestVersion],
+      publisher: { display_name: "T", tier: "official", mfa_enabled: true, github_username: null },
+      sponsor: null, created_at: 0, updated_at: 0,
+    }), { status: 200 });
+  };
+}
+
+async function addMetafactorySource(env: TestEnv): Promise<void> {
+  await saveSources(env.arc.sourcesPath, {
+    sources: [
+      { name: "mf", url: "https://meta-factory.test", tier: "official", enabled: true, type: "metafactory" },
+    ],
+  });
+}
+
+describe("checkUpgrades — registry-extracted package (arc#187)", () => {
+  test("resolves newer version via metafactory API, not the YAML index", async () => {
+    const repo = await createMockSkillRepo(env.root, { name: "soma", version: "0.6.4" });
+    await install({ arc: env.arc, host: env.host, db: env.db, repoUrl: repo.url, yes: true });
+    // Simulate a registry-extracted install: repo_url is a package ref.
+    env.db.prepare("UPDATE skills SET repo_url = ? WHERE name = ?").run("@metafactory/soma@0.6.4", "soma");
+    await addMetafactorySource(env);
+
+    const fixture = await buildRegistryFixture(env.root, "soma", "0.7.1");
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mockFetch(metafactoryRegistryHandler({ scope: "metafactory", name: "soma", latestVersion: "0.7.1", sha256: fixture.sha256 }));
+    try {
+      const results = await checkUpgrades(env.db, env.arc, env.host);
+      const soma = results.find((r) => r.name === "soma")!;
+      expect(soma.installedVersion).toBe("0.6.4");
+      expect(soma.registryVersion).toBe("0.7.1");
+      expect(soma.upgradable).toBe(true);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+describe("upgradePackage — registry-extracted package (arc#187)", () => {
+  test("force-upgrades via clean re-download — no git pull error, DB updated", async () => {
+    const repo = await createMockSkillRepo(env.root, { name: "soma", version: "0.6.4" });
+    await install({ arc: env.arc, host: env.host, db: env.db, repoUrl: repo.url, yes: true });
+    env.db.prepare("UPDATE skills SET repo_url = ? WHERE name = ?").run("@metafactory/soma@0.6.4", "soma");
+    await addMetafactorySource(env);
+
+    const fixture = await buildRegistryFixture(env.root, "soma", "0.7.1");
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mockFetch(metafactoryRegistryHandler({
+      scope: "metafactory", name: "soma", latestVersion: "0.7.1", sha256: fixture.sha256, tarball: fixture.bytes,
+    }));
+    try {
+      const result = await upgradePackage(env.db, env.arc, env.host, "soma", { force: true });
+      expect(result.success).toBe(true);
+      expect(result.oldVersion).toBe("0.6.4");
+      expect(result.newVersion).toBe("0.7.1");
+      // The defining symptom of bug 2 must be gone.
+      expect(result.error ?? "").not.toContain("git pull failed");
+      expect(result.error ?? "").not.toContain("not a git repository");
+
+      const row = env.db.prepare("SELECT version FROM skills WHERE name = ?").get("soma") as { version: string };
+      expect(row.version).toBe("0.7.1");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("never strands the user: a failed download leaves the prior install intact", async () => {
+    const repo = await createMockSkillRepo(env.root, { name: "soma", version: "0.6.4" });
+    await install({ arc: env.arc, host: env.host, db: env.db, repoUrl: repo.url, yes: true });
+    const installPath = (env.db.prepare("SELECT install_path FROM skills WHERE name = ?").get("soma") as { install_path: string }).install_path;
+    env.db.prepare("UPDATE skills SET repo_url = ? WHERE name = ?").run("@metafactory/soma@0.6.4", "soma");
+    await addMetafactorySource(env);
+
+    const originalFetch = globalThis.fetch;
+    // Storage download returns 401 (stale token) — the exact remove+install hazard.
+    globalThis.fetch = mockFetch(async (input: any) => {
+      const url = typeof input === "string" ? input : input.url;
+      if (url.includes("/storage/download/")) return new Response("denied", { status: 401 });
+      if (/\/packages\/[^/]+\/[^/]+@/.test(url)) {
+        return new Response(JSON.stringify({ version: "0.7.1", sha256: "deadbeef", manifest_canonical: "{}", signing: { registry_signature: null, registry_key_id: null } }), { status: 200 });
+      }
+      return new Response(JSON.stringify({
+        namespace: "@metafactory", name: "soma", display_name: null, description: "", type: "skill", license: "MIT",
+        latest_version: "0.7.1", versions: ["0.7.1"],
+        publisher: { display_name: "T", tier: "official", mfa_enabled: true, github_username: null }, sponsor: null, created_at: 0, updated_at: 0,
+      }), { status: 200 });
+    });
+    try {
+      const result = await upgradePackage(env.db, env.arc, env.host, "soma", { force: true });
+      expect(result.success).toBe(false);
+      // The working install is still on disk — not removed.
+      expect(existsSync(installPath)).toBe(true);
+      expect(existsSync(join(installPath, "arc-manifest.yaml"))).toBe(true);
+      // DB still records the old version (no drift).
+      const row = env.db.prepare("SELECT version FROM skills WHERE name = ?").get("soma") as { version: string };
+      expect(row.version).toBe("0.6.4");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 });
 
