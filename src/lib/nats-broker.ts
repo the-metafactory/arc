@@ -135,7 +135,7 @@ export function parseNatsUrl(url: string): { host: string; port: number } {
   // because WHATWG's URL parser rejects unknown schemes for hostname
   // extraction on some runtimes; `tcp://` is treated as a generic special
   // scheme and the hostname / port surface cleanly.
-  if (/^nats:\/\//.test(url)) {
+  if (url.startsWith("nats://")) {
     try {
       const parsed = new URL(url.replace(/^nats:/, "tcp:"));
       const host = stripIpv6(parsed.hostname);

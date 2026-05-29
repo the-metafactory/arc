@@ -191,10 +191,11 @@ async function provisionConsumerInternal(
   filterSubject?: string,
 ): Promise<ResourceOutcome> {
   const durable = reviewConsumerName(network, agent);
+  const ackPolicy: ConsumerAckPolicy = "explicit";
   const result = await ensureConsumer(jsm, stream, {
     durable_name: durable,
     ...(filterSubject !== undefined && { filter_subject: filterSubject }),
-    ack_policy: "explicit" as ConsumerAckPolicy,
+    ack_policy: ackPolicy,
   });
   if (!result.ok) {
     throw new ArcNatsCommandError(

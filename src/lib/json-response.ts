@@ -126,14 +126,14 @@ export interface SetupOperatorJson extends JsonOkBase {
  */
 export interface ProvisionJson extends JsonOkBase {
   /** Each touched resource, in invocation order. */
-  resources: Array<{
+  resources: {
     kind: "stream" | "consumer";
     name: string;
     /** Parent stream for consumers; omitted for streams. */
     stream?: string;
     /** `true` iff this call created the resource; `false` for idempotent no-op. */
     created: boolean;
-  }>;
+  }[];
   /** NATS server URL the provisioning targeted. */
   natsUrl: string;
 }
