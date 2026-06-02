@@ -28,6 +28,25 @@ interface Settings {
   [key: string]: unknown;
 }
 
+function matcherKey(matcher: string | undefined): string {
+  return matcher ?? "";
+}
+
+function hookGroupHasCommand(entry: SettingsHookGroup, command: string): boolean {
+  return entry.hooks.some((hook) => hook.command === command);
+}
+
+function shouldReplaceHookGroup(
+  packageName: string,
+  hook: { command: string; matcher?: string },
+  entry: SettingsHookGroup,
+): boolean {
+  if (matcherKey(entry.matcher) !== matcherKey(hook.matcher)) return false;
+  if (!hookGroupHasCommand(entry, hook.command)) return false;
+
+  return entry._pai_pkg === packageName || entry._pai_pkg === undefined;
+}
+
 /**
  * Read settings.json, returning empty object if it doesn't exist.
  */
@@ -217,16 +236,9 @@ export async function registerHooks(
       settings.hooks[hook.event] = [];
     }
 
-    const eventArray = settings.hooks[hook.event];
-
-    // Check for duplicate: same package + same command
-    const existing = eventArray.find(
-      (entry) =>
-        entry._pai_pkg === packageName &&
-        entry.hooks.some((h) => h.command === hook.command),
+    settings.hooks[hook.event] = settings.hooks[hook.event].filter(
+      (entry) => !shouldReplaceHookGroup(packageName, hook, entry),
     );
-
-    if (existing) continue; // Already registered, skip
 
     const group: SettingsHookGroup = {
       _pai_pkg: packageName,
@@ -234,7 +246,7 @@ export async function registerHooks(
       hooks: [{ type: "command", command: hook.command }],
     };
 
-    eventArray.push(group);
+    settings.hooks[hook.event].push(group);
   }
 
   await writeSettings(settingsPath, settings);

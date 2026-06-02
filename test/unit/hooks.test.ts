@@ -119,6 +119,61 @@ describe("registerHooks", () => {
     expect(settings.hooks.PostToolUse).toBeArrayOfSize(1);
   });
 
+  test("reconciles legacy untagged duplicate hook registrations", async () => {
+    const command = "${PAI_DIR}/hooks/CortexBashGuard.hook.ts";
+    const existing = {
+      hooks: {
+        PreToolUse: [
+          {
+            matcher: "Bash",
+            hooks: [{ type: "command", command }],
+          },
+          {
+            matcher: "Bash",
+            hooks: [{ type: "command", command }],
+          },
+          {
+            _pai_pkg: "Cortex",
+            matcher: "Bash",
+            hooks: [{ type: "command", command }],
+          },
+          {
+            matcher: "Read",
+            hooks: [{ type: "command", command }],
+          },
+          {
+            _pai_pkg: "OtherPkg",
+            matcher: "Bash",
+            hooks: [{ type: "command", command }],
+          },
+        ],
+      },
+    };
+    await Bun.write(settingsPath, JSON.stringify(existing, null, 4));
+
+    await registerHooks(
+      "Cortex",
+      [{ event: "PreToolUse", matcher: "Bash", command }],
+      settingsPath,
+    );
+
+    const settings = JSON.parse(await Bun.file(settingsPath).text());
+    const bashCommandGroups = settings.hooks.PreToolUse.filter(
+      (entry: { _pai_pkg?: string; matcher?: string; hooks: { command: string }[] }) =>
+        entry.matcher === "Bash" &&
+        entry.hooks.some((hook) => hook.command === command),
+    );
+
+    expect(bashCommandGroups).toBeArrayOfSize(2);
+    expect(bashCommandGroups[0]._pai_pkg).toBe("OtherPkg");
+    expect(bashCommandGroups[1]._pai_pkg).toBe("Cortex");
+    expect(settings.hooks.PreToolUse).toBeArrayOfSize(3);
+    expect(settings.hooks.PreToolUse).toContainEqual({
+      matcher: "Read",
+      hooks: [{ type: "command", command }],
+    });
+  });
+
   test("includes matcher field for PreToolUse hooks", async () => {
     await registerHooks(
       "Grove",
