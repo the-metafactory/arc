@@ -1,13 +1,16 @@
-import { resolve } from "path";
+import { join, resolve } from "path";
 import { rm } from "fs/promises";
+import { tmpdir } from "os";
 import { createBundle, computeChecksum } from "../lib/bundle.js";
 import {
   extractReadme,
   resolvePublishScope,
   uploadBundle,
+  uploadSigstoreBundle,
   ensurePackageExists,
   registerVersion,
 } from "../lib/publish.js";
+import { signSigstoreBundle, type SignSigstoreResult } from "../lib/cosign.js";
 import { loadSources, findMetafactorySource } from "../lib/sources.js";
 import { readManifest } from "../lib/manifest.js";
 import type { ArcPaths } from "../types.js";
@@ -19,6 +22,8 @@ export interface PublishOptions {
   dryRun?: boolean;
   sourceName?: string;
   scope?: string;
+  allowUnsignedOfficial?: boolean;
+  signer?: (artifactPath: string, bundlePath: string) => Promise<SignSigstoreResult>;
 }
 
 export interface PublishCommandResult {
@@ -96,11 +101,35 @@ export async function publish(opts: PublishOptions): Promise<PublishCommandResul
     };
   }
 
+  let sigstoreBundlePath: string | undefined;
+
   try {
     // 7. Upload tarball
     const uploadResult = await uploadBundle(tarballPath, source, sha256);
     if (!uploadResult.success) {
       return { success: false, error: uploadResult.error };
+    }
+
+    let signatureBundleKey: string | undefined;
+    let signerIdentity: string | undefined;
+    let signedAt: number | undefined;
+
+    if (source.tier === "official" && !opts.allowUnsignedOfficial) {
+      sigstoreBundlePath = join(tmpdir(), `arc-sigstore-${uploadResult.sha256}-${Date.now()}.bundle`);
+      const signer = opts.signer ?? signSigstoreBundle;
+      const signResult = await signer(tarballPath, sigstoreBundlePath);
+      if (!signResult.success || !signResult.bundlePath) {
+        return { success: false, error: `Sigstore signing failed: ${signResult.error ?? "bundle was not created"}` };
+      }
+
+      const bundleUpload = await uploadSigstoreBundle(signResult.bundlePath, source, uploadResult.sha256);
+      if (!bundleUpload.success || !bundleUpload.bundleKey) {
+        return { success: false, error: bundleUpload.error ?? "Sigstore bundle upload failed." };
+      }
+
+      signatureBundleKey = bundleUpload.bundleKey;
+      signerIdentity = signResult.signerIdentity;
+      signedAt = signResult.signedAt;
     }
 
     // 8. Ensure package exists
@@ -121,6 +150,9 @@ export async function publish(opts: PublishOptions): Promise<PublishCommandResul
       manifest,
       scope,
       readme: readme ?? undefined,
+      signature_bundle_key: signatureBundleKey,
+      signer_identity: signerIdentity,
+      signed_at: signedAt,
     });
 
     if (!registerResult.success) {
@@ -140,6 +172,11 @@ export async function publish(opts: PublishOptions): Promise<PublishCommandResul
     if (tempTarball) {
       await rm(tarballPath).catch(() => {
         // best-effort cleanup; tarball may already be gone
+      });
+    }
+    if (sigstoreBundlePath) {
+      await rm(sigstoreBundlePath).catch(() => {
+        // best-effort cleanup; bundle may already be gone
       });
     }
   }

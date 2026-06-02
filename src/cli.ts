@@ -934,7 +934,8 @@ program
   .option("--dry-run", "Validate and show what would be published without uploading")
   .option("-s, --source <name>", "Use a specific metafactory source")
   .option("--scope <namespace>", "Override publish scope/namespace")
-  .action(async (path: string | undefined, opts: { tarball?: string; dryRun?: boolean; source?: string; scope?: string }) => {
+  .option("--allow-unsigned-official", "Legacy rollout escape hatch: publish to an official source without Sigstore signing")
+  .action(async (path: string | undefined, opts: { tarball?: string; dryRun?: boolean; source?: string; scope?: string; allowUnsignedOfficial?: boolean }) => {
     const paths = createArcPaths();
     const result = await publish({
       paths,
@@ -943,6 +944,7 @@ program
       dryRun: opts.dryRun,
       sourceName: opts.source,
       scope: opts.scope,
+      allowUnsignedOfficial: opts.allowUnsignedOfficial,
     });
 
     console.log(formatPublish(result));

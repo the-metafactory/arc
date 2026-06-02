@@ -153,6 +153,65 @@ export interface VerifySigstoreResult {
   output?: string;
 }
 
+export interface SignSigstoreResult {
+  success: boolean;
+  bundlePath?: string;
+  signerIdentity?: string;
+  signedAt?: number;
+  error?: string;
+  output?: string;
+}
+
+export function resolveSignerIdentity(env: Record<string, string | undefined> = process.env): string | undefined {
+  if (env.ARC_SIGSTORE_SIGNER_IDENTITY) return env.ARC_SIGSTORE_SIGNER_IDENTITY;
+  if (env.GITHUB_WORKFLOW_REF) return `https://github.com/${env.GITHUB_WORKFLOW_REF}`;
+  return undefined;
+}
+
+/**
+ * Sign an artifact with keyless cosign and write the Sigstore bundle to disk.
+ */
+export async function signSigstoreBundle(
+  artifactPath: string,
+  bundlePath: string,
+): Promise<SignSigstoreResult> {
+  const cosign = await ensureCosignBinary();
+  if (!cosign.path) {
+    return { success: false, error: cosign.error ?? "cosign binary unavailable" };
+  }
+
+  const signedAt = Math.floor(Date.now() / 1000);
+  const result = Bun.spawnSync(
+    [
+      cosign.path,
+      "sign-blob",
+      "--bundle", bundlePath,
+      "--yes",
+      artifactPath,
+    ],
+    { stdout: "pipe", stderr: "pipe" },
+  );
+
+  const stdout = result.stdout.toString().trim();
+  const stderr = result.stderr.toString().trim();
+
+  if (result.exitCode === 0) {
+    return {
+      success: true,
+      bundlePath,
+      signerIdentity: resolveSignerIdentity(),
+      signedAt,
+      output: stdout || stderr,
+    };
+  }
+
+  return {
+    success: false,
+    error: stderr || stdout || `cosign exited with code ${result.exitCode}`,
+    output: stdout,
+  };
+}
+
 /**
  * Verify a Sigstore bundle for an artifact using cosign verify-blob.
  * Auto-fetches cosign if not already present.
