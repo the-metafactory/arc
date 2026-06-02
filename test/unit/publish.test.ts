@@ -346,7 +346,7 @@ describe("registerVersion", () => {
     expect(requestBody.signed_at).toBe(0);
   });
 
-  test("409 version exists", async () => {
+  test("409 version exists when no visible submission exists", async () => {
     mockFetch(async () => new Response(
       JSON.stringify({ error: "Already exists" }),
       { status: 409 },
@@ -356,6 +356,63 @@ describe("registerVersion", () => {
     expect(result.success).toBe(false);
     expect(result.statusCode).toBe(409);
     expect(result.error).toContain("immutable");
+  });
+
+  test("409 with visible pending submission succeeds instead of immutable conflict", async () => {
+    mockFetch(async (url: any) => {
+      const urlStr = String(url);
+      if (urlStr.endsWith("/versions")) {
+        return new Response(
+          JSON.stringify({ error: "Version 1.0.0 already exists" }),
+          { status: 409 },
+        );
+      }
+      if (urlStr.endsWith("/versions/1.0.0/submission")) {
+        return new Response(
+          JSON.stringify({
+            id: "submission-visible",
+            status: "validating",
+            review_comment: null,
+          }),
+          { status: 200 },
+        );
+      }
+      return new Response("Not found", { status: 404 });
+    });
+
+    const result = await registerVersion(makeSource(), "ns", "pkg", payload);
+    expect(result.success).toBe(true);
+    expect(result.statusCode).toBe(409);
+    expect(result.submissionId).toBe("submission-visible");
+    expect(result.submission?.status).toBe("validating");
+  });
+
+  test("502 with created submission is not retried into a misleading 409", async () => {
+    let callCount = 0;
+    mockFetch(async () => {
+      callCount++;
+      if (callCount === 1) {
+        return new Response(
+          JSON.stringify({
+            error: "validation_pipeline_error",
+            submission_id: "submission-502",
+            submission_status: "audit",
+          }),
+          { status: 502 },
+        );
+      }
+      return new Response(
+        JSON.stringify({ error: "Version 1.0.0 already exists" }),
+        { status: 409 },
+      );
+    });
+
+    const result = await registerVersion(makeSource(), "ns", "pkg", payload);
+    expect(callCount).toBe(1);
+    expect(result.success).toBe(true);
+    expect(result.statusCode).toBe(502);
+    expect(result.submissionId).toBe("submission-502");
+    expect(result.submission?.status).toBe("audit");
   });
 
   test("400 validation failed", async () => {
@@ -369,19 +426,17 @@ describe("registerVersion", () => {
     expect(result.statusCode).toBe(400);
   });
 
-  test("retries on 500 error", async () => {
+  test("does not retry state-changing 500 registration errors", async () => {
     let callCount = 0;
     mockFetch(async () => {
       callCount++;
-      if (callCount === 1) {
-        return new Response("Internal error", { status: 500 });
-      }
-      return new Response(JSON.stringify({ version_id: "uuid-retry" }), { status: 201 });
+      return new Response(JSON.stringify({ error: "Internal error" }), { status: 500 });
     });
 
     const result = await registerVersion(makeSource(), "ns", "pkg", payload);
-    expect(result.success).toBe(true);
-    expect(callCount).toBe(2);
+    expect(result.success).toBe(false);
+    expect(result.statusCode).toBe(500);
+    expect(callCount).toBe(1);
   });
 });
 

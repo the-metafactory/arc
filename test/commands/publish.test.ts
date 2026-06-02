@@ -327,6 +327,90 @@ describe("arc publish command", () => {
     expect(output).not.toContain("Published @testns/my-skill");
   });
 
+  test("409 with existing validating submission succeeds and formats status", async () => {
+    await saveSources(env.arc.sourcesPath, metafactorySource());
+    const pkgDir = await createPackageDir(testDir, validManifest);
+
+    mockFetch(async (url: any) => {
+      const urlStr = String(url);
+
+      if (urlStr.includes("/storage/upload")) {
+        return new Response(
+          JSON.stringify({ sha256: "any-sha", r2_key: "packages/any-sha.tar.gz", size_bytes: 100 }),
+          { status: 409 },
+        );
+      }
+
+      if (urlStr.endsWith("/versions")) {
+        return new Response(
+          JSON.stringify({ error: "Version 1.0.0 already exists" }),
+          { status: 409 },
+        );
+      }
+
+      if (urlStr.endsWith("/versions/1.0.0/submission")) {
+        return new Response(
+          JSON.stringify({ id: "submission-existing", status: "validating" }),
+          { status: 200 },
+        );
+      }
+
+      if (urlStr.includes("/packages/")) {
+        return new Response(JSON.stringify({ namespace: "testns", name: "my-skill" }), { status: 200 });
+      }
+
+      return new Response("Not found", { status: 404 });
+    });
+
+    const result = await publish({ paths: env.arc, packageDir: pkgDir, allowUnsignedOfficial: true });
+    const output = formatPublish(result);
+
+    expect(result.success).toBe(true);
+    expect(result.submissionStatus).toBe("validating");
+    expect(result.submissionId).toBe("submission-existing");
+    expect(output).toContain("Uploaded @testns/my-skill v1.0.0");
+    expect(output).toContain("submission validating");
+    expect(output).toContain("submission-existing");
+    expect(output).not.toContain("Published @testns/my-skill");
+  });
+
+  test("409 remains immutable conflict when no visible submission exists", async () => {
+    await saveSources(env.arc.sourcesPath, metafactorySource());
+    const pkgDir = await createPackageDir(testDir, validManifest);
+
+    mockFetch(async (url: any) => {
+      const urlStr = String(url);
+
+      if (urlStr.includes("/storage/upload")) {
+        return new Response(
+          JSON.stringify({ sha256: "x", r2_key: "packages/x.tar.gz", size_bytes: 100 }),
+          { status: 409 },
+        );
+      }
+
+      if (urlStr.endsWith("/versions")) {
+        return new Response(
+          JSON.stringify({ error: "Version 1.0.0 already exists" }),
+          { status: 409 },
+        );
+      }
+
+      if (urlStr.endsWith("/versions/1.0.0/submission")) {
+        return new Response("Not found", { status: 404 });
+      }
+
+      if (urlStr.includes("/packages/")) {
+        return new Response(JSON.stringify({ namespace: "testns", name: "my-skill" }), { status: 200 });
+      }
+
+      return new Response("Not found", { status: 404 });
+    });
+
+    const result = await publish({ paths: env.arc, packageDir: pkgDir, allowUnsignedOfficial: true });
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("immutable");
+  });
+
   test("rejected publish submission fails with review comment", async () => {
     await saveSources(env.arc.sourcesPath, metafactorySource());
     const pkgDir = await createPackageDir(testDir, validManifest);

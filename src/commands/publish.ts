@@ -226,9 +226,12 @@ export function formatPublish(result: PublishCommandResult): string {
     ].join("\n");
   }
 
-  if (result.submissionStatus === "pending_review") {
+  if (result.submissionStatus) {
+    const headline = result.submissionStatus === "pending_review"
+      ? `Uploaded @${result.scope}/${result.name} v${result.version}; queued for review`
+      : `Uploaded @${result.scope}/${result.name} v${result.version}; submission ${result.submissionStatus}`;
     return [
-      `Uploaded @${result.scope}/${result.name} v${result.version}; queued for review`,
+      headline,
       `  SHA-256:      ${result.sha256}`,
       ...(result.submissionId ? [`  Submission:   ${result.submissionId}`] : []),
       `  Status:       ${result.submissionStatus}`,

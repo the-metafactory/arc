@@ -47,6 +47,41 @@ function buildPublishHeaders(source: RegistrySource): Record<string, string> {
   return { Authorization: `Bearer ${source.token}` };
 }
 
+interface SubmissionWire {
+  id?: string;
+  status?: string;
+  review_comment?: string | null;
+}
+
+type SubmissionBody = {
+  submission_id?: string;
+  submission_status?: string;
+  review_comment?: string | null;
+  submission?: SubmissionWire;
+  // The existing-submission probe returns flat { id, status } instead of
+  // wrapping the payload under `submission`, so accept both wire shapes.
+} & SubmissionWire;
+
+const VISIBLE_SUBMISSION_STATUSES = new Set([
+  "submitted",
+  "validating",
+  "audit",
+  "pending_review",
+  "rejected",
+]);
+
+function normalizeSubmission(body: SubmissionBody): RegisterResult["submission"] | undefined {
+  const nested = body.submission;
+  const status = nested?.status ?? body.submission_status ?? body.status;
+  if (!status || !VISIBLE_SUBMISSION_STATUSES.has(status)) return undefined;
+
+  return {
+    id: nested?.id ?? body.submission_id ?? body.id,
+    status,
+    reviewComment: nested?.review_comment ?? body.review_comment ?? null,
+  };
+}
+
 /**
  * Prefer the informative top-level `message` field over the generic `error`
  * field. Falls back to `formatServerError` so nested/object `error` payloads
@@ -382,6 +417,7 @@ export async function registerVersion(
   payload: RegisterPayload,
 ): Promise<RegisterResult> {
   const url = `${source.url}/api/v1/packages/${encodeURIComponent(`@${scope}`)}/${encodeURIComponent(name)}/versions`;
+  const submissionUrl = `${url}/${encodeURIComponent(payload.version)}/submission`;
   const headers = { ...buildPublishHeaders(source), "Content-Type": "application/json" };
 
   const serverPayload = {
@@ -397,64 +433,80 @@ export async function registerVersion(
   };
   debugLog(`registerVersion payload: ${JSON.stringify(serverPayload)}`);
 
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      const resp = await fetch(url, {
-        method: "POST",
-        headers,
-        body: JSON.stringify(serverPayload),
-        signal: AbortSignal.timeout(API_TIMEOUT_MS),
-      });
+  try {
+    const resp = await fetch(url, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(serverPayload),
+      signal: AbortSignal.timeout(API_TIMEOUT_MS),
+    });
 
-      if (resp.status === 201 || resp.status === 200) {
-        const body = (await resp.json()) as {
-          version_id?: string;
-          version?: { id?: string };
-          submission_id?: string;
-          submission?: { id?: string; status?: string; review_comment?: string | null };
-        };
+    if (resp.status === 201 || resp.status === 200) {
+      const body = (await resp.json()) as {
+        version_id?: string;
+        version?: { id?: string };
+      } & SubmissionBody;
+      const submission = normalizeSubmission(body);
+      return {
+        success: true,
+        versionId: body.version_id ?? body.version?.id,
+        submissionId: body.submission_id ?? body.submission?.id,
+        submission,
+        statusCode: resp.status,
+      };
+    }
+
+    const body = (await resp.json().catch(() => ({}))) as { error?: unknown; message?: unknown } & SubmissionBody;
+    const serverError = combineError(body);
+    const inlineSubmission = normalizeSubmission(body);
+
+    if (inlineSubmission) {
+      return {
+        success: true,
+        submissionId: inlineSubmission.id,
+        submission: inlineSubmission,
+        statusCode: resp.status,
+      };
+    }
+
+    if (resp.status === 409) {
+      const existingSubmission = await fetch(submissionUrl, {
+        headers: buildPublishHeaders(source),
+        signal: AbortSignal.timeout(API_TIMEOUT_MS),
+      })
+        .then(async (submissionResp) => {
+          if (!submissionResp.ok) return undefined;
+          const submissionBody = (await submissionResp.json().catch(() => ({}))) as SubmissionBody;
+          return normalizeSubmission(submissionBody);
+        })
+        .catch(() => undefined);
+
+      if (existingSubmission) {
         return {
           success: true,
-          versionId: body.version_id ?? body.version?.id,
-          submissionId: body.submission_id ?? body.submission?.id,
-          submission: body.submission
-            ? {
-              id: body.submission.id,
-              status: body.submission.status,
-              reviewComment: body.submission.review_comment ?? null,
-            }
-            : undefined,
-          statusCode: resp.status,
+          submissionId: existingSubmission.id,
+          submission: existingSubmission,
+          statusCode: 409,
         };
       }
 
-      const body = (await resp.json().catch(() => ({}))) as { error?: unknown; message?: unknown };
-      const serverError = combineError(body);
-
-      if (resp.status === 409) {
-        return { success: false, error: `Version ${payload.version} already exists. Published versions are immutable — bump the version in arc-manifest.yaml.`, statusCode: 409 };
-      }
-
-      if (resp.status === 400) {
-        return { success: false, error: serverError ?? "Manifest validation failed on server.", statusCode: 400 };
-      }
-
-      if (resp.status === 403) {
-        return { success: false, error: `Namespace @${scope} not owned. Complete identity verification at meta-factory.ai.`, statusCode: 403 };
-      }
-
-      if (resp.status === 401) {
-        return { success: false, error: 'Not authenticated. Run "arc login" first.', statusCode: 401 };
-      }
-
-      if (resp.status >= 500 && attempt === 0) continue;
-
-      return { success: false, error: serverError ?? `Registration failed: HTTP ${resp.status}`, statusCode: resp.status };
-    } catch (err) {
-      if (attempt === 0) continue;
-      return { success: false, error: `Network error during version registration: ${(err as Error).message}` };
+      return { success: false, error: `Version ${payload.version} already exists. Published versions are immutable — bump the version in arc-manifest.yaml.`, statusCode: 409 };
     }
-  }
 
-  return { success: false, error: "Registration failed after retries." };
+    if (resp.status === 400) {
+      return { success: false, error: serverError ?? "Manifest validation failed on server.", statusCode: 400 };
+    }
+
+    if (resp.status === 403) {
+      return { success: false, error: `Namespace @${scope} not owned. Complete identity verification at meta-factory.ai.`, statusCode: 403 };
+    }
+
+    if (resp.status === 401) {
+      return { success: false, error: 'Not authenticated. Run "arc login" first.', statusCode: 401 };
+    }
+
+    return { success: false, error: serverError ?? `Registration failed: HTTP ${resp.status}`, statusCode: resp.status };
+  } catch (err) {
+    return { success: false, error: `Network error during version registration: ${(err as Error).message}` };
+  }
 }
