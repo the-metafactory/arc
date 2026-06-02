@@ -310,6 +310,68 @@ export interface RegisterPayload {
   manifest: ArcManifest;
   scope: string;
   readme?: string;
+  signature_bundle_key?: string;
+  signer_identity?: string;
+  signed_at?: number;
+}
+
+export interface UploadSigstoreBundleResult {
+  success: boolean;
+  bundleKey?: string;
+  sizeBytes?: number;
+  error?: string;
+}
+
+/** Upload a cosign signature bundle for an already-uploaded tarball hash. */
+export async function uploadSigstoreBundle(
+  bundlePath: string,
+  source: RegistrySource,
+  sha256: string,
+): Promise<UploadSigstoreBundleResult> {
+  const file = Bun.file(bundlePath);
+  const bundleJson = await file.text();
+  const expectedBundleKey = `packages/${sha256}.bundle`;
+
+  try {
+    const resp = await fetch(`${source.url}/api/v1/storage/bundle/${sha256}`, {
+      method: "PUT",
+      headers: {
+        ...buildPublishHeaders(source),
+        "Content-Type": "application/json",
+      },
+      body: bundleJson,
+      signal: AbortSignal.timeout(UPLOAD_TIMEOUT_MS),
+    });
+
+    if (resp.status === 401) {
+      return { success: false, error: 'Not authenticated. Run "arc login" first.' };
+    }
+
+    const body = (await resp.json().catch(() => ({}))) as { bundle_key?: string; size_bytes?: number; error?: unknown; message?: unknown };
+
+    if (resp.status === 409) {
+      return { success: true, bundleKey: body.bundle_key ?? expectedBundleKey, sizeBytes: body.size_bytes ?? Buffer.byteLength(bundleJson) };
+    }
+
+    if (!resp.ok) {
+      return { success: false, error: combineError(body) ?? `Sigstore bundle upload failed: HTTP ${resp.status}` };
+    }
+
+    if (!body.bundle_key) {
+      return { success: false, error: "Server response missing bundle_key field." };
+    }
+
+    if (body.bundle_key !== expectedBundleKey) {
+      return { success: false, error: `Sigstore bundle key mismatch: expected=${expectedBundleKey}, server=${body.bundle_key}` };
+    }
+
+    return { success: true, bundleKey: body.bundle_key, sizeBytes: body.size_bytes ?? Buffer.byteLength(bundleJson) };
+  } catch (err) {
+    if (err instanceof DOMException && err.name === "AbortError") {
+      return { success: false, error: "Sigstore bundle upload timed out (120s limit)." };
+    }
+    return { success: false, error: `Sigstore bundle upload failed: ${(err as Error).message}` };
+  }
 }
 
 /** Register a new version for an existing package */
@@ -329,6 +391,9 @@ export async function registerVersion(
     size_bytes: payload.size_bytes,
     manifest: toServerManifest(payload.manifest, payload.scope),
     readme: payload.readme,
+    ...(payload.signature_bundle_key !== undefined ? { signature_bundle_key: payload.signature_bundle_key } : {}),
+    ...(payload.signer_identity !== undefined ? { signer_identity: payload.signer_identity } : {}),
+    ...(payload.signed_at !== undefined ? { signed_at: payload.signed_at } : {}),
   };
   debugLog(`registerVersion payload: ${JSON.stringify(serverPayload)}`);
 

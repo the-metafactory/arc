@@ -3,6 +3,7 @@ import {
   detectPlatform,
   findCosignBinary,
   ensureCosignBinary,
+  resolveSignerIdentity,
   verifySigstoreBundle,
 } from "../../src/lib/cosign.js";
 
@@ -55,6 +56,21 @@ describe("ensureCosignBinary", () => {
       process.stderr.write = originalWrite;
     }
   }, 60_000);
+});
+
+describe("resolveSignerIdentity", () => {
+  test("uses explicit ARC_SIGSTORE_SIGNER_IDENTITY override", () => {
+    expect(resolveSignerIdentity({
+      ARC_SIGSTORE_SIGNER_IDENTITY: "https://github.com/org/repo/.github/workflows/release.yml@refs/heads/main",
+      GITHUB_WORKFLOW_REF: "ignored/repo/.github/workflows/release.yml@refs/heads/main",
+    })).toBe("https://github.com/org/repo/.github/workflows/release.yml@refs/heads/main");
+  });
+
+  test("derives GitHub Actions identity from GITHUB_WORKFLOW_REF", () => {
+    expect(resolveSignerIdentity({
+      GITHUB_WORKFLOW_REF: "the-metafactory/arc/.github/workflows/publish.yml@refs/heads/main",
+    })).toBe("https://github.com/the-metafactory/arc/.github/workflows/publish.yml@refs/heads/main");
+  });
 });
 
 describe("verifySigstoreBundle", () => {

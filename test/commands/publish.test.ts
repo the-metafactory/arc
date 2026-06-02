@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtemp, rm } from "fs/promises";
+import { mkdtemp, rm, writeFile } from "fs/promises";
 import { join } from "path";
 import { tmpdir } from "os";
 import { createTestEnv, createPackageDir, type TestEnv } from "../helpers/test-env.js";
@@ -105,10 +105,12 @@ describe("arc publish command", () => {
     const pkgDir = await createPackageDir(testDir, validManifest);
 
     let uploadCalled = false;
+    let bundleUploadCalled = false;
     let ensureCalled = false;
     let registerCalled = false;
+    let registerBody: any;
 
-    mockFetch(async (url: any) => {
+    mockFetch(async (url: any, init?: RequestInit) => {
       const urlStr = String(url);
 
       if (urlStr.includes("/storage/upload")) {
@@ -119,8 +121,18 @@ describe("arc publish command", () => {
         );
       }
 
+      if (urlStr.includes("/storage/bundle/")) {
+        bundleUploadCalled = true;
+        return new Response(
+          JSON.stringify({ sha256: "any-sha", bundle_key: "packages/any-sha.bundle", size_bytes: 321 }),
+          { status: 201 },
+        );
+      }
+
       if (urlStr.includes("/versions")) {
         registerCalled = true;
+        if (typeof init?.body !== "string") throw new Error("expected JSON string body");
+        registerBody = JSON.parse(init.body);
         return new Response(JSON.stringify({ version_id: "uuid-1" }), { status: 201 });
       }
 
@@ -132,13 +144,97 @@ describe("arc publish command", () => {
       return new Response("Not found", { status: 404 });
     });
 
-    const result = await publish({ paths: env.arc, packageDir: pkgDir });
+    const result = await publish({
+      paths: env.arc,
+      packageDir: pkgDir,
+      signer: async (_artifactPath, bundlePath) => {
+        await writeFile(bundlePath, JSON.stringify({ mediaType: "application/vnd.dev.sigstore.bundle+json" }));
+        return {
+          success: true,
+          bundlePath,
+          signerIdentity: "https://github.com/the-metafactory/arc/.github/workflows/publish.yml@refs/heads/main",
+          signedAt: 1_780_000_000,
+        };
+      },
+    });
     expect(result.success).toBe(true);
     expect(result.name).toBe("my-skill");
     expect(result.version).toBe("1.0.0");
     expect(uploadCalled).toBe(true);
+    expect(bundleUploadCalled).toBe(true);
     expect(ensureCalled).toBe(true);
     expect(registerCalled).toBe(true);
+    expect(registerBody.signature_bundle_key).toBe("packages/any-sha.bundle");
+    expect(registerBody.signer_identity).toContain("publish.yml");
+    expect(registerBody.signed_at).toBe(1_780_000_000);
+  });
+
+  test("official publish fails closed when signing is unavailable", async () => {
+    await saveSources(env.arc.sourcesPath, metafactorySource());
+    const pkgDir = await createPackageDir(testDir, validManifest);
+
+    mockFetch(async (url: any) => {
+      const urlStr = String(url);
+      if (urlStr.includes("/storage/upload")) {
+        return new Response(
+          JSON.stringify({ sha256: "any-sha", r2_key: "packages/any-sha.tar.gz", size_bytes: 100 }),
+          { status: 409 },
+        );
+      }
+      return new Response("Unexpected", { status: 500 });
+    });
+
+    const result = await publish({
+      paths: env.arc,
+      packageDir: pkgDir,
+      signer: async () => ({ success: false, error: "cosign binary unavailable" }),
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("Sigstore signing failed");
+  });
+
+  test("explicit unsigned official override keeps legacy payload unsigned", async () => {
+    await saveSources(env.arc.sourcesPath, metafactorySource());
+    const pkgDir = await createPackageDir(testDir, validManifest);
+    let registerBody: any;
+
+    mockFetch(async (url: any, init?: RequestInit) => {
+      const urlStr = String(url);
+
+      if (urlStr.includes("/storage/upload")) {
+        return new Response(
+          JSON.stringify({ sha256: "any-sha", r2_key: "packages/any-sha.tar.gz", size_bytes: 100 }),
+          { status: 409 },
+        );
+      }
+
+      if (urlStr.includes("/versions")) {
+        if (typeof init?.body !== "string") throw new Error("expected JSON string body");
+        registerBody = JSON.parse(init.body);
+        return new Response(JSON.stringify({ version_id: "uuid-unsigned" }), { status: 201 });
+      }
+
+      if (urlStr.includes("/packages/")) {
+        return new Response(JSON.stringify({ namespace: "testns", name: "my-skill" }), { status: 200 });
+      }
+
+      return new Response("Not found", { status: 404 });
+    });
+
+    const result = await publish({
+      paths: env.arc,
+      packageDir: pkgDir,
+      allowUnsignedOfficial: true,
+      signer: async () => {
+        throw new Error("signer should not be called");
+      },
+    });
+
+    expect(result.success).toBe(true);
+    expect(registerBody.signature_bundle_key).toBeUndefined();
+    expect(registerBody.signer_identity).toBeUndefined();
+    expect(registerBody.signed_at).toBeUndefined();
   });
 
   test("version exists error (409)", async () => {
@@ -169,7 +265,7 @@ describe("arc publish command", () => {
       return new Response("Not found", { status: 404 });
     });
 
-    const result = await publish({ paths: env.arc, packageDir: pkgDir });
+    const result = await publish({ paths: env.arc, packageDir: pkgDir, allowUnsignedOfficial: true });
     expect(result.success).toBe(false);
     expect(result.error).toContain("immutable");
   });
