@@ -33,6 +33,9 @@ export interface PublishCommandResult {
   scope?: string;
   sha256?: string;
   url?: string;
+  submissionId?: string;
+  submissionStatus?: string;
+  reviewComment?: string | null;
   dryRun?: boolean;
   error?: string;
 }
@@ -166,6 +169,23 @@ export async function publish(opts: PublishOptions): Promise<PublishCommandResul
       return { success: false, error: registerResult.error };
     }
 
+    if (registerResult.submission?.status === "rejected") {
+      const reviewSuffix = registerResult.submission.reviewComment
+        ? ` Review comment: ${registerResult.submission.reviewComment}`
+        : "";
+      return {
+        success: false,
+        name: manifest.name,
+        version: manifest.version,
+        scope,
+        sha256: uploadResult.sha256,
+        submissionId: registerResult.submissionId,
+        submissionStatus: registerResult.submission.status,
+        reviewComment: registerResult.submission.reviewComment,
+        error: `Publish submission rejected${registerResult.submissionId ? ` (${registerResult.submissionId})` : ""}.${reviewSuffix}`,
+      };
+    }
+
     return {
       success: true,
       name: manifest.name,
@@ -173,6 +193,9 @@ export async function publish(opts: PublishOptions): Promise<PublishCommandResul
       scope,
       sha256: uploadResult.sha256,
       url: `${source.url}/package/@${scope}/${manifest.name}`,
+      submissionId: registerResult.submissionId,
+      submissionStatus: registerResult.submission?.status,
+      reviewComment: registerResult.submission?.reviewComment,
     };
   } finally {
     // Clean up temp tarball
@@ -200,6 +223,16 @@ export function formatPublish(result: PublishCommandResult): string {
       `[DRY RUN] Would publish @${result.scope}/${result.name} v${result.version}`,
       `  SHA-256:  ${result.sha256}`,
       `  Source:   metafactory`,
+    ].join("\n");
+  }
+
+  if (result.submissionStatus === "pending_review") {
+    return [
+      `Uploaded @${result.scope}/${result.name} v${result.version}; queued for review`,
+      `  SHA-256:      ${result.sha256}`,
+      ...(result.submissionId ? [`  Submission:   ${result.submissionId}`] : []),
+      `  Status:       ${result.submissionStatus}`,
+      `  URL:          ${result.url}`,
     ].join("\n");
   }
 

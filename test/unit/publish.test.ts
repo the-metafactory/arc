@@ -280,6 +280,28 @@ describe("registerVersion", () => {
     expect(result.versionId).toBe("uuid-123");
   });
 
+  test("successful registration preserves submission review status", async () => {
+    mockFetch(async () => new Response(
+      JSON.stringify({
+        version: { id: "version-123" },
+        submission_id: "submission-123",
+        submission: {
+          id: "submission-123",
+          status: "pending_review",
+          review_comment: "Awaiting sponsor approval",
+        },
+      }),
+      { status: 201 },
+    ));
+
+    const result = await registerVersion(makeSource(), "ns", "pkg", payload);
+    expect(result.success).toBe(true);
+    expect(result.versionId).toBe("version-123");
+    expect(result.submissionId).toBe("submission-123");
+    expect(result.submission?.status).toBe("pending_review");
+    expect(result.submission?.reviewComment).toBe("Awaiting sponsor approval");
+  });
+
   test("includes Sigstore metadata in registration payload", async () => {
     let requestBody: any;
     mockFetch(async (_url: any, init?: RequestInit) => {

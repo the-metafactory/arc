@@ -284,6 +284,94 @@ describe("arc publish command", () => {
     expect(registerBody.signed_at).toBeUndefined();
   });
 
+  test("reports queued review status instead of unconditional published", async () => {
+    await saveSources(env.arc.sourcesPath, metafactorySource());
+    const pkgDir = await createPackageDir(testDir, validManifest);
+
+    mockFetch(async (url: any) => {
+      const urlStr = String(url);
+
+      if (urlStr.includes("/storage/upload")) {
+        return new Response(
+          JSON.stringify({ sha256: "any-sha", r2_key: "packages/any-sha.tar.gz", size_bytes: 100 }),
+          { status: 409 },
+        );
+      }
+
+      if (urlStr.includes("/versions")) {
+        return new Response(
+          JSON.stringify({
+            version: { id: "version-queued" },
+            submission_id: "submission-queued",
+            submission: { id: "submission-queued", status: "pending_review" },
+          }),
+          { status: 201 },
+        );
+      }
+
+      if (urlStr.includes("/packages/")) {
+        return new Response(JSON.stringify({ namespace: "testns", name: "my-skill" }), { status: 200 });
+      }
+
+      return new Response("Not found", { status: 404 });
+    });
+
+    const result = await publish({ paths: env.arc, packageDir: pkgDir, allowUnsignedOfficial: true });
+    const output = formatPublish(result);
+
+    expect(result.success).toBe(true);
+    expect(result.submissionStatus).toBe("pending_review");
+    expect(result.submissionId).toBe("submission-queued");
+    expect(output).toContain("queued for review");
+    expect(output).toContain("submission-queued");
+    expect(output).not.toContain("Published @testns/my-skill");
+  });
+
+  test("rejected publish submission fails with review comment", async () => {
+    await saveSources(env.arc.sourcesPath, metafactorySource());
+    const pkgDir = await createPackageDir(testDir, validManifest);
+
+    mockFetch(async (url: any) => {
+      const urlStr = String(url);
+
+      if (urlStr.includes("/storage/upload")) {
+        return new Response(
+          JSON.stringify({ sha256: "any-sha", r2_key: "packages/any-sha.tar.gz", size_bytes: 100 }),
+          { status: 409 },
+        );
+      }
+
+      if (urlStr.includes("/versions")) {
+        return new Response(
+          JSON.stringify({
+            version: { id: "version-rejected" },
+            submission_id: "submission-rejected",
+            submission: {
+              id: "submission-rejected",
+              status: "rejected",
+              review_comment: "Capability declaration is incomplete",
+            },
+          }),
+          { status: 201 },
+        );
+      }
+
+      if (urlStr.includes("/packages/")) {
+        return new Response(JSON.stringify({ namespace: "testns", name: "my-skill" }), { status: 200 });
+      }
+
+      return new Response("Not found", { status: 404 });
+    });
+
+    const result = await publish({ paths: env.arc, packageDir: pkgDir, allowUnsignedOfficial: true });
+    const output = formatPublish(result);
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("rejected");
+    expect(result.error).toContain("Capability declaration is incomplete");
+    expect(output).toContain("Error:");
+  });
+
   test("version exists error (409)", async () => {
     await saveSources(env.arc.sourcesPath, metafactorySource());
     const pkgDir = await createPackageDir(testDir, validManifest);
