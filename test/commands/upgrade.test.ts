@@ -456,6 +456,70 @@ describe("upgradePackage — registry-extracted package (arc#187)", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// arc#184 — soma tarball upgrade reproducer
+// ---------------------------------------------------------------------------
+
+describe("arc#184 — extracted-tarball upgrade and check", () => {
+  test("upgrade --check reports the metafactory-available soma version", async () => {
+    const repo = await createMockSkillRepo(env.root, { name: "soma", version: "0.5.0" });
+    await install({ arc: env.arc, host: env.host, db: env.db, repoUrl: repo.url, yes: true });
+    env.db.prepare("UPDATE skills SET repo_url = ? WHERE name = ?").run("@metafactory/soma@0.5.0", "soma");
+    await addMetafactorySource(env);
+
+    const fixture = await buildRegistryFixture(env.root, "soma", "0.5.1");
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mockFetch(metafactoryRegistryHandler({
+      scope: "metafactory",
+      name: "soma",
+      latestVersion: "0.5.1",
+      sha256: fixture.sha256,
+    }));
+
+    try {
+      const results = await checkUpgrades(env.db, env.arc, env.host);
+      const output = formatCheckResults(results);
+
+      expect(output).toContain("soma: 0.5.0 → 0.5.1");
+      expect(output).not.toContain("All packages are up to date.");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("upgrade soma re-downloads a tarball extract instead of running git pull", async () => {
+    const repo = await createMockSkillRepo(env.root, { name: "soma", version: "0.5.0" });
+    await install({ arc: env.arc, host: env.host, db: env.db, repoUrl: repo.url, yes: true });
+    env.db.prepare("UPDATE skills SET repo_url = ? WHERE name = ?").run("@metafactory/soma@0.5.0", "soma");
+    await addMetafactorySource(env);
+
+    const fixture = await buildRegistryFixture(env.root, "soma", "0.5.1");
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mockFetch(metafactoryRegistryHandler({
+      scope: "metafactory",
+      name: "soma",
+      latestVersion: "0.5.1",
+      sha256: fixture.sha256,
+      tarball: fixture.bytes,
+    }));
+
+    try {
+      const result = await upgradePackage(env.db, env.arc, env.host, "soma");
+
+      expect(result.success).toBe(true);
+      expect(result.oldVersion).toBe("0.5.0");
+      expect(result.newVersion).toBe("0.5.1");
+      expect(result.error ?? "").not.toContain("git pull failed");
+      expect(result.error ?? "").not.toContain("not a git repository");
+
+      const row = env.db.prepare("SELECT version FROM skills WHERE name = ?").get("soma") as { version: string };
+      expect(row.version).toBe("0.5.1");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
 describe("upgradeLibrary", () => {
   test("with force re-runs upgrade for library artifacts", async () => {
     // Install a regular package and set its library_name in the DB
