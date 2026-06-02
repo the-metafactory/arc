@@ -6,7 +6,8 @@
 
 import { join } from "path";
 import { existsSync } from "fs";
-import { writeFile, mkdir, chmod } from "fs/promises";
+import { writeFile, mkdir, chmod, rm } from "fs/promises";
+import { tmpdir } from "os";
 import { errorMessage } from "./errors.js";
 
 // ---------------------------------------------------------------------------
@@ -168,6 +169,42 @@ export function resolveSignerIdentity(env: Record<string, string | undefined> = 
   return undefined;
 }
 
+type SigningAuth =
+  | { kind: "github-actions"; signerIdentity?: string }
+  | { kind: "identity-token"; token: string; signerIdentity?: string }
+  | { kind: "identity-token-file"; tokenFile: string; signerIdentity?: string }
+  | { kind: "unsupported"; error: string };
+
+export function resolveSigningAuth(env: Record<string, string | undefined> = process.env): SigningAuth {
+  const signerIdentity = resolveSignerIdentity(env);
+  if (env.ARC_SIGSTORE_IDENTITY_TOKEN_FILE) {
+    return { kind: "identity-token-file", tokenFile: env.ARC_SIGSTORE_IDENTITY_TOKEN_FILE, signerIdentity };
+  }
+  if (env.ARC_SIGSTORE_IDENTITY_TOKEN) {
+    return { kind: "identity-token", token: env.ARC_SIGSTORE_IDENTITY_TOKEN, signerIdentity };
+  }
+
+  const hasGitHubActionsOidc =
+    env.GITHUB_ACTIONS === "true"
+    && Boolean(env.GITHUB_WORKFLOW_REF)
+    && Boolean(env.ACTIONS_ID_TOKEN_REQUEST_TOKEN)
+    && Boolean(env.ACTIONS_ID_TOKEN_REQUEST_URL);
+
+  if (hasGitHubActionsOidc) {
+    return { kind: "github-actions", signerIdentity };
+  }
+
+  return {
+    kind: "unsupported",
+    error: [
+      "Sigstore signing requires GitHub Actions OIDC",
+      "(workflow permissions: id-token: write, contents: read)",
+      "or ARC_SIGSTORE_IDENTITY_TOKEN_FILE / ARC_SIGSTORE_IDENTITY_TOKEN.",
+      "Local cosign browser/device auth is disabled because phase 1 install verification trusts GitHub Actions OIDC.",
+    ].join(" "),
+  };
+}
+
 /**
  * Sign an artifact with keyless cosign and write the Sigstore bundle to disk.
  */
@@ -175,31 +212,58 @@ export async function signSigstoreBundle(
   artifactPath: string,
   bundlePath: string,
 ): Promise<SignSigstoreResult> {
+  const auth = resolveSigningAuth();
+  if (auth.kind === "unsupported") {
+    return { success: false, error: auth.error };
+  }
+
   const cosign = await ensureCosignBinary();
   if (!cosign.path) {
     return { success: false, error: cosign.error ?? "cosign binary unavailable" };
   }
 
   const signedAt = Math.floor(Date.now() / 1000);
-  const result = Bun.spawnSync(
-    [
+  let tempIdentityTokenPath: string | undefined;
+  const authArgs: string[] = [];
+
+  if (auth.kind === "github-actions") {
+    authArgs.push("--oidc-provider", "github-actions", "--fulcio-auth-flow", "token");
+  } else if (auth.kind === "identity-token-file") {
+    authArgs.push("--identity-token", auth.tokenFile);
+  } else {
+    tempIdentityTokenPath = join(tmpdir(), `arc-sigstore-token-${process.pid}-${Date.now()}.token`);
+    await writeFile(tempIdentityTokenPath, auth.token, { mode: 0o600 });
+    authArgs.push("--identity-token", tempIdentityTokenPath);
+  }
+
+  const args = [
       cosign.path,
       "sign-blob",
       "--bundle", bundlePath,
+      ...authArgs,
       "--yes",
       artifactPath,
-    ],
-    { stdout: "pipe", stderr: "pipe" },
-  );
+  ];
 
-  const stdout = result.stdout.toString().trim();
-  const stderr = result.stderr.toString().trim();
+  let result: ReturnType<typeof Bun.spawnSync>;
+  try {
+    result = Bun.spawnSync(args, { stdout: "pipe", stderr: "pipe" });
+  } finally {
+    if (tempIdentityTokenPath) {
+      await rm(tempIdentityTokenPath, { force: true }).catch(() => {
+        // best-effort cleanup
+      });
+    }
+  }
+
+  const stdout = result.stdout?.toString().trim() ?? "";
+  const stderr = result.stderr?.toString().trim() ?? "";
 
   if (result.exitCode === 0) {
     return {
       success: true,
       bundlePath,
-      signerIdentity: resolveSignerIdentity(),
+      signerIdentity: auth.signerIdentity,
       signedAt,
       output: stdout || stderr,
     };

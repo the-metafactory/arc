@@ -4,6 +4,7 @@ import {
   findCosignBinary,
   ensureCosignBinary,
   resolveSignerIdentity,
+  signSigstoreBundle,
   verifySigstoreBundle,
 } from "../../src/lib/cosign.js";
 
@@ -70,6 +71,50 @@ describe("resolveSignerIdentity", () => {
     expect(resolveSignerIdentity({
       GITHUB_WORKFLOW_REF: "the-metafactory/arc/.github/workflows/publish.yml@refs/heads/main",
     })).toBe("https://github.com/the-metafactory/arc/.github/workflows/publish.yml@refs/heads/main");
+  });
+});
+
+describe("signSigstoreBundle", () => {
+  test("fails fast outside supported non-interactive signing environments", async () => {
+    const saved = {
+      ARC_SIGSTORE_IDENTITY_TOKEN: process.env.ARC_SIGSTORE_IDENTITY_TOKEN,
+      ARC_SIGSTORE_IDENTITY_TOKEN_FILE: process.env.ARC_SIGSTORE_IDENTITY_TOKEN_FILE,
+      ACTIONS_ID_TOKEN_REQUEST_TOKEN: process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN,
+      ACTIONS_ID_TOKEN_REQUEST_URL: process.env.ACTIONS_ID_TOKEN_REQUEST_URL,
+      GITHUB_ACTIONS: process.env.GITHUB_ACTIONS,
+      GITHUB_WORKFLOW_REF: process.env.GITHUB_WORKFLOW_REF,
+    };
+
+    try {
+      delete process.env.ARC_SIGSTORE_IDENTITY_TOKEN;
+      delete process.env.ARC_SIGSTORE_IDENTITY_TOKEN_FILE;
+      delete process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN;
+      delete process.env.ACTIONS_ID_TOKEN_REQUEST_URL;
+      delete process.env.GITHUB_ACTIONS;
+      delete process.env.GITHUB_WORKFLOW_REF;
+
+      const result = await signSigstoreBundle(
+        "/nonexistent/artifact.tar.gz",
+        "/nonexistent/artifact.bundle",
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("GitHub Actions OIDC");
+      expect(result.error).toContain("id-token: write");
+    } finally {
+      if (saved.ARC_SIGSTORE_IDENTITY_TOKEN === undefined) delete process.env.ARC_SIGSTORE_IDENTITY_TOKEN;
+      else process.env.ARC_SIGSTORE_IDENTITY_TOKEN = saved.ARC_SIGSTORE_IDENTITY_TOKEN;
+      if (saved.ARC_SIGSTORE_IDENTITY_TOKEN_FILE === undefined) delete process.env.ARC_SIGSTORE_IDENTITY_TOKEN_FILE;
+      else process.env.ARC_SIGSTORE_IDENTITY_TOKEN_FILE = saved.ARC_SIGSTORE_IDENTITY_TOKEN_FILE;
+      if (saved.ACTIONS_ID_TOKEN_REQUEST_TOKEN === undefined) delete process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN;
+      else process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN = saved.ACTIONS_ID_TOKEN_REQUEST_TOKEN;
+      if (saved.ACTIONS_ID_TOKEN_REQUEST_URL === undefined) delete process.env.ACTIONS_ID_TOKEN_REQUEST_URL;
+      else process.env.ACTIONS_ID_TOKEN_REQUEST_URL = saved.ACTIONS_ID_TOKEN_REQUEST_URL;
+      if (saved.GITHUB_ACTIONS === undefined) delete process.env.GITHUB_ACTIONS;
+      else process.env.GITHUB_ACTIONS = saved.GITHUB_ACTIONS;
+      if (saved.GITHUB_WORKFLOW_REF === undefined) delete process.env.GITHUB_WORKFLOW_REF;
+      else process.env.GITHUB_WORKFLOW_REF = saved.GITHUB_WORKFLOW_REF;
+    }
   });
 });
 

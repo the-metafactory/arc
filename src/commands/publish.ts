@@ -10,7 +10,7 @@ import {
   ensurePackageExists,
   registerVersion,
 } from "../lib/publish.js";
-import { signSigstoreBundle, type SignSigstoreResult } from "../lib/cosign.js";
+import { resolveSigningAuth, signSigstoreBundle, type SignSigstoreResult } from "../lib/cosign.js";
 import { loadSources, findMetafactorySource } from "../lib/sources.js";
 import { readManifest } from "../lib/manifest.js";
 import type { ArcPaths } from "../types.js";
@@ -104,6 +104,13 @@ export async function publish(opts: PublishOptions): Promise<PublishCommandResul
   let sigstoreBundlePath: string | undefined;
 
   try {
+    if (source.tier === "official" && !opts.allowUnsignedOfficial && !opts.signer) {
+      const signingAuth = resolveSigningAuth();
+      if (signingAuth.kind === "unsupported") {
+        return { success: false, error: `Sigstore signing failed: ${signingAuth.error}` };
+      }
+    }
+
     // 7. Upload tarball
     const uploadResult = await uploadBundle(tarballPath, source, sha256);
     if (!uploadResult.success) {
