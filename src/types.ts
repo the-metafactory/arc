@@ -795,6 +795,12 @@ export interface UploadResult {
 export interface RegisterResult {
   success: boolean;
   versionId?: string;
+  submissionId?: string;
+  submission?: {
+    id?: string;
+    status?: string;
+    reviewComment?: string | null;
+  };
   error?: string;
   statusCode?: number;
 }

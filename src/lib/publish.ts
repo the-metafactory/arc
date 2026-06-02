@@ -407,8 +407,25 @@ export async function registerVersion(
       });
 
       if (resp.status === 201 || resp.status === 200) {
-        const body = (await resp.json()) as { version_id?: string };
-        return { success: true, versionId: body.version_id, statusCode: resp.status };
+        const body = (await resp.json()) as {
+          version_id?: string;
+          version?: { id?: string };
+          submission_id?: string;
+          submission?: { id?: string; status?: string; review_comment?: string | null };
+        };
+        return {
+          success: true,
+          versionId: body.version_id ?? body.version?.id,
+          submissionId: body.submission_id ?? body.submission?.id,
+          submission: body.submission
+            ? {
+              id: body.submission.id,
+              status: body.submission.status,
+              reviewComment: body.submission.review_comment ?? null,
+            }
+            : undefined,
+          statusCode: resp.status,
+        };
       }
 
       const body = (await resp.json().catch(() => ({}))) as { error?: unknown; message?: unknown };
