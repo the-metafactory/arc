@@ -15,6 +15,20 @@ import { README_VARIANTS } from "./bundle.js";
 const API_TIMEOUT_MS = 10_000;
 const UPLOAD_TIMEOUT_MS = 120_000;
 
+// arc#204: POST /versions runs L1+L2 validation IN-BAND on the registry
+// (meta-factory#300) — ~9s for an 8 MB package, more under load. The shared
+// 10s API timeout sat right on that edge: aborting mid-request disconnects
+// the client, Cloudflare cancels the request context, and the submission is
+// stranded at `validating` (then system-rejected by the reconciler). Give
+// registration its own budget well clear of the in-band validation time.
+const REGISTER_TIMEOUT_MS = 60_000;
+
+/** Submission statuses that end the publish-side wait (human review is next, or it's decided). */
+const TERMINAL_SUBMISSION_STATUSES = new Set(["pending_review", "approved", "rejected"]);
+
+const SUBMISSION_POLL_INTERVAL_MS = 5_000;
+const SUBMISSION_POLL_TIMEOUT_MS = 90_000;
+
 // ── Debug logging ────────────────────────────────────────────
 
 function debugLog(msg: string): void {
@@ -410,11 +424,58 @@ export async function uploadSigstoreBundle(
 }
 
 /** Register a new version for an existing package */
+export interface RegisterVersionOpts {
+  /** Poll cadence for the post-timeout submission probe (tests inject ~1ms). */
+  pollIntervalMs?: number;
+  /** Overall budget for polling the submission to a terminal status. */
+  pollTimeoutMs?: number;
+}
+
+/**
+ * Poll the per-version submission endpoint until the submission reaches a
+ * terminal status or the budget runs out (arc#204). Returns the last
+ * submission seen (terminal or not), or undefined when none is visible.
+ */
+async function pollSubmissionToTerminal(
+  submissionUrl: string,
+  headers: Record<string, string>,
+  opts?: RegisterVersionOpts,
+): Promise<{ submission: NonNullable<RegisterResult["submission"]>; terminal: boolean } | undefined> {
+  const intervalMs = opts?.pollIntervalMs ?? SUBMISSION_POLL_INTERVAL_MS;
+  const deadline = Date.now() + (opts?.pollTimeoutMs ?? SUBMISSION_POLL_TIMEOUT_MS);
+  let last: RegisterResult["submission"] | undefined;
+
+  for (;;) {
+    const submission = await fetch(submissionUrl, {
+      headers,
+      signal: AbortSignal.timeout(API_TIMEOUT_MS),
+    })
+      .then(async (resp) => {
+        if (!resp.ok) return undefined;
+        const body = (await resp.json().catch(() => ({}))) as SubmissionBody;
+        return normalizeSubmission(body);
+      })
+      .catch(() => undefined);
+
+    if (submission) {
+      last = submission;
+      if (submission.status && TERMINAL_SUBMISSION_STATUSES.has(submission.status)) {
+        return { submission, terminal: true };
+      }
+    }
+    if (Date.now() >= deadline) {
+      return last ? { submission: last, terminal: false } : undefined;
+    }
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+}
+
 export async function registerVersion(
   source: RegistrySource,
   scope: string,
   name: string,
   payload: RegisterPayload,
+  opts?: RegisterVersionOpts,
 ): Promise<RegisterResult> {
   const url = `${source.url}/api/v1/packages/${encodeURIComponent(`@${scope}`)}/${encodeURIComponent(name)}/versions`;
   const submissionUrl = `${url}/${encodeURIComponent(payload.version)}/submission`;
@@ -438,7 +499,8 @@ export async function registerVersion(
       method: "POST",
       headers,
       body: JSON.stringify(serverPayload),
-      signal: AbortSignal.timeout(API_TIMEOUT_MS),
+      // arc#204: dedicated budget — this endpoint validates in-band.
+      signal: AbortSignal.timeout(REGISTER_TIMEOUT_MS),
     });
 
     if (resp.status === 201 || resp.status === 200) {
@@ -507,6 +569,44 @@ export async function registerVersion(
 
     return { success: false, error: serverError ?? `Registration failed: HTTP ${resp.status}`, statusCode: resp.status };
   } catch (err) {
-    return { success: false, error: `Network error during version registration: ${(err as Error).message}` };
+    const e = err as Error;
+
+    // arc#204: an aborted/timed-out POST is NOT a plain network error —
+    // the server may have created the submission and may even finish
+    // validating it (or the disconnect may have stranded it; see
+    // meta-factory#520). Poll the per-version submission endpoint to a
+    // terminal status and report reality instead of guessing.
+    if (e.name === "TimeoutError" || e.name === "AbortError") {
+      debugLog(`registration request aborted (${e.name}); polling submission status`);
+      const polled = await pollSubmissionToTerminal(submissionUrl, buildPublishHeaders(source), opts);
+
+      if (polled?.terminal) {
+        return {
+          success: true,
+          submissionId: polled.submission.id,
+          submission: polled.submission,
+          statusCode: 200,
+        };
+      }
+
+      if (polled) {
+        return {
+          success: false,
+          error:
+            `Registration request timed out and submission ${polled.submission.id ?? "<unknown>"} ` +
+            `is still '${polled.submission.status}' after polling — the registry is processing it. ` +
+            `Check ${submissionUrl} before retrying.`,
+        };
+      }
+
+      return {
+        success: false,
+        error:
+          "Registration request timed out and no submission is visible for this version — " +
+          "the request likely never reached the registry. Retry the publish.",
+      };
+    }
+
+    return { success: false, error: `Network error during version registration: ${e.message}` };
   }
 }
