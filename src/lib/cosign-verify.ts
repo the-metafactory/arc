@@ -7,7 +7,8 @@
  * binary wrapper) along with the expected signer identity and OIDC issuer.
  *
  * Scope (OQ-14): GitHub Actions OIDC only — other issuers are out of scope
- * for phase 1. Anonymous bundle fetch (DD-80): no Authorization header.
+ * for phase 1. Bundle fetch carries the source's bearer token when present
+ * (#207 — the registry route is requireAuth()'d like the tarball download).
  */
 
 import { writeFile, unlink } from "fs/promises";
