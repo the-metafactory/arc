@@ -92,8 +92,14 @@ describe("verifyPackageSigstore", () => {
     expect(result.reason).toMatch(/not sigstore-signed/i);
   });
 
-  test("verified=false when signature_bundle_key present but signer_identity missing", async () => {
+  // soma#303: a signed bundle whose registry record lacks signer_identity is
+  // a registry DATA gap, not a tampered artifact. Hard-failing bricked every
+  // signed install when the registry never populated the field. Degrade to
+  // verified=null (warn path; --strict-signing still refuses on official
+  // tier) and offer ARC_SIGSTORE_EXPECTED_IDENTITY to verify anyway.
+  test("verified=null (degraded) when signature_bundle_key present but signer_identity missing", async () => {
     env = await createTestEnv();
+    delete process.env.ARC_SIGSTORE_EXPECTED_IDENTITY;
     const result = await verifyPackageSigstore({
       source: source(),
       sha256: "abc",
@@ -101,8 +107,56 @@ describe("verifyPackageSigstore", () => {
       artifactPath: "/tmp/fake.tgz",
       tempDir: env.arc.reposDir,
     });
-    expect(result.verified).toBe(false);
+    expect(result.verified).toBeNull();
     expect(result.reason).toMatch(/signer_identity/i);
+    expect(result.reason).toMatch(/ARC_SIGSTORE_EXPECTED_IDENTITY/);
+  });
+
+  test("ARC_SIGSTORE_EXPECTED_IDENTITY enables full verification when registry omits identity", async () => {
+    env = await createTestEnv();
+    const expected =
+      "https://github.com/owner/repo/.github/workflows/publish.yml@refs/heads/main";
+    process.env.ARC_SIGSTORE_EXPECTED_IDENTITY = expected;
+    try {
+      globalThis.fetch = mockFetch(async () => new Response("{}", { status: 200 }));
+      let seenIdentity: string | undefined;
+      const result = await verifyPackageSigstore({
+        source: source(),
+        sha256: "abc",
+        signing: { signature_bundle_key: "packages/abc.bundle", signer_identity: null },
+        artifactPath: "/tmp/fake.tgz",
+        tempDir: env.arc.reposDir,
+        verifier: async (_artifact, _bundle, identity) => {
+          seenIdentity = identity;
+          return { valid: true };
+        },
+      });
+      expect(seenIdentity).toBe(expected);
+      expect(result.verified).toBe(true);
+      expect(result.reason).toMatch(/operator-supplied/i);
+    } finally {
+      delete process.env.ARC_SIGSTORE_EXPECTED_IDENTITY;
+    }
+  });
+
+  test("ARC_SIGSTORE_EXPECTED_IDENTITY mismatch still fails verification", async () => {
+    env = await createTestEnv();
+    process.env.ARC_SIGSTORE_EXPECTED_IDENTITY =
+      "https://github.com/owner/repo/.github/workflows/publish.yml@refs/heads/main";
+    try {
+      globalThis.fetch = mockFetch(async () => new Response("{}", { status: 200 }));
+      const result = await verifyPackageSigstore({
+        source: source(),
+        sha256: "abc",
+        signing: { signature_bundle_key: "packages/abc.bundle", signer_identity: null },
+        artifactPath: "/tmp/fake.tgz",
+        tempDir: env.arc.reposDir,
+        verifier: async () => ({ valid: false, error: "no matching signatures" }),
+      });
+      expect(result.verified).toBe(false);
+    } finally {
+      delete process.env.ARC_SIGSTORE_EXPECTED_IDENTITY;
+    }
   });
 
   test("verified=false when bundle download fails", async () => {

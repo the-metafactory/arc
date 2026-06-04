@@ -27,7 +27,7 @@ export interface VersionSigstoreSigning {
 }
 
 export interface SigstoreVerifyResult {
-  /** true = verified; false = verified-and-rejected; null = not-applicable (unsigned). */
+  /** true = verified; false = verified-and-rejected; null = unverifiable (unsigned, or signed but registry served no identity). */
   verified: boolean | null;
   reason: string;
 }
@@ -93,10 +93,26 @@ export async function verifyPackageSigstore(
     return { verified: null, reason: "version is not sigstore-signed (legacy or unsigned publish)" };
   }
 
-  if (!signing.signer_identity) {
+  // soma#303: a bundle without a registry-served signer_identity is a
+  // registry DATA gap (the bundle exists; only the expected-identity record
+  // is missing), not evidence of tampering. Hard-failing here bricked every
+  // signed install when the registry never populated the field (the
+  // meta-factory#523 extraction bug). Two recovery paths:
+  //   1. ARC_SIGSTORE_EXPECTED_IDENTITY — operator supplies the identity;
+  //      full cosign verification runs against it.
+  //   2. Otherwise degrade to verified=null: callers treat it like the
+  //      unsigned case (prominent warning on official tier, and
+  //      --strict-signing still turns it into a refusal).
+  const operatorIdentity = process.env.ARC_SIGSTORE_EXPECTED_IDENTITY;
+  const expectedIdentity = signing.signer_identity ?? operatorIdentity ?? null;
+  const identitySource = signing.signer_identity ? "registry" : "operator-supplied";
+
+  if (!expectedIdentity) {
     return {
-      verified: false,
-      reason: "signer_identity missing — cannot verify Sigstore bundle without expected identity",
+      verified: null,
+      reason:
+        "bundle present but registry served no signer_identity — cannot verify; " +
+        "set ARC_SIGSTORE_EXPECTED_IDENTITY=<workflow identity> to verify against a known identity",
     };
   }
 
@@ -107,9 +123,12 @@ export async function verifyPackageSigstore(
   }
 
   try {
-    const result = await verifier(artifactPath, dl.path, signing.signer_identity, TRUSTED_OIDC_ISSUER);
+    const result = await verifier(artifactPath, dl.path, expectedIdentity, TRUSTED_OIDC_ISSUER);
     if (result.valid) {
-      return { verified: true, reason: `Sigstore bundle verified for ${signing.signer_identity}` };
+      return {
+        verified: true,
+        reason: `Sigstore bundle verified for ${expectedIdentity} (${identitySource} identity)`,
+      };
     }
     return { verified: false, reason: result.error ?? "cosign verification failed" };
   } finally {
