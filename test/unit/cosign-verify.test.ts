@@ -62,7 +62,25 @@ describe("downloadSigstoreBundle", () => {
     expect(result.path).toBeUndefined();
   });
 
-  test("does not send Authorization header (anonymous per DD-80)", async () => {
+  // arc#207: the registry's GET /storage/bundle/:sha256 is requireAuth()'d
+  // ("same access level as tarball download") — the old anonymous-per-DD-80
+  // behavior 401'd every signed install once the identity gap (#303) was
+  // fixed and the download line became reachable.
+  test("sends Authorization when the metafactory source has a token (#207)", async () => {
+    env = await createTestEnv();
+    let authSeen: string | null | undefined;
+    globalThis.fetch = mockFetch(async (_input: any, init?: any) => {
+      authSeen = new Headers(init?.headers).get("Authorization");
+      return new Response("{}", { status: 200 });
+    });
+    await downloadSigstoreBundle("https://reg.test/bundle", env.arc.reposDir, {
+      ...source(),
+      token: "test-token",
+    });
+    expect(authSeen).toBe("Bearer test-token");
+  });
+
+  test("stays anonymous when no source is provided", async () => {
     env = await createTestEnv();
     let authSeen: string | null | undefined;
     globalThis.fetch = mockFetch(async (_input: any, init?: any) => {

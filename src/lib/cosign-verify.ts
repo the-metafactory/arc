@@ -44,18 +44,36 @@ export type SigstoreVerifier = (
 // ---------------------------------------------------------------------------
 
 /**
- * Download a Sigstore bundle to a temp file. Anonymous (no Authorization
- * header) per DD-80 — bundles are public, the registry route is unauth'd.
+ * Download a Sigstore bundle to a temp file.
+ *
+ * arc#207: the registry's `GET /storage/bundle/:sha256` is `requireAuth()`'d
+ * ("same access level as tarball download" — meta-factory routes/storage.ts),
+ * so a metafactory source's bearer token is attached exactly like
+ * `downloadPackage` does for the tarball. The old anonymous-per-DD-80
+ * behavior 401'd every signed install once the identity gap (#303) was
+ * fixed and this download became reachable. Sources without a token stay
+ * anonymous so public installs keep working if the route ever opens up.
+ *
  * Never throws; returns `{error}` on any failure.
  */
 export async function downloadSigstoreBundle(
   url: string,
   tempDir: string,
+  source?: RegistrySource,
 ): Promise<{ path?: string; error?: string }> {
   try {
+    const headers: Record<string, string> = { Accept: "application/json" };
+    if (source?.token) {
+      headers.Authorization = `Bearer ${source.token}`;
+    }
     const resp = await fetch(url, {
-      headers: { Accept: "application/json" },
+      headers,
       signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      // The bundle route serves same-origin from the registry worker; no
+      // redirect to third-party storage exists today. `manual` fail-closes
+      // if that ever changes, instead of silently forwarding the bearer
+      // cross-origin (same concern downloadPackage handles for tarballs).
+      redirect: "manual",
     });
     if (!resp.ok) {
       return { error: `bundle not found or unreachable (HTTP ${resp.status})` };
@@ -117,7 +135,7 @@ export async function verifyPackageSigstore(
   }
 
   const bundleUrl = `${source.url}/api/v1/storage/bundle/${sha256}`;
-  const dl = await downloadSigstoreBundle(bundleUrl, tempDir);
+  const dl = await downloadSigstoreBundle(bundleUrl, tempDir, source);
   if (!dl.path) {
     return { verified: false, reason: `bundle ${dl.error ?? "download failed"}` };
   }
