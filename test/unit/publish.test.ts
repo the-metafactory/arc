@@ -426,6 +426,90 @@ describe("registerVersion", () => {
     expect(result.statusCode).toBe(400);
   });
 
+  // arc#204: POST /versions runs validation in-band server-side. A client
+  // timeout mid-request previously surfaced as a bare network error while
+  // the submission kept (or lost) its server-side life invisibly — and a
+  // retry's 409-probe then reported "validating" as success. On timeout,
+  // poll the per-version submission endpoint to a terminal status and
+  // report THAT, or fail honestly.
+
+  function timeoutError(): Error {
+    const err = new Error("The operation timed out");
+    err.name = "TimeoutError";
+    return err;
+  }
+
+  test("POST timeout then poll recovers terminal submission as success", async () => {
+    let getCount = 0;
+    mockFetch(async (url: any, init: any) => {
+      if (init?.method === "POST") throw timeoutError();
+      getCount++;
+      return new Response(
+        JSON.stringify({
+          id: "sub-recovered",
+          status: getCount < 3 ? "validating" : "pending_review",
+          review_comment: null,
+        }),
+        { status: 200 },
+      );
+    });
+
+    const result = await registerVersion(makeSource(), "ns", "pkg", payload, {
+      pollIntervalMs: 1,
+      pollTimeoutMs: 1_000,
+    });
+    expect(result.success).toBe(true);
+    expect(result.submissionId).toBe("sub-recovered");
+    expect(result.submission?.status).toBe("pending_review");
+  });
+
+  test("POST timeout with submission stuck non-terminal fails honestly", async () => {
+    mockFetch(async (url: any, init: any) => {
+      if (init?.method === "POST") throw timeoutError();
+      return new Response(
+        JSON.stringify({ id: "sub-stuck", status: "validating", review_comment: null }),
+        { status: 200 },
+      );
+    });
+
+    const result = await registerVersion(makeSource(), "ns", "pkg", payload, {
+      pollIntervalMs: 1,
+      pollTimeoutMs: 20,
+    });
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/timed out/i);
+    expect(result.error).toContain("validating");
+    expect(result.error).toContain("sub-stuck");
+  });
+
+  test("POST timeout with no visible submission fails with retry guidance", async () => {
+    mockFetch(async (url: any, init: any) => {
+      if (init?.method === "POST") throw timeoutError();
+      return new Response("Not found", { status: 404 });
+    });
+
+    const result = await registerVersion(makeSource(), "ns", "pkg", payload, {
+      pollIntervalMs: 1,
+      pollTimeoutMs: 20,
+    });
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/timed out/i);
+    expect(result.error).toMatch(/retry/i);
+  });
+
+  test("non-timeout network errors keep plain network-error reporting", async () => {
+    mockFetch(async () => {
+      throw new Error("connection reset");
+    });
+
+    const result = await registerVersion(makeSource(), "ns", "pkg", payload, {
+      pollIntervalMs: 1,
+      pollTimeoutMs: 20,
+    });
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("Network error");
+  });
+
   test("does not retry state-changing 500 registration errors", async () => {
     let callCount = 0;
     mockFetch(async () => {
