@@ -27,7 +27,7 @@ export interface VersionSigstoreSigning {
 }
 
 export interface SigstoreVerifyResult {
-  /** true = verified; false = verified-and-rejected; null = not-applicable (unsigned). */
+  /** true = verified; false = verified-and-rejected; null = unverifiable (unsigned, or signed but registry served no identity). */
   verified: boolean | null;
   reason: string;
 }
