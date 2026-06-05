@@ -304,9 +304,13 @@ export async function upgradePackage(
   const newVersion = manifest.version;
 
   if (compareSemver(oldVersion, newVersion) >= 0 && !opts?.force) {
-    // Version matches — but for rules packages, still regenerate templates
-    // (template content may have changed even if version was already bumped)
-    if (manifest.type === "rules" && manifest.provides?.templates?.length) {
+    // Version matches — but if this package provides templates, still
+    // regenerate them (template content may have changed even if the version
+    // was already bumped). Keyed off `provides.templates`, NOT `type`: any
+    // package that declares templates (e.g. type:rules OR
+    // type:governance-overlay like compass) regenerates them in its consumers
+    // (arc#203).
+    if (manifest.provides?.templates?.length) {
       const consumerDirs = findConsumerRepos(manifest.provides.templates);
       for (const dir of consumerDirs) {
         await generateRules(installPath, manifest.provides.templates, dir);
@@ -364,9 +368,12 @@ export async function upgradePackage(
     await registerHooks(name, resolvedHooks, settingsPath);
   }
 
-  // Re-generate rules templates if this is a rules package
-  // Scan all repos with matching config files, not just cwd
-  if (manifest.type === "rules" && manifest.provides?.templates?.length) {
+  // Re-generate templates for any package that provides them.
+  // Scan all repos with matching config files, not just cwd. Keyed off
+  // `provides.templates`, NOT `type`: type:rules AND type:governance-overlay
+  // (compass) both regenerate the templates they declare into consumers
+  // (arc#203).
+  if (manifest.provides?.templates?.length) {
     const consumerDirs = findConsumerRepos(manifest.provides.templates);
     for (const dir of consumerDirs) {
       await generateRules(installPath, manifest.provides.templates, dir);
