@@ -10,8 +10,8 @@ import {
   formatUpgradeResults,
 } from "../../src/commands/upgrade.js";
 import { saveSources } from "../../src/lib/sources.js";
-import { writeFile, mkdir } from "fs/promises";
-import { existsSync } from "fs";
+import { writeFile, mkdir, rm } from "fs/promises";
+import { existsSync, readFileSync, writeFileSync } from "fs";
 import { join } from "path";
 import YAML from "yaml";
 import type { RegistryConfig, SourcesConfig } from "../../src/types.js";
@@ -517,6 +517,184 @@ describe("arc#184 — extracted-tarball upgrade and check", () => {
     } finally {
       globalThis.fetch = originalFetch;
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// arc#203 — template regen is keyed off provides.templates, NOT type:rules.
+// A governance-overlay package (compass) that declares provides.templates must
+// regenerate its consumers' CLAUDE.md on upgrade, exactly like a type:rules
+// package would.
+// ---------------------------------------------------------------------------
+
+/**
+ * Build + git-commit a package repo that declares `provides.templates` under
+ * the given `type`. Ships a CLAUDE.md.template under templates/ + a
+ * capabilities block, mirroring compass.
+ */
+async function createMockTemplateRepo(
+  root: string,
+  opts: { name: string; version: string; type: string; templateBody: string },
+): Promise<{ path: string; url: string }> {
+  const repoDir = join(root, `mock-${opts.name}`);
+  await mkdir(join(repoDir, "templates"), { recursive: true });
+  await writeFile(join(repoDir, "templates", "CLAUDE.md.template"), opts.templateBody);
+
+  const manifest = {
+    name: opts.name,
+    version: opts.version,
+    type: opts.type,
+    tier: "custom",
+    author: { name: "tester", github: "tester" },
+    provides: {
+      templates: [
+        { source: "templates/CLAUDE.md.template", target: "CLAUDE.md", config: "agents-md.yaml" },
+      ],
+    },
+    depends_on: { tools: [{ name: "bun", version: ">=1.0.0" }] },
+    capabilities: {
+      filesystem: { read: [], write: [] },
+      network: [],
+      bash: { allowed: false },
+      secrets: [],
+    },
+  };
+  await writeFile(join(repoDir, "arc-manifest.yaml"), YAML.stringify(manifest));
+
+  Bun.spawnSync(["git", "init"], { cwd: repoDir, stdout: "pipe", stderr: "pipe" });
+  Bun.spawnSync(["git", "add", "."], { cwd: repoDir, stdout: "pipe", stderr: "pipe" });
+  Bun.spawnSync(
+    ["git", "-c", "user.name=Test", "-c", "user.email=test@test.com", "commit", "-m", "Initial commit"],
+    { cwd: repoDir, stdout: "pipe", stderr: "pipe" },
+  );
+  return { path: repoDir, url: repoDir };
+}
+
+/**
+ * Flip the on-disk manifest `type` to `governance-overlay` and commit, mirroring
+ * the LIVE compass scenario: compass was installed while it was `type: rules`
+ * (the DB still records artifact_type:rules), then its manifest later changed to
+ * `type: governance-overlay`. upgradePackage re-reads the manifest from disk, so
+ * the regen guard sees `governance-overlay`. This is the exact condition arc#203
+ * fixes — the installer's own type dispatch (which doesn't yet accept
+ * governance-overlay) is a separate concern outside this regen path.
+ */
+function flipManifestTypeToGovernanceOverlay(repoPath: string): void {
+  const manifestPath = join(repoPath, "arc-manifest.yaml");
+  const raw = readFileSync(manifestPath, "utf-8");
+  const parsed = YAML.parse(raw);
+  parsed.type = "governance-overlay";
+  writeFileSync(manifestPath, YAML.stringify(parsed));
+  Bun.spawnSync(["git", "add", "."], { cwd: repoPath, stdout: "pipe", stderr: "pipe" });
+  Bun.spawnSync(
+    ["git", "-c", "user.name=Test", "-c", "user.email=test@test.com", "commit", "-m", "flip to governance-overlay"],
+    { cwd: repoPath, stdout: "pipe", stderr: "pipe" },
+  );
+}
+
+/**
+ * Run `fn` with findConsumerRepos pinned to a sandbox so it can NEVER touch a
+ * real repo. findConsumerRepos resolves consumers from two sources: the
+ * BLUEPRINT_DEV_ROOT scan AND an always-on `process.cwd()` inclusion. A test
+ * that ignored either would regenerate the running repo's own CLAUDE.md (the
+ * worktree carries agents-md.yaml) — destructive and a cross-test race. So we
+ * pin BOTH: dev-root scan → `devRoot`, cwd → `consumerDir`. Both globals are
+ * restored in finally even if `fn` throws.
+ */
+async function withConsumerSandbox<T>(
+  devRoot: string,
+  consumerDir: string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const prevDevRoot = process.env.BLUEPRINT_DEV_ROOT;
+  const prevCwd = process.cwd();
+  process.env.BLUEPRINT_DEV_ROOT = devRoot;
+  process.chdir(consumerDir);
+  try {
+    return await fn();
+  } finally {
+    process.chdir(prevCwd);
+    if (prevDevRoot === undefined) delete process.env.BLUEPRINT_DEV_ROOT;
+    else process.env.BLUEPRINT_DEV_ROOT = prevDevRoot;
+  }
+}
+
+describe("upgradePackage — template regen for governance-overlay (arc#203)", () => {
+  test("a governance-overlay package with provides.templates regenerates a consumer's CLAUDE.md on force-upgrade", async () => {
+    // A consumer repo (sibling under the dev root) that opts into the template
+    // via agents-md.yaml. withConsumerSandbox pins findConsumerRepos to this dir.
+    const devRoot = join(env.root, "dev-root");
+    const consumerDir = join(devRoot, "consumer-repo");
+    await mkdir(consumerDir, { recursive: true });
+    await writeFile(
+      join(consumerDir, "agents-md.yaml"),
+      YAML.stringify({ project_name: "Consumer" }),
+    );
+
+    // Install while the package is type:rules (compass's original DB state),
+    // then flip the live manifest to type:governance-overlay before upgrade —
+    // reproducing the exact live drift behind arc#203.
+    const repo = await createMockTemplateRepo(env.root, {
+      name: "OverlayPkg",
+      version: "1.0.0",
+      type: "rules",
+      templateBody: "# {PROJECT_NAME}\n\nSENTINEL-ROW: a freshly-added SOP line.\n",
+    });
+    // Pass consumerDir so the install-time rules render targets the sandbox
+    // consumer (default would be process.cwd() = the running repo).
+    await install({ arc: env.arc, host: env.host, db: env.db, repoUrl: repo.url, yes: true, consumerDir });
+    flipManifestTypeToGovernanceOverlay(repo.path);
+
+    // Prove the upgrade — not the install — is what regenerates: clear the
+    // install-time render, then assert the upgrade rebuilds it.
+    await rm(join(consumerDir, "CLAUDE.md"), { force: true });
+    expect(existsSync(join(consumerDir, "CLAUDE.md"))).toBe(false);
+
+    await withConsumerSandbox(devRoot, consumerDir, async () => {
+      // force-upgrade re-runs the pipeline; the regen must fire despite the
+      // package being governance-overlay (not type:rules) — this is the arc#203 fix.
+      const result = await upgradePackage(env.db, env.arc, env.host, "OverlayPkg", { force: true });
+      expect(result.success).toBe(true);
+    });
+
+    // The consumer's CLAUDE.md was generated from the overlay's template.
+    const generated = join(consumerDir, "CLAUDE.md");
+    expect(existsSync(generated)).toBe(true);
+    const body = await Bun.file(generated).text();
+    expect(body).toContain("SENTINEL-ROW: a freshly-added SOP line.");
+    expect(body).toContain("# Consumer"); // placeholder substitution ran
+  });
+
+  test("same-version (non-force) upgrade still regenerates templates for a governance-overlay package", async () => {
+    const devRoot = join(env.root, "dev-root-2");
+    const consumerDir = join(devRoot, "consumer-repo");
+    await mkdir(consumerDir, { recursive: true });
+    await writeFile(
+      join(consumerDir, "agents-md.yaml"),
+      YAML.stringify({ project_name: "Consumer2" }),
+    );
+
+    const repo = await createMockTemplateRepo(env.root, {
+      name: "OverlayPkg2",
+      version: "1.0.0",
+      type: "rules",
+      templateBody: "# {PROJECT_NAME}\n\nSAME-VERSION-ROW: regen on matching version.\n",
+    });
+    await install({ arc: env.arc, host: env.host, db: env.db, repoUrl: repo.url, yes: true, consumerDir });
+    flipManifestTypeToGovernanceOverlay(repo.path);
+    await rm(join(consumerDir, "CLAUDE.md"), { force: true });
+
+    await withConsumerSandbox(devRoot, consumerDir, async () => {
+      // No force, no newer version: hits the same-version short-circuit branch
+      // (upgrade.ts ~L309), which must now regenerate for governance-overlay too.
+      const result = await upgradePackage(env.db, env.arc, env.host, "OverlayPkg2");
+      expect(result.success).toBe(true);
+    });
+
+    const generated = join(consumerDir, "CLAUDE.md");
+    expect(existsSync(generated)).toBe(true);
+    const body = await Bun.file(generated).text();
+    expect(body).toContain("SAME-VERSION-ROW: regen on matching version.");
   });
 });
 
