@@ -638,7 +638,7 @@ export interface ArcPaths {
   pipelinesDir: string;
   /** Actions directory (~/.config/metafactory/actions/) */
   actionsDir: string;
-  /** PATH-accessible shim directory (~/bin/) — shared across hosts */
+  /** PATH-accessible shim directory (~/.local/bin by default) — shared across hosts */
   shimDir: string;
   /** Catalog file path (repo-root/catalog.yaml) */
   catalogPath: string;

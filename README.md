@@ -70,6 +70,7 @@ Requires [Bun](https://bun.sh/) (v1.0+) and Git. Optional: [GitHub CLI](https://
 
 ```bash
 arc install <name-or-url>     # Install from registry or git URL
+arc install <name> --bin-dir <path> # Override where command shims are installed
 arc list                      # List installed packages
 arc info <name>               # Show details, capabilities, and release notes
 arc audit                     # Audit capability surface (summary + cross-tier warnings)
@@ -103,6 +104,14 @@ arc source list               # Show configured registry sources
 arc source add <n> <url>      # Add a source (--tier official|community|custom)
 arc source update             # Refresh indexes from all sources (like apt update)
 arc source remove <name>      # Remove a source
+```
+
+### Local Configuration
+
+```bash
+arc config get bin-dir        # Show where command shims are installed
+arc config set bin-dir ~/.local/bin
+arc doctor path               # Check whether the shim directory is on PATH
 ```
 
 ### Catalog

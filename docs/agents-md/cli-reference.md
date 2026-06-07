@@ -4,6 +4,7 @@
 
 ```bash
 arc install <name-or-url>     # Install from registry or direct git URL
+arc install <name> --bin-dir <path> # Override where command shims are installed
 arc list                      # List installed packages
 arc list --json               # Output as JSON
 arc list --type <type>        # Filter by artifact type (skill, tool, agent, prompt, component, pipeline)
@@ -44,6 +45,14 @@ arc source list               # Show configured registry sources
 arc source add <name> <url>   # Add a source (--tier official|community|custom)
 arc source update             # Refresh indexes from all sources (like apt update)
 arc source remove <name>      # Remove a source
+```
+
+### Local Configuration
+
+```bash
+arc config get bin-dir        # Show where command shims are installed
+arc config set bin-dir ~/.local/bin
+arc doctor path               # Check whether the shim directory is on PATH
 ```
 
 ### Catalog
