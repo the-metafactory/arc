@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.14.0-blue" alt="Version: 0.14.0" />
+  <img src="https://img.shields.io/badge/version-0.30.2-blue" alt="Version: 0.30.2" />
   <img src="https://img.shields.io/badge/status-beta-yellow" alt="Status: Beta" />
   <img src="https://img.shields.io/badge/tests-457%20passing-brightgreen" alt="Tests: 457 passing" />
   <img src="https://img.shields.io/badge/runtime-Bun-f472b6" alt="Runtime: Bun" />
