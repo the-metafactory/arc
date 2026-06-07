@@ -1,5 +1,6 @@
-import { readFile, writeFile } from "fs/promises";
+import { mkdir, readFile, writeFile } from "fs/promises";
 import { existsSync } from "fs";
+import { dirname } from "path";
 import YAML from "yaml";
 import type { SourcesConfig, RegistrySource, SourceType } from "../types.js";
 
@@ -54,6 +55,7 @@ export async function saveSources(
   config: SourcesConfig
 ): Promise<void> {
   const content = YAML.stringify(config, { indent: 2 });
+  await mkdir(dirname(sourcesPath), { recursive: true });
   await writeFile(sourcesPath, content, "utf-8");
 }
 

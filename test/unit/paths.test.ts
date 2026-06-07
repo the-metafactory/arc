@@ -3,6 +3,7 @@ import {
   createArcPaths,
   getDefaultHost,
   migrateConfigIfNeeded,
+  resolveDefaultShimDir,
 } from "../../src/lib/paths.js";
 import { homedir } from "os";
 import { join } from "path";
@@ -38,15 +39,23 @@ describe("createArcPaths env-var handling", () => {
 });
 
 describe("createArcPaths", () => {
-  test("returns host-independent state paths from homedir", () => {
-    const paths = createArcPaths();
-    const home = homedir();
+  test("returns host-independent state paths from config root", () => {
+    const originalPath = process.env.PATH;
+    try {
+      process.env.PATH = "";
+      const configRoot = join(mkdtempSync(join(tmpdir(), "arc-paths-config-")), "metafactory");
+      const paths = createArcPaths({ configRoot });
+      const home = homedir();
 
-    expect(paths.configRoot).toBe(join(home, ".config", "metafactory"));
-    expect(paths.dbPath).toBe(join(home, ".config", "metafactory", "packages.db"));
-    expect(paths.reposDir).toBe(join(home, ".config", "metafactory", "pkg", "repos"));
-    expect(paths.cachePath).toBe(join(home, ".config", "metafactory", "pkg", "cache"));
-    expect(paths.shimDir).toBe(join(home, "bin"));
+      expect(paths.configRoot).toBe(configRoot);
+      expect(paths.dbPath).toBe(join(configRoot, "packages.db"));
+      expect(paths.reposDir).toBe(join(configRoot, "pkg", "repos"));
+      expect(paths.cachePath).toBe(join(configRoot, "pkg", "cache"));
+      expect(paths.shimDir).toBe(join(home, ".local", "bin"));
+    } finally {
+      if (originalPath === undefined) delete process.env.PATH;
+      else process.env.PATH = originalPath;
+    }
   });
 
   test("does not expose host-specific paths", () => {
@@ -75,6 +84,60 @@ describe("createArcPaths", () => {
     expect(paths.dbPath).toBe("/custom/packages.db");
     // reposDir still derived from configRoot
     expect(paths.reposDir).toBe("/tmp/test/.config/mf/pkg/repos");
+  });
+
+  test("uses remembered bin-dir from config.yaml", () => {
+    const base = mkdtempSync(join(tmpdir(), "arc-bin-config-"));
+    const configRoot = join(base, "metafactory");
+    mkdirSync(configRoot, { recursive: true });
+    writeFileSync(join(configRoot, "config.yaml"), "bin_dir: ~/.arc/bin\n");
+
+    const paths = createArcPaths({ configRoot });
+
+    expect(paths.shimDir).toBe(join(homedir(), ".arc", "bin"));
+  });
+});
+
+describe("resolveDefaultShimDir", () => {
+  test("prefers ~/.local/bin when it is already on PATH", () => {
+    const home = "/Users/tester";
+    const dir = resolveDefaultShimDir({
+      home,
+      pathEnv: `${home}/bin:${home}/.local/bin:/usr/bin`,
+    });
+
+    expect(dir).toBe(`${home}/.local/bin`);
+  });
+
+  test("matches PATH entries with trailing slashes", () => {
+    const home = "/Users/tester";
+    const dir = resolveDefaultShimDir({
+      home,
+      pathEnv: `${home}/.local/bin/:/usr/bin`,
+    });
+
+    expect(dir).toBe(`${home}/.local/bin`);
+  });
+
+  test("falls back to ~/.local/bin instead of creating ~/bin", () => {
+    const home = "/Users/tester";
+    const dir = resolveDefaultShimDir({
+      home,
+      pathEnv: "/usr/bin:/bin",
+    });
+
+    expect(dir).toBe(`${home}/.local/bin`);
+  });
+
+  test("honors a remembered bin directory", () => {
+    const home = "/Users/tester";
+    const dir = resolveDefaultShimDir({
+      home,
+      pathEnv: "/usr/bin:/bin",
+      configuredBinDir: "~/.arc/bin",
+    });
+
+    expect(dir).toBe(`${home}/.arc/bin`);
   });
 });
 

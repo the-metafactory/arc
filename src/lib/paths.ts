@@ -4,6 +4,7 @@ import { existsSync, renameSync } from "fs";
 import { mkdir } from "fs/promises";
 import type { ArcPaths, HostAdapter } from "../types.js";
 import { createClaudeCodeHost } from "./hosts/claude-code.js";
+import { loadUserConfigSync, normalizeUserPath } from "./config.js";
 
 // TODO: Remove migration logic after 2026-Q3. Only 2 users (founders) on arc currently,
 // so this migration path can be dropped once both have upgraded.
@@ -52,6 +53,34 @@ function resolveConfigRoot(override?: string): string {
   return configRoot;
 }
 
+export function resolveDefaultShimDir(opts?: {
+  home?: string;
+  pathEnv?: string;
+  configuredBinDir?: string;
+}): string {
+  const home = opts?.home ?? homedir();
+  const configured = opts?.configuredBinDir?.trim();
+  if (configured) return normalizeUserPath(configured, home);
+
+  const pathEntries = new Set(
+    (opts?.pathEnv ?? process.env.PATH ?? "")
+      .split(":")
+      .filter(Boolean)
+      .map((entry) => normalizeUserPath(entry, home)),
+  );
+
+  const preferred = [
+    join(home, ".local", "bin"),
+    join(home, "bin"),
+  ];
+
+  for (const candidate of preferred) {
+    if (pathEntries.has(candidate)) return candidate;
+  }
+
+  return join(home, ".local", "bin");
+}
+
 /**
  * Create ArcPaths — arc's host-independent state directories. Override any
  * field for testing.
@@ -59,6 +88,11 @@ function resolveConfigRoot(override?: string): string {
 export function createArcPaths(overrides?: Partial<ArcPaths>): ArcPaths {
   const home = homedir();
   const configRoot = resolveConfigRoot(overrides?.configRoot);
+  const userConfig = loadUserConfigSync(configRoot, home);
+  const configuredShimDir =
+    process.env.ARC_BIN_DIR ??
+    process.env.ARC_SHIM_DIR ??
+    userConfig.binDir;
 
   return {
     configRoot,
@@ -70,7 +104,11 @@ export function createArcPaths(overrides?: Partial<ArcPaths>): ArcPaths {
     runtimeDir: overrides?.runtimeDir ?? join(configRoot, "skills"),
     pipelinesDir: overrides?.pipelinesDir ?? join(configRoot, "pipelines"),
     actionsDir: overrides?.actionsDir ?? join(configRoot, "actions"),
-    shimDir: overrides?.shimDir ?? join(home, "bin"),
+    shimDir: overrides?.shimDir ?? resolveDefaultShimDir({
+      home,
+      pathEnv: process.env.PATH,
+      configuredBinDir: configuredShimDir,
+    }),
     catalogPath:
       overrides?.catalogPath ?? join(import.meta.dir, "..", "..", "catalog.yaml"),
     registryPath:

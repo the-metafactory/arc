@@ -3,7 +3,7 @@
 import { Command } from "commander";
 import { createArcPaths, ensureDirectories, getDefaultHost } from "./lib/paths.js";
 import { openDatabase, getSkill } from "./lib/db.js";
-import { SymlinkConflictError } from "./lib/symlinks.js";
+import { extractAllCliInfo, SymlinkConflictError } from "./lib/symlinks.js";
 import { install, parseNameVersion } from "./commands/install.js";
 import { list, formatList, formatListJson } from "./commands/list.js";
 import { info, formatInfo, formatInfoJson } from "./commands/info.js";
@@ -35,7 +35,7 @@ import {
   formatCatalogList,
   formatCatalogSearch,
 } from "./commands/catalog.js";
-import type { CatalogEntry, ArtifactType, PackageTier, RegistrySource, SourceType } from "./types.js";
+import type { ArcManifest, CatalogEntry, ArtifactType, PackageTier, RegistrySource, SourceType } from "./types.js";
 import { login } from "./commands/login.js";
 import { logout } from "./commands/logout.js";
 import { addBot, reissueBot, listBots, removeBot, setupOperator } from "./commands/nats.js";
@@ -92,6 +92,7 @@ import {
   formatSourceList,
   validateSource,
 } from "./lib/sources.js";
+import { loadUserConfig, normalizeUserPath, saveUserConfig } from "./lib/config.js";
 import {
   findInAllSources,
   updateAllSources,
@@ -104,6 +105,54 @@ import pkg from "../package.json" with { type: "json" };
 
 const program = new Command();
 
+function createInstallPaths(opts: { binDir?: string }): ReturnType<typeof createArcPaths> {
+  return createArcPaths(
+    opts.binDir
+      ? { shimDir: normalizeUserPath(opts.binDir) }
+      : undefined,
+  );
+}
+
+function shimDirIsOnPath(shimDir: string, pathEnv = process.env.PATH ?? ""): boolean {
+  const entries = pathEnv.split(":").filter(Boolean).map((entry) => normalizeUserPath(entry));
+  return entries.includes(normalizeUserPath(shimDir));
+}
+
+function quoteForSingleQuotedShell(value: string): string {
+  return value.replace(/'/g, "'\\''");
+}
+
+function formatPathRepairCommand(shimDir: string, shell = process.env.SHELL ?? ""): string {
+  if (shell.endsWith("/fish")) {
+    return `fish_add_path ${shimDir}`;
+  }
+
+  const exportLine = `export PATH="${shimDir}:$PATH"`;
+  if (shell.endsWith("/bash")) {
+    return `echo '${quoteForSingleQuotedShell(exportLine)}' >> ~/.bashrc`;
+  }
+  if (shell.endsWith("/zsh") || shell === "") {
+    return `echo '${quoteForSingleQuotedShell(exportLine)}' >> ~/.zshrc`;
+  }
+  return exportLine;
+}
+
+function installResultProvidesCli(result: Awaited<ReturnType<typeof install>>): boolean {
+  const manifests = [
+    result.manifest,
+    ...(result.artifacts?.map((artifact) => artifact.manifest) ?? []),
+  ].filter((manifest): manifest is ArcManifest => Boolean(manifest));
+
+  return manifests.some((manifest) => extractAllCliInfo(manifest).length > 0);
+}
+
+function printShimPathNotice(paths: ReturnType<typeof createArcPaths>, result: Awaited<ReturnType<typeof install>>): void {
+  if (!installResultProvidesCli(result) || shimDirIsOnPath(paths.shimDir)) return;
+
+  console.log(`\nCommand shims were installed in ${paths.shimDir}, but that directory is not on PATH.`);
+  console.log(`Add it with: ${formatPathRepairCommand(paths.shimDir)}`);
+}
+
 program
   .name("arc")
   .description("Agentic component package manager")
@@ -114,8 +163,9 @@ program
   .description("Install a skill from git URL, or by name from the registry")
   .option("-y, --yes", "Skip confirmation prompt")
   .option("--pin <version>", "Pin to a specific version (git tag)")
+  .option("--bin-dir <path>", "Directory for PATH-accessible command shims")
   .option("--strict-signing", "Refuse to install if Sigstore signature is missing on an official-tier package")
-  .action(async (nameOrUrl: string, opts: { yes?: boolean; pin?: string; strictSigning?: boolean }) => {
+  .action(async (nameOrUrl: string, opts: { yes?: boolean; pin?: string; binDir?: string; strictSigning?: boolean }) => {
     // Non-TTY guard: fail loud rather than silently half-installing
     if (!opts.yes && !process.stdin.isTTY) {
       console.error("Error: arc install requires an interactive terminal for capability confirmation.");
@@ -123,7 +173,7 @@ program
       process.exit(1);
     }
 
-    const paths = createArcPaths();
+    const paths = createInstallPaths(opts);
     const host = getDefaultHost();
     await ensureDirectories(paths, host);
     const db = openDatabase(paths.dbPath);
@@ -340,6 +390,7 @@ program
           ? "(verified)"
           : "(SHA-256 + registry signature verified; Sigstore signature MISSING)";
         console.log(`Installed ${result.name} v${result.version} ${verifyLabel}`);
+        printShimPathNotice(paths, result);
       } else {
         console.error(`${result.error}`);
         process.exit(1);
@@ -353,6 +404,7 @@ program
         } else {
           console.log(`\n✅ Installed ${result.name} v${result.version}`);
         }
+        printShimPathNotice(paths, result);
       } else {
         console.error(`\n❌ ${result.error}`);
         process.exit(1);
@@ -389,6 +441,7 @@ program
         } else {
           console.log(`✅ Installed ${result.name} v${result.version}`);
         }
+        printShimPathNotice(paths, result);
       } else {
         console.error(`${result.error}`);
         process.exit(1);
@@ -539,6 +592,60 @@ program
     const result = await verify(db, paths, host, name);
     console.log(formatVerify(result));
     db.close();
+  });
+
+// ── Config / doctor commands ─────────────────────────────────
+
+const config = program
+  .command("config")
+  .description("Manage Arc configuration");
+
+config
+  .command("get <key>")
+  .description("Read a configuration value")
+  .action(async (key: string) => {
+    if (key !== "bin-dir") {
+      console.error(`Unknown config key "${key}". Supported keys: bin-dir`);
+      process.exit(1);
+    }
+
+    const paths = createArcPaths();
+    const userConfig = await loadUserConfig(paths.configRoot);
+    console.log(userConfig.binDir ?? paths.shimDir);
+  });
+
+config
+  .command("set <key> <value>")
+  .description("Set a configuration value")
+  .action(async (key: string, value: string) => {
+    if (key !== "bin-dir") {
+      console.error(`Unknown config key "${key}". Supported keys: bin-dir`);
+      process.exit(1);
+    }
+
+    const paths = createArcPaths();
+    const userConfig = await loadUserConfig(paths.configRoot);
+    const binDir = normalizeUserPath(value);
+    await saveUserConfig(paths.configRoot, { ...userConfig, binDir });
+    console.log(`bin-dir = ${binDir}`);
+  });
+
+const doctor = program
+  .command("doctor")
+  .description("Check local Arc setup");
+
+doctor
+  .command("path")
+  .description("Check whether Arc command shims are on PATH")
+  .action(() => {
+    const paths = createArcPaths();
+    if (shimDirIsOnPath(paths.shimDir)) {
+      console.log(`OK: ${paths.shimDir} is on PATH`);
+      return;
+    }
+
+    console.log(`Arc command shims are installed in ${paths.shimDir}, but that directory is not on PATH.`);
+    console.log(`Add it with: ${formatPathRepairCommand(paths.shimDir)}`);
   });
 
 program

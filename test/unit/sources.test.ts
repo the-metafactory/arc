@@ -12,6 +12,10 @@ import {
 } from "../../src/lib/sources.js";
 import type { SourcesConfig, RegistrySource } from "../../src/types.js";
 import YAML from "yaml";
+import { join } from "path";
+import { mkdtemp } from "fs/promises";
+import { tmpdir } from "os";
+import { existsSync } from "fs";
 
 let env: TestEnv;
 
@@ -36,6 +40,16 @@ describe("loadSources", () => {
     expect(config.sources[1].name).toBe("metafactory-registry");
     expect(config.sources[1].tier).toBe("community");
     expect(config.sources[1].type).toBeUndefined();
+  });
+
+  test("creates parent config directory on a fresh machine", async () => {
+    const root = await mkdtemp(join(tmpdir(), "arc-fresh-sources-"));
+    const sourcesPath = join(root, ".config", "metafactory", "sources.yaml");
+
+    const config = await loadSources(sourcesPath);
+
+    expect(config.sources).toHaveLength(2);
+    expect(existsSync(sourcesPath)).toBe(true);
   });
 
   test("loads valid sources.yaml", async () => {
