@@ -38,10 +38,10 @@ _Avoid_: Result object, debug details
 > **Domain expert:** "Only for the part that lands the new package state; source update and version selection can stay outside."
 
 > **Dev:** "Should the **Install Transaction** ask for permission?"
-> **Domain expert:** "No - it receives an **Install Authorization** after the caller has handled trust and capability review."
+> **Domain expert:** "No — it receives an **Install Authorization** after the caller has handled trust and capability review."
 
 > **Dev:** "Should rollback warnings only be printed?"
-> **Domain expert:** "No - they belong in **Transaction Evidence** so tests and callers can inspect the outcome."
+> **Domain expert:** "No — they belong in **Transaction Evidence** so tests and callers can inspect the outcome."
 
 ## Flagged Ambiguities
 
