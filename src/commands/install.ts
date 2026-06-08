@@ -447,7 +447,7 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
   // 5c. Wire extensions (if declared)
   if (manifest.extensions) {
     const wired = await wireExtensions(manifest, installPath, host.paths.root);
-    tx.recordExtensions(wired);
+    tx.recordExtensions(wired, host.paths.root);
     if (wired.length && !opts.yes) {
       for (const ext of wired) {
         console.log(`  \u2713 Extension wired: ${ext}`);

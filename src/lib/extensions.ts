@@ -3,6 +3,7 @@ import { mkdir } from "fs/promises";
 import { existsSync } from "fs";
 import { createSymlink, removeSymlink } from "./symlinks.js";
 import type { ArcManifest } from "../types.js";
+import { errorMessage } from "./errors.js";
 
 /**
  * Wire extensions declared in a package manifest.
@@ -60,4 +61,36 @@ export async function unwireExtensions(
   }
 
   return removed;
+}
+
+/**
+ * Roll back extensions using the exact extension records returned by
+ * wireExtensions(). This is used when install fails after extension wiring
+ * but before the package database row is committed.
+ */
+export async function rollbackWiredExtensions(
+  wired: string[],
+  claudeRoot: string,
+): Promise<string[]> {
+  const warnings: string[] = [];
+
+  for (const record of wired) {
+    const [kind, name] = record.split(":", 2);
+    if (kind !== "statusline" || !name) {
+      warnings.push(`unknown extension record ${record}`);
+      continue;
+    }
+
+    const linkPath = join(claudeRoot, "statusline.d", `${name}.sh`);
+    try {
+      const removed = await removeSymlink(linkPath);
+      if (!removed && existsSync(linkPath)) {
+        warnings.push(`failed to remove extension ${record}: ${linkPath} is not a symlink`);
+      }
+    } catch (err) {
+      warnings.push(`failed to remove extension ${record}: ${errorMessage(err)}`);
+    }
+  }
+
+  return warnings;
 }
