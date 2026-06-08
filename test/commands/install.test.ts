@@ -972,6 +972,24 @@ describe("install provides.files (issue #84)", () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toContain("Postinstall script failed");
+    expect(result.evidence?.rollback.attempted).toBe(true);
+    expect(result.evidence?.dbCommitted).toBe(false);
+    expect(result.evidence?.landedArtifacts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "symlink",
+          path: join(env.host.paths.skillsDir, "PostinstallRollback"),
+        }),
+        expect.objectContaining({
+          kind: "shim",
+          name: "postrollback",
+        }),
+        expect.objectContaining({
+          kind: "hook",
+          settingsPath: env.host.paths.settingsPath,
+        }),
+      ]),
+    );
 
     // Symlink rollback assertions (same shape as #89 hook-gate test).
     expect(existsSync(join(env.host.paths.skillsDir, "PostinstallRollback"))).toBe(false);

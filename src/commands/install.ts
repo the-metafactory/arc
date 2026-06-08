@@ -16,7 +16,6 @@ import { recordInstall, getSkill } from "../lib/db.js";
 import { runScript, runLifecycleScripts } from "../lib/scripts.js";
 import {
   registerHooks,
-  removeHooks,
   resolveHooksFromManifest,
   findMissingHookFiles,
 } from "../lib/hooks.js";
@@ -41,6 +40,10 @@ import {
   rollbackLaunchdArtifacts,
 } from "../lib/hosts/launchd-install.js";
 import { isDarwinLaunchdHost } from "../lib/hosts/darwin-launchd.js";
+import {
+  beginInstallTransaction,
+  type InstallTransactionEvidence,
+} from "../lib/install-transaction.js";
 
 export interface InstallOptions {
   /** arc's own state paths (configRoot, dbPath, reposDir, …). Host-independent. */
@@ -85,6 +88,7 @@ export interface InstallResult {
   version?: string;
   error?: string;
   manifest?: ArcManifest;
+  evidence?: InstallTransactionEvidence;
   /** For library installs: results for each artifact */
   artifacts?: InstallResult[];
 }
@@ -379,6 +383,12 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
       };
     }
   }
+  const tx = beginInstallTransaction({
+    packageName: manifest.name,
+    authorization: { approved: true },
+  });
+  tx.recordSymlinks(symlinkResult.record);
+  tx.recordLaunchd(launchdRecords);
 
   // 5b. Register hooks (if declared, with consent gating).
   // host.paths.root is passed as the $PAI_DIR expansion target so a hook
@@ -404,12 +414,10 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
       // orphan entries under ~/.claude/{skills,bin,...} for the user to clean.
       // arc#140 P3: also unwind any launchd-side state placed by multi-target
       // dispatch (plist + binary symlink).
-      await rollbackArtifactSymlinks(symlinkResult.record);
-      for (const rec of launchdRecords) {
-        await rollbackLaunchdArtifacts(rec);
-      }
+      const evidence = await tx.rollback();
       return {
         success: false,
+        evidence,
         error:
           `Manifest declares hooks whose command references a file that was not installed:\n${detail}\n` +
           `Add the file to provides.files (or fix the command path) and reinstall.`,
@@ -425,6 +433,7 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
     if (approved) {
       const settingsPath = host.paths.settingsPath;
       await registerHooks(manifest.name, resolvedHooks, settingsPath);
+      tx.recordHookRegistration(settingsPath, resolvedHooks.length);
       if (!opts.yes) {
         console.log("  \u2713 Hooks registered in settings.json");
       }
@@ -438,6 +447,7 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
   // 5c. Wire extensions (if declared)
   if (manifest.extensions) {
     const wired = await wireExtensions(manifest, installPath, host.paths.root);
+    tx.recordExtensions(wired);
     if (wired.length && !opts.yes) {
       for (const ext of wired) {
         console.log(`  \u2713 Extension wired: ${ext}`);
@@ -457,12 +467,8 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
     // Tear down hook registrations, symlinks, AND any launchd-side state
     // (arc#140 P3) before returning so the user gets a clean failure
     // rather than orphans they have to clean up by hand.
-    await removeHooks(manifest.name, host.paths.settingsPath);
-    await rollbackArtifactSymlinks(symlinkResult.record);
-    for (const rec of launchdRecords) {
-      await rollbackLaunchdArtifacts(rec);
-    }
-    return postinstallResult;
+    const evidence = await tx.rollback();
+    return { ...postinstallResult, evidence };
   }
 
   // 7. Record in database
@@ -488,12 +494,14 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
     },
     manifest
   );
+  tx.recordDbCommit(manifest.name);
 
   return {
     success: true,
     name: manifest.name,
     version: manifest.version,
     manifest,
+    evidence: tx.evidence,
   };
 }
 
@@ -659,6 +667,11 @@ export async function installSingleArtifact(
         `Manifest declares provides.files entries whose source does not exist in the package:\n${detail}`,
     };
   }
+  const tx = beginInstallTransaction({
+    packageName: manifest.name,
+    authorization: { approved: true },
+  });
+  tx.recordSymlinks(symlinkResult.record);
 
   // Register hooks (with consent gating — same as standalone install).
   // See note above on host.paths.root threading $PAI_DIR substitution.
@@ -680,9 +693,10 @@ export async function installSingleArtifact(
       // #89: roll back any symlinks/shims createArtifactSymlinks placed before
       // we hit this gate, so the install fails clean rather than leaving
       // orphan entries under ~/.claude/{skills,bin,...} for the user to clean.
-      await rollbackArtifactSymlinks(symlinkResult.record);
+      const evidence = await tx.rollback();
       return {
         success: false,
+        evidence,
         error:
           `Manifest declares hooks whose command references a file that was not installed:\n${detail}\n` +
           `Add the file to provides.files (or fix the command path) and reinstall.`,
@@ -698,6 +712,7 @@ export async function installSingleArtifact(
     if (approved) {
       const settingsPath = host.paths.settingsPath;
       await registerHooks(manifest.name, resolvedHooks, settingsPath);
+      tx.recordHookRegistration(settingsPath, resolvedHooks.length);
       if (!opts.yes) {
         console.log("  \u2713 Hooks registered in settings.json");
       }
@@ -720,9 +735,8 @@ export async function installSingleArtifact(
     // Tear down hook registrations and symlinks before returning so the
     // user gets a clean failure rather than orphans they have to clean up
     // by hand.
-    await removeHooks(manifest.name, host.paths.settingsPath);
-    await rollbackArtifactSymlinks(symlinkResult.record);
-    return postinstallResult;
+    const evidence = await tx.rollback();
+    return { ...postinstallResult, evidence };
   }
 
   // Resolve the skill_dir for DB recording
@@ -748,12 +762,14 @@ export async function installSingleArtifact(
     },
     manifest,
   );
+  tx.recordDbCommit(manifest.name);
 
   return {
     success: true,
     name: manifest.name,
     version: manifest.version,
     manifest,
+    evidence: tx.evidence,
   };
 }
 
