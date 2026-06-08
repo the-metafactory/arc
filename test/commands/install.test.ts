@@ -684,6 +684,7 @@ describe("install provides.files (issue #84)", () => {
     providesFiles?: { source: string; target: string }[];
     providesHooks?: { event: string; command: string }[];
     providesCli?: { command: string; name: string }[];
+    statuslineExtensions?: { name: string; source: string }[];
     postinstall?: { path: string; content: string };
   }): Promise<string> {
     const repoDir = join(env.root, `mock-${opts.name}`);
@@ -729,6 +730,14 @@ describe("install provides.files (issue #84)", () => {
       for (const c of opts.providesCli) {
         lines.push(`    - command: ${JSON.stringify(c.command)}`);
         lines.push(`      name: ${c.name}`);
+      }
+    }
+    if (opts.statuslineExtensions?.length) {
+      lines.push(`extensions:`);
+      lines.push(`  statusline:`);
+      for (const ext of opts.statuslineExtensions) {
+        lines.push(`    - name: ${ext.name}`);
+        lines.push(`      source: ${JSON.stringify(ext.source)}`);
       }
     }
     if (opts.postinstall) {
@@ -1013,6 +1022,46 @@ describe("install provides.files (issue #84)", () => {
     // No DB row — recordInstall happens after postinstall.
     const fromDb = getSkill(env.db, "PostinstallRollback");
     expect(fromDb).toBeNull();
+  });
+
+  test("postinstall failure rolls back extension wiring", async () => {
+    const repoUrl = await buildRepoWithProvides({
+      name: "ExtensionRollback",
+      extraFiles: { "statusline/extension.sh": "#!/bin/bash\necho status\n" },
+      statuslineExtensions: [
+        { name: "extension-rollback", source: "statusline/extension.sh" },
+      ],
+      postinstall: {
+        path: "scripts/postinstall.sh",
+        content: "#!/bin/bash\nexit 1\n",
+      },
+    });
+
+    const result = await install({
+      arc: env.arc, host: env.host,
+      db: env.db,
+      repoUrl,
+      yes: true,
+    });
+
+    const extensionPath = join(
+      env.host.paths.root,
+      "statusline.d",
+      "extension-rollback.sh",
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("Postinstall script failed");
+    expect(result.evidence?.rollback.attempted).toBe(true);
+    expect(result.evidence?.landedArtifacts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "extension",
+          name: "statusline:extension-rollback",
+        }),
+      ]),
+    );
+    expect(existsSync(extensionPath)).toBe(false);
   });
 
   test("install succeeds when ${PAI_DIR} hook target is landed via provides.files", async () => {

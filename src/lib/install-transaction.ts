@@ -4,6 +4,7 @@ import type { LaunchdInstallRecord } from "./hosts/launchd-install.js";
 import { rollbackLaunchdArtifacts } from "./hosts/launchd-install.js";
 import { removeHooks } from "./hooks.js";
 import { errorMessage } from "./errors.js";
+import { rollbackWiredExtensions } from "./extensions.js";
 
 export interface InstallAuthorization {
   approved: boolean;
@@ -32,7 +33,7 @@ export interface InstallTransaction {
   recordSymlinks(record: ArtifactSymlinkRecord): void;
   recordLaunchd(records: LaunchdInstallRecord[]): void;
   recordHookRegistration(settingsPath: string, count: number): void;
-  recordExtensions(names: string[]): void;
+  recordExtensions(names: string[], claudeRoot: string): void;
   recordDbCommit(name: string): void;
   rollback(): Promise<InstallTransactionEvidence>;
 }
@@ -48,6 +49,7 @@ export function beginInstallTransaction(opts: {
   const symlinkRecords: ArtifactSymlinkRecord[] = [];
   const launchdRecords: LaunchdInstallRecord[] = [];
   const hookRegistrations: { settingsPath: string; packageName: string }[] = [];
+  const extensionRecords: { names: string[]; claudeRoot: string }[] = [];
   const evidence: InstallTransactionEvidence = {
     packageName: opts.packageName,
     landedArtifacts: [],
@@ -91,7 +93,8 @@ export function beginInstallTransaction(opts: {
       evidence.landedArtifacts.push({ kind: "hook", settingsPath, count });
     },
 
-    recordExtensions(names) {
+    recordExtensions(names, claudeRoot) {
+      extensionRecords.push({ names, claudeRoot });
       for (const name of names) {
         evidence.landedArtifacts.push({ kind: "extension", name });
       }
@@ -109,6 +112,16 @@ export function beginInstallTransaction(opts: {
           await removeHooks(hook.packageName, hook.settingsPath);
         } catch (err) {
           warn(`failed to remove hooks from ${hook.settingsPath}: ${errorMessage(err)}`);
+        }
+      }
+      for (const record of extensionRecords) {
+        try {
+          const warnings = await rollbackWiredExtensions(record.names, record.claudeRoot);
+          for (const warning of warnings) {
+            warn(warning);
+          }
+        } catch (err) {
+          warn(`failed to roll back extensions: ${errorMessage(err)}`);
         }
       }
       for (const record of symlinkRecords) {
