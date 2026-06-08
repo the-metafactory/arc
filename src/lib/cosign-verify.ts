@@ -150,6 +150,18 @@ export async function verifyPackageSigstore(
       };
     }
     return { verified: false, reason: result.error ?? "cosign verification failed" };
+  } catch (err) {
+    // A thrown error here is a verification *capability* gap, not evidence of
+    // tampering — e.g. cosign has no binary for this platform/arch, so
+    // detectPlatform throws. Degrade to verified=null (the same contract as
+    // unsigned and the soma#303 missing-identity case): warn and proceed on
+    // the default path, while --strict-signing still escalates null to a
+    // refusal. A genuine cosign rejection returns valid:false above and stays
+    // verified=false; only an inability to *run* the check lands here.
+    return {
+      verified: null,
+      reason: `Sigstore verification unavailable: ${errorMessage(err)}`,
+    };
   } finally {
     await unlink(dl.path).catch(() => {
       // best-effort cleanup

@@ -246,6 +246,38 @@ describe("verifyPackageSigstore", () => {
     expect(result.reason).toMatch(/signature mismatch/i);
   });
 
+  // #216: a verifier that THROWS (e.g. cosign has no binary for this
+  // platform/arch, so detectPlatform throws) is a verification *capability*
+  // gap, not a tampered artifact. It must degrade to verified=null (warn
+  // path; --strict-signing still refuses on official tier), matching the
+  // unsigned and soma#303 contracts — never propagate the throw and abort
+  // the whole install.
+  test("verified=null when the verifier throws (platform/binary unavailable)", async () => {
+    env = await createTestEnv();
+    globalThis.fetch = mockFetch(async () =>
+      new Response('{"mediaType":"application/vnd.dev.sigstore.bundle+json"}', { status: 200 }),
+    );
+    const artifactPath = join(env.arc.reposDir, "artifact.tgz");
+    await writeFile(artifactPath, "fake");
+
+    const result = await verifyPackageSigstore({
+      source: source(),
+      sha256: "abc",
+      signing: {
+        signature_bundle_key: "packages/abc.bundle",
+        signer_identity: "https://github.com/owner/repo/.github/workflows/publish.yml@refs/heads/main",
+      },
+      artifactPath,
+      tempDir: env.arc.reposDir,
+      verifier: async () => {
+        throw new Error("Unsupported platform: sunos. cosign binaries are available for: darwin, linux, windows");
+      },
+    });
+    expect(result.verified).toBeNull();
+    expect(result.reason).toMatch(/unavailable/i);
+    expect(result.reason).toMatch(/Unsupported platform/);
+  });
+
   test("TRUSTED_OIDC_ISSUER is GitHub Actions (OQ-14 scope)", () => {
     expect(TRUSTED_OIDC_ISSUER).toBe("https://token.actions.githubusercontent.com");
   });

@@ -28,19 +28,37 @@ interface PlatformInfo {
   downloadUrl: string;
 }
 
-const SUPPORTED_PLATFORMS = new Set(["darwin", "linux"]);
+const SUPPORTED_PLATFORMS = new Set(["darwin", "linux", "win32"]);
 const SUPPORTED_ARCHES = new Set(["arm64", "x64"]);
 
-export function detectPlatform(): PlatformInfo {
-  if (!SUPPORTED_PLATFORMS.has(process.platform)) {
-    throw new Error(`Unsupported platform: ${process.platform}. cosign binaries are available for: ${[...SUPPORTED_PLATFORMS].join(", ")}`);
+// Node's process.platform value -> the os token sigstore/cosign uses in its
+// release asset names. win32 maps to "windows" (cosign ships
+// cosign-windows-amd64.exe / cosign-windows-arm64.exe).
+const COSIGN_OS_NAME: Record<string, string> = {
+  darwin: "darwin",
+  linux: "linux",
+  win32: "windows",
+};
+
+const SUPPORTED_PLATFORM_LABELS = [...SUPPORTED_PLATFORMS]
+  .map((p) => COSIGN_OS_NAME[p] ?? p)
+  .join(", ");
+
+export function detectPlatform(
+  platform: string = process.platform,
+  architecture: string = process.arch,
+): PlatformInfo {
+  if (!SUPPORTED_PLATFORMS.has(platform)) {
+    throw new Error(`Unsupported platform: ${platform}. cosign binaries are available for: ${SUPPORTED_PLATFORM_LABELS}`);
   }
-  if (!SUPPORTED_ARCHES.has(process.arch)) {
-    throw new Error(`Unsupported architecture: ${process.arch}. cosign binaries are available for: arm64, x64 (amd64)`);
+  if (!SUPPORTED_ARCHES.has(architecture)) {
+    throw new Error(`Unsupported architecture: ${architecture}. cosign binaries are available for: arm64, x64 (amd64)`);
   }
-  const os = process.platform as string;
-  const arch = process.arch === "arm64" ? "arm64" : "amd64";
-  const binaryName = `cosign-${os}-${arch}`;
+  const os = COSIGN_OS_NAME[platform];
+  const arch = architecture === "arm64" ? "arm64" : "amd64";
+  // cosign Windows assets carry a .exe suffix; unix binaries do not.
+  const ext = platform === "win32" ? ".exe" : "";
+  const binaryName = `cosign-${os}-${arch}${ext}`;
   const downloadUrl = `https://github.com/sigstore/cosign/releases/download/${COSIGN_VERSION}/${binaryName}`;
   return { os, arch, binaryName, downloadUrl };
 }
