@@ -1,0 +1,6 @@
+# Default code owners for this repository.
+# Auto-requested as reviewers on every pull request.
+# GitHub never requests review from the PR author, so each owner
+# is auto-assigned to review the other's contributions, satisfying
+# the required-approval rule on main.
+* @jcfischer @mellanon
