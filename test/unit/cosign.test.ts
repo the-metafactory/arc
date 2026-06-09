@@ -11,20 +11,42 @@ import {
 describe("detectPlatform", () => {
   test("returns valid platform info", () => {
     const platform = detectPlatform();
-    expect(["darwin", "linux"]).toContain(platform.os);
+    expect(["darwin", "linux", "windows"]).toContain(platform.os);
     expect(["arm64", "amd64"]).toContain(platform.arch);
-    expect(platform.binaryName).toMatch(/^cosign-(darwin|linux)-(arm64|amd64)$/);
+    expect(platform.binaryName).toMatch(/^cosign-(darwin|linux|windows)-(arm64|amd64)(\.exe)?$/);
   });
 
   test("binary name matches os-arch pattern", () => {
     const platform = detectPlatform();
-    expect(platform.binaryName).toBe(`cosign-${platform.os}-${platform.arch}`);
+    const ext = platform.os === "windows" ? ".exe" : "";
+    expect(platform.binaryName).toBe(`cosign-${platform.os}-${platform.arch}${ext}`);
   });
 
   test("includes download URL", () => {
     const platform = detectPlatform();
     expect(platform.downloadUrl).toContain(platform.binaryName);
     expect(platform.downloadUrl).toContain("github.com/sigstore/cosign");
+  });
+
+  // #216: Windows is a supported cosign target. detectPlatform must map
+  // win32 -> windows and append .exe, matching the real release asset names
+  // cosign-windows-amd64.exe / cosign-windows-arm64.exe.
+  test("maps win32 to windows with .exe suffix (amd64)", () => {
+    const platform = detectPlatform("win32", "x64");
+    expect(platform.os).toBe("windows");
+    expect(platform.arch).toBe("amd64");
+    expect(platform.binaryName).toBe("cosign-windows-amd64.exe");
+    expect(platform.downloadUrl).toContain("cosign-windows-amd64.exe");
+  });
+
+  test("maps win32 arm64 to windows arm64 with .exe suffix", () => {
+    const platform = detectPlatform("win32", "arm64");
+    expect(platform.binaryName).toBe("cosign-windows-arm64.exe");
+  });
+
+  test("unix targets carry no .exe suffix", () => {
+    expect(detectPlatform("linux", "x64").binaryName).toBe("cosign-linux-amd64");
+    expect(detectPlatform("darwin", "arm64").binaryName).toBe("cosign-darwin-arm64");
   });
 });
 
@@ -143,13 +165,16 @@ describe("verifySigstoreBundle", () => {
 });
 
 describe("detectPlatform - unsupported", () => {
-  test("throws on unsupported platform", () => {
-    const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
-    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
-    try {
-      expect(() => detectPlatform()).toThrow("Unsupported platform: win32");
-    } finally {
-      if (originalPlatform) Object.defineProperty(process, "platform", originalPlatform);
-    }
+  test("throws on a genuinely unsupported platform", () => {
+    // win32 is now supported (#216); freebsd is not a cosign release target.
+    expect(() => detectPlatform("freebsd", "x64")).toThrow("Unsupported platform: freebsd");
+  });
+
+  test("error lists the supported platforms by their cosign os names", () => {
+    expect(() => detectPlatform("freebsd", "x64")).toThrow(/darwin, linux, windows/);
+  });
+
+  test("throws on an unsupported architecture", () => {
+    expect(() => detectPlatform("linux", "ia32")).toThrow("Unsupported architecture: ia32");
   });
 });

@@ -150,6 +150,28 @@ export async function verifyPackageSigstore(
       };
     }
     return { verified: false, reason: result.error ?? "cosign verification failed" };
+  } catch (err) {
+    // Deliberate resilience policy (#216): a package manager must never abort
+    // the whole install because the signature verifier could not *run*. A
+    // throw out of the verifier means verification was unable to execute — a
+    // *capability* gap, not evidence of tampering. The canonical case is
+    // cosign having no binary for this platform/arch, so detectPlatform throws.
+    //
+    // This is safe BECAUSE failures that genuinely ran-and-rejected never
+    // reach here: a ran-and-rejected cosign verify-blob returns valid:false
+    // (→ verified:false above); the bundle download fails outside this try
+    // (line 139 → verified:false); and the bundled-cosign wrapper reports
+    // binary-fetch / checksum-mismatch failures as a returned {valid:false},
+    // not a throw. So a throw is specifically "we couldn't perform the check".
+    //
+    // Degrade to verified=null — the same contract as unsigned and the
+    // soma#303 missing-identity case: warn and proceed on the default path,
+    // while --strict-signing still escalates null to a hard refusal, so the
+    // security posture is preserved.
+    return {
+      verified: null,
+      reason: `Sigstore verification unavailable: ${errorMessage(err)}`,
+    };
   } finally {
     await unlink(dl.path).catch(() => {
       // best-effort cleanup
