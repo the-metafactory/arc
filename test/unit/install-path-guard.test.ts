@@ -131,6 +131,10 @@ describe("extractRepoName — URL / local-path → safe name", () => {
     test("SSH URL", () => {
       expect(extractRepoName("git@github.com:user/repo.git", path.win32)).toBe("repo");
     });
+
+    test("HTTPS URL without a .git suffix", () => {
+      expect(extractRepoName("https://github.com/user/repo", path.win32)).toBe("repo");
+    });
   });
 
   describe("posix (unchanged behavior)", () => {
@@ -148,6 +152,10 @@ describe("extractRepoName — URL / local-path → safe name", () => {
 
     test("SSH URL", () => {
       expect(extractRepoName("git@github.com:user/repo.git", path.posix)).toBe("repo");
+    });
+
+    test("HTTPS URL without a .git suffix", () => {
+      expect(extractRepoName("https://github.com/user/repo", path.posix)).toBe("repo");
     });
   });
 });
