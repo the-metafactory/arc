@@ -27,7 +27,7 @@ import {
   rollbackArtifactSymlinks,
 } from "../lib/artifact-installer.js";
 import { wireExtensions } from "../lib/extensions.js";
-import { extractRepoName } from "../lib/repo-name.js";
+import { extractRepoName, isInsideRepos, repoNameFromPreExtracted } from "../lib/repo-name.js";
 import { requireBrokerForManifest } from "../lib/nats-broker.js";
 import {
   type HostOverrides,
@@ -108,16 +108,17 @@ export interface InstallResult {
 export async function install(opts: InstallOptions): Promise<InstallResult> {
   const { arc, host, db, repoUrl } = opts;
 
-  // 1. Clone repo (or use pre-extracted path for registry installs)
-  const repoName = opts.preExtractedPath
-    ? opts.preExtractedPath.split("/").pop() ?? extractRepoName(repoUrl)
-    : extractRepoName(repoUrl);
+  // 1. Clone repo (or use pre-extracted path for registry installs).
+  // basename (via repoNameFromPreExtracted) is separator-safe — `split("/")`
+  // returned the whole path on Windows `\`-separated paths (#219).
+  const repoName = repoNameFromPreExtracted(opts.preExtractedPath) ?? extractRepoName(repoUrl);
   const installPath = opts.preExtractedPath ?? join(arc.reposDir, repoName);
 
-  // S2: Path traversal guard — ensure installPath stays inside reposDir
-  const normalizedInstall = join(installPath); // resolves ../ segments
-  const normalizedRepos = join(arc.reposDir);
-  if (!normalizedInstall.startsWith(normalizedRepos + "/") && normalizedInstall !== normalizedRepos) {
+  // S2: Path traversal guard — ensure installPath stays inside reposDir.
+  // Uses a path.relative-based containment check (isInsideRepos) instead of a
+  // separator-naive `startsWith(reposDir + "/")` that false-rejected valid
+  // `\`-separated Windows child paths while still blocking `..` escapes (#219).
+  if (!isInsideRepos(arc.reposDir, installPath)) {
     return {
       success: false,
       error: `Refusing to install: repo name "${repoName}" would escape repos directory`,
