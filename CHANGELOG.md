@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.30.3
+
+### Fixed
+
+- **`arc install` of Sigstore-signed packages no longer fails on Windows** (closes [#216](https://github.com/the-metafactory/arc/issues/216), [#217](https://github.com/the-metafactory/arc/pull/217)). Two bugs in the cosign verification path:
+  - `detectPlatform` excluded `win32` and built the binary name as `cosign-<process.platform>-<arch>` with no `win32`→`windows` mapping and no `.exe` suffix, so it never matched the real sigstore/cosign release asset (`cosign-windows-amd64.exe` / `cosign-windows-arm64.exe`). It now maps `win32`→`windows`, appends `.exe`, and accepts Windows as a supported target. `SUPPORTED_PLATFORMS` is derived from the os-name map's keys so the two can never drift.
+  - A genuinely unsupported platform turned a verification *capability* gap into a hard install *failure* — `detectPlatform`'s throw propagated uncaught through `verifyPackageSigstore` and aborted the whole install. The verifier path now degrades to `verified: null` (warn-and-proceed, the same contract as unsigned and the soma#303 missing-identity case) while `--strict-signing` still escalates to a refusal. A genuine cosign rejection still returns `verified: false`.
+
 ## 0.30.0
 
 ### Fixed

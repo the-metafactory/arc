@@ -3,9 +3,9 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.30.2-blue" alt="Version: 0.30.2" />
+  <img src="https://img.shields.io/badge/version-0.30.3-blue" alt="Version: 0.30.3" />
   <img src="https://img.shields.io/badge/status-beta-yellow" alt="Status: Beta" />
-  <img src="https://img.shields.io/badge/tests-457%20passing-brightgreen" alt="Tests: 457 passing" />
+  <img src="https://img.shields.io/badge/tests-1003%20passing-brightgreen" alt="Tests: 1003 passing" />
   <img src="https://img.shields.io/badge/runtime-Bun-f472b6" alt="Runtime: Bun" />
   <img src="https://img.shields.io/badge/license-MIT-green" alt="License: MIT" />
   <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey" alt="Platform: macOS | Linux" />
