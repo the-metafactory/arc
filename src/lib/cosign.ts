@@ -28,17 +28,19 @@ interface PlatformInfo {
   downloadUrl: string;
 }
 
-const SUPPORTED_PLATFORMS = new Set(["darwin", "linux", "win32"]);
-const SUPPORTED_ARCHES = new Set(["arm64", "x64"]);
-
 // Node's process.platform value -> the os token sigstore/cosign uses in its
 // release asset names. win32 maps to "windows" (cosign ships
-// cosign-windows-amd64.exe / cosign-windows-arm64.exe).
+// cosign-windows-amd64.exe / cosign-windows-arm64.exe). SUPPORTED_PLATFORMS is
+// derived from these keys so the two can never drift out of sync — adding a
+// platform here is the single edit needed to support it.
 const COSIGN_OS_NAME: Record<string, string> = {
   darwin: "darwin",
   linux: "linux",
   win32: "windows",
 };
+
+const SUPPORTED_PLATFORMS = new Set(Object.keys(COSIGN_OS_NAME));
+const SUPPORTED_ARCHES = new Set(["arm64", "x64"]);
 
 const SUPPORTED_PLATFORM_LABELS = [...SUPPORTED_PLATFORMS]
   .map((p) => COSIGN_OS_NAME[p] ?? p)
@@ -144,9 +146,7 @@ export async function fetchCosignBinary(): Promise<{ path?: string; error?: stri
       await mkdir(destDir, { recursive: true });
     }
     await writeFile(destPath, Buffer.from(buffer));
-    // Make the binary executable on unix. On Windows fs.chmod is a harmless
-    // no-op (NTFS has no POSIX permission bits), and the .exe extension is
-    // what makes the file runnable there — so this needs no platform guard.
+    // Executable bit for unix; harmless no-op on Windows (.exe is runnable).
     await chmod(destPath, 0o755);
 
     process.stderr.write(`cosign ${COSIGN_VERSION} downloaded and verified.\n`);
