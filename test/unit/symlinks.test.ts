@@ -3,7 +3,18 @@ import { mkdir, writeFile, rm, lstat, readlink } from "fs/promises";
 import { existsSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
-import { createSymlink, removeSymlink, SymlinkConflictError } from "../../src/lib/symlinks.js";
+import {
+  createSymlink,
+  removeSymlink,
+  SymlinkConflictError,
+  createCliShim,
+  removeCliShim,
+} from "../../src/lib/symlinks.js";
+import type { ArcManifest } from "../../src/types.js";
+
+function cliManifest(cli: { command: string; name?: string }[]): ArcManifest {
+  return { name: "soma", version: "1.0.0", type: "tool", provides: { cli } };
+}
 
 let root: string;
 
@@ -113,5 +124,119 @@ describe("removeSymlink", () => {
 
     expect(removed).toBe(false);
     expect(existsSync(file)).toBe(true);
+  });
+});
+
+describe("createCliShim", () => {
+  test("POSIX: writes an extensionless #!/bin/bash shim", async () => {
+    const shimDir = join(root, "shim");
+    const binDir = join(root, "bin");
+
+    const created = await createCliShim(
+      shimDir,
+      binDir,
+      cliManifest([{ name: "soma", command: "bun src/cli.ts" }]),
+      "linux",
+    );
+
+    expect(created).toEqual(["soma"]);
+    const shimPath = join(shimDir, "soma");
+    expect(existsSync(shimPath)).toBe(true);
+    expect(existsSync(join(shimDir, "soma.cmd"))).toBe(false);
+
+    const content = await Bun.file(shimPath).text();
+    expect(content.startsWith("#!/bin/bash")).toBe(true);
+    expect(content).toContain(`cd "${join(binDir, "soma")}"`);
+    expect(content).toContain('exec bun run src/cli.ts "$@"');
+  });
+
+  test("Windows: writes a .cmd launcher, not a bash shim", async () => {
+    const shimDir = join(root, "shim");
+    const binDir = join(root, "bin");
+
+    const created = await createCliShim(
+      shimDir,
+      binDir,
+      cliManifest([{ name: "soma", command: "bun src/cli.ts" }]),
+      "win32",
+    );
+
+    // Returns the logical bin name, not the on-disk filename.
+    expect(created).toEqual(["soma"]);
+    const cmdPath = join(shimDir, "soma.cmd");
+    expect(existsSync(cmdPath)).toBe(true);
+    // No extensionless shim — that's the bug being fixed (Windows can't run it).
+    expect(existsSync(join(shimDir, "soma"))).toBe(false);
+
+    const content = await Bun.file(cmdPath).text();
+    expect(content.startsWith("@echo off")).toBe(true);
+    expect(content).toContain("setlocal");
+    expect(content).toContain(`cd /d "${join(binDir, "soma")}"`);
+    expect(content).toContain("bun run src/cli.ts %*");
+    expect(content).not.toContain("#!/bin/bash");
+  });
+
+  test("non-bun command: exec'd directly per platform", async () => {
+    const shimDir = join(root, "shim");
+    const binDir = join(root, "bin");
+    const manifest = cliManifest([{ name: "tool", command: "run.sh" }]);
+
+    await createCliShim(shimDir, binDir, manifest, "linux");
+    expect(await Bun.file(join(shimDir, "tool")).text()).toContain(
+      'exec ./run.sh "$@"',
+    );
+
+    await createCliShim(shimDir, binDir, manifest, "win32");
+    expect(await Bun.file(join(shimDir, "tool.cmd")).text()).toContain(
+      "run.sh %*",
+    );
+  });
+
+  test("no CLI entries: creates nothing and returns []", async () => {
+    const shimDir = join(root, "shim");
+
+    const created = await createCliShim(
+      shimDir,
+      join(root, "bin"),
+      cliManifest([]),
+      "win32",
+    );
+
+    expect(created).toEqual([]);
+    expect(existsSync(shimDir)).toBe(false);
+  });
+});
+
+describe("removeCliShim", () => {
+  test("POSIX: removes the extensionless shim", async () => {
+    const shimDir = join(root, "shim");
+    await mkdir(shimDir, { recursive: true });
+    await writeFile(join(shimDir, "soma"), "#!/bin/bash\n");
+
+    expect(await removeCliShim(shimDir, "soma", "linux")).toBe(true);
+    expect(existsSync(join(shimDir, "soma"))).toBe(false);
+  });
+
+  test("Windows: removes the .cmd shim", async () => {
+    const shimDir = join(root, "shim");
+    await mkdir(shimDir, { recursive: true });
+    await writeFile(join(shimDir, "soma.cmd"), "@echo off\n");
+
+    expect(await removeCliShim(shimDir, "soma", "win32")).toBe(true);
+    expect(existsSync(join(shimDir, "soma.cmd"))).toBe(false);
+  });
+
+  test("Windows: also sweeps a legacy extensionless shim", async () => {
+    const shimDir = join(root, "shim");
+    await mkdir(shimDir, { recursive: true });
+    // Simulates a shim written by a pre-fix arc, with no matching .cmd.
+    await writeFile(join(shimDir, "soma"), "#!/bin/bash\n");
+
+    expect(await removeCliShim(shimDir, "soma", "win32")).toBe(true);
+    expect(existsSync(join(shimDir, "soma"))).toBe(false);
+  });
+
+  test("returns false when no shim exists", async () => {
+    expect(await removeCliShim(join(root, "shim"), "soma", "win32")).toBe(false);
   });
 });
