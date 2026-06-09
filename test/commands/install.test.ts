@@ -1,5 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { existsSync, lstatSync, readlinkSync } from "fs";
+import { mkdir, writeFile } from "fs/promises";
 import { join } from "path";
 import {
   createTestEnv,
@@ -9,6 +10,50 @@ import {
 import { install, parseNameVersion } from "../../src/commands/install.js";
 import { remove } from "../../src/commands/remove.js";
 import { getSkill } from "../../src/lib/db.js";
+import { saveSources } from "../../src/lib/sources.js";
+
+async function buildRegistryTarball(opts: {
+  baseDir: string;
+  name: string;
+  version: string;
+}): Promise<{ bytes: Uint8Array; sha256: string }> {
+  const stageRoot = join(opts.baseDir, `__cli-registry-fixture-${opts.name}-${opts.version}`);
+  const topDir = join(stageRoot, "pkg");
+  await mkdir(join(topDir, "skill"), { recursive: true });
+  await writeFile(join(topDir, "skill", "SKILL.md"), `# ${opts.name}\n`);
+  await writeFile(
+    join(topDir, "arc-manifest.yaml"),
+    [
+      `name: ${opts.name}`,
+      `version: ${opts.version}`,
+      "type: skill",
+      "capabilities:",
+      "  filesystem:",
+      "    read: []",
+      "    write: []",
+      "  network: []",
+      "  bash:",
+      "    allowed: false",
+      "  secrets: []",
+      "",
+    ].join("\n"),
+  );
+  const tarPath = join(opts.baseDir, `__cli-registry-fixture-${opts.name}-${opts.version}.tar.gz`);
+  Bun.spawnSync(["tar", "czf", tarPath, "-C", stageRoot, "pkg"], {
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const buf = await Bun.file(tarPath).arrayBuffer();
+  const hasher = new Bun.CryptoHasher("sha256");
+  hasher.update(buf);
+  return { bytes: new Uint8Array(buf), sha256: hasher.digest("hex") };
+}
+
+function processEnvWith(overrides: Record<string, string>): Record<string, string> {
+  const entries = Object.entries(process.env)
+    .filter((entry): entry is [string, string] => typeof entry[1] === "string");
+  return { ...Object.fromEntries(entries), ...overrides };
+}
 
 let env: TestEnv;
 
@@ -589,6 +634,108 @@ describe("install command", () => {
     // No `arc upgrade` suggestion when versions match — that would just no-op.
     expect(result.error).not.toContain("arc upgrade");
   });
+
+  test("registry duplicate install keeps existing final directory intact", async () => {
+    const fixture = await buildRegistryTarball({
+      baseDir: env.root,
+      name: "soma",
+      version: "1.2.3",
+    });
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(req) {
+        const url = new URL(req.url);
+        if (url.pathname.includes("/storage/download/")) {
+          return new Response(fixture.bytes as unknown as BodyInit, { status: 200 });
+        }
+        if (/\/api\/v1\/packages\/[^/]+\/[^/]+@/.test(url.pathname)) {
+          return new Response(JSON.stringify({
+            version: "1.2.3",
+            sha256: fixture.sha256,
+            manifest_canonical: '{"name":"@metafactory/soma","version":"1.2.3"}',
+            signing: { registry_signature: null, registry_key_id: null },
+          }), { status: 200 });
+        }
+        if (url.pathname.includes("/api/v1/packages/")) {
+          return new Response(JSON.stringify({
+            namespace: "@metafactory",
+            name: "soma",
+            display_name: null,
+            description: "",
+            type: "skill",
+            license: "MIT",
+            latest_version: "1.2.3",
+            versions: ["1.2.3"],
+            publisher: { display_name: "Test", tier: "official", mfa_enabled: true, github_username: null },
+            sponsor: null,
+            created_at: 0,
+            updated_at: 0,
+          }), { status: 200 });
+        }
+        return new Response("not found", { status: 404 });
+      },
+    });
+
+    try {
+      await saveSources(env.arc.sourcesPath, {
+        sources: [{
+          name: "mf-test",
+          url: `http://127.0.0.1:${server.port}`,
+          tier: "official",
+          enabled: true,
+          type: "metafactory",
+        }],
+      });
+
+      const finalInstallPath = join(env.arc.reposDir, "metafactory__soma");
+      await mkdir(finalInstallPath, { recursive: true });
+      await writeFile(join(finalInstallPath, "sentinel.txt"), "keep\n");
+      const now = new Date().toISOString();
+      env.db.prepare(
+        `INSERT INTO skills (name, version, repo_url, install_path, skill_dir, status, artifact_type, tier, installed_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        "soma",
+        "1.0.0",
+        "@metafactory/soma@1.0.0",
+        finalInstallPath,
+        finalInstallPath,
+        "active",
+        "skill",
+        "official",
+        now,
+        now,
+      );
+
+      const child = Bun.spawn(
+        ["bun", "src/cli.ts", "install", "@metafactory/soma", "--yes", "--bin-dir", env.arc.shimDir],
+        {
+          cwd: join(import.meta.dir, "..", ".."),
+          env: processEnvWith({
+            ARC_CONFIG_ROOT: env.arc.configRoot,
+            ARC_BIN_DIR: env.arc.shimDir,
+            HOME: env.root,
+          }),
+          stdout: "pipe",
+          stderr: "pipe",
+        },
+      );
+      const [exitCode, stdout, stderr] = await Promise.all([
+        child.exited,
+        new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
+      ]);
+
+      const output = `${stdout}\n${stderr}`;
+      expect(exitCode).not.toBe(0);
+      expect(output).toContain("already installed");
+      expect(existsSync(finalInstallPath)).toBe(true);
+      expect(await Bun.file(join(finalInstallPath, "sentinel.txt")).text()).toBe("keep\n");
+    } finally {
+      server.stop(true);
+    }
+  }, 15_000);
 
   test("installs pinned version by checking out git tag", async () => {
     const repo = await createMockSkillRepo(env.root, {

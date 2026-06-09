@@ -74,15 +74,10 @@ import {
 import {
   parsePackageRef,
   formatPackageRef,
-  resolveFromRegistry,
-  downloadPackage,
-  verifyChecksum,
-  extractPackage,
+  resolveVerifiedPackage,
   formatQuarantineMessage,
   QUARANTINE_EXIT_CODE,
 } from "./lib/registry-install.js";
-import { verifyVersionSignature } from "./lib/registry-signing.js";
-import { verifyPackageSigstore } from "./lib/cosign-verify.js";
 import { loadCatalog, saveCatalog, findEntry } from "./lib/catalog.js";
 import {
   loadSources,
@@ -99,6 +94,8 @@ import {
 } from "./lib/remote-registry.js";
 import { homedir } from "os";
 import { join } from "path";
+import { existsSync } from "fs";
+import { rename, rm } from "fs/promises";
 import { parseLibraryRef } from "./lib/artifact-installer.js";
 import { errorMessage } from "./lib/errors.js";
 import pkg from "../package.json" with { type: "json" };
@@ -216,159 +213,86 @@ program
     if (pkgRef) {
       // Registry install: @scope/name[@version] → download from metafactory API
       const sources = await loadSources(paths.sourcesPath);
-      const resolved = await resolveFromRegistry(pkgRef, sources.sources);
+      console.log(`Resolving ${formatPackageRef(pkgRef)}...`);
+      const verified = await resolveVerifiedPackage({
+        ref: pkgRef,
+        sources: sources.sources,
+        reposDir: paths.reposDir,
+        targetDirName: `${pkgRef.scope}__${pkgRef.name}.arc-install-tmp-${Date.now()}`,
+      });
 
-      if (!resolved) {
-        console.error(`Package "${formatPackageRef(pkgRef)}" not found in any metafactory registry.`);
-        console.error(`Try: arc search ${pkgRef.name}`);
-        process.exit(1);
-      }
-
-      console.log(`Found ${formatPackageRef(pkgRef)} v${resolved.version} in ${resolved.source.name} [${resolved.source.tier}]`);
-
-      // arc#158: bail before download if a row already exists for this name.
-      // Resolved name is known here (no clone needed), so we save the bytes.
-      const existingRow = getSkill(db, resolved.name);
-      if (existingRow && !existingRow.library_name) {
-        let hint: string;
-        if (existingRow.status === "disabled") {
-          hint = `Run \`arc enable ${resolved.name}\` to re-enable it, or \`arc remove ${resolved.name}\` first if you want a clean install.`;
-        } else if (existingRow.version === resolved.version) {
-          hint = `Already at v${resolved.version}. Run \`arc remove ${resolved.name}\` first to reinstall.`;
-        } else {
-          hint = `Run \`arc upgrade ${resolved.name}\`, or \`arc remove ${resolved.name}\` first if the existing install can't be upgraded in place.`;
-        }
-        console.error(`'${resolved.name}' v${existingRow.version} is already installed (status: ${existingRow.status}). ${hint}`);
-        process.exit(1);
-      }
-
-      // Download. Anonymous by default (DD-80); the resolved source is passed
-      // through so an auth-gated metafactory storage endpoint receives the
-      // bearer token from `arc login` (issue #83).
-      console.log(`Downloading...`);
-      const download = await downloadPackage(resolved.downloadUrl, paths.reposDir, resolved.source);
-      if (!download.success || !download.tempPath) {
-        // 451 quarantine (mf#76 / arc#105) gets dedicated UX + a distinct
-        // exit code so scripts can tell deliberate-removal apart from
-        // missing/network failures.
-        if (download.quarantine) {
+      if (!verified.success) {
+        if (verified.quarantine) {
           const colorEnabled = process.stderr.isTTY;
           for (const line of formatQuarantineMessage(
             formatPackageRef(pkgRef),
-            download.quarantine,
+            verified.quarantine,
             colorEnabled,
           )) {
             console.error(line);
           }
           process.exit(QUARANTINE_EXIT_CODE);
         }
-        console.error(`${download.error}`);
+        console.error(`${verified.error}`);
         process.exit(1);
       }
-      console.log(`Downloaded ${((download.bytesDownloaded ?? 0) / 1024).toFixed(0)} KB`);
 
-      // Verify SHA-256
-      const verify = await verifyChecksum(download.tempPath, resolved.sha256);
-      if (!verify.valid) {
-        console.error(`Checksum verification failed!`);
-        console.error(`  Expected: ${verify.expected}`);
-        console.error(`  Actual:   ${verify.actual}`);
-        console.error(`This could indicate a corrupted download or compromised package.`);
-        if (await Bun.file(download.tempPath).exists()) {
-          Bun.spawnSync(["rm", "-f", download.tempPath]);
-        }
-        process.exit(1);
-      }
+      const resolvedPackage = verified.resolvedPackage;
+      const verification = resolvedPackage.packageVerificationEvidence;
+      console.log(`Found ${formatPackageRef(pkgRef)} v${resolvedPackage.version} in ${resolvedPackage.source.name} [${resolvedPackage.source.tier}]`);
       console.log(`SHA-256 verified`);
-
-      // A-504: verify registry-level Ed25519 signature over manifest bytes.
-      // Blocks install on any verified=false. verified=null means the
-      // version is unsigned (legacy / registry in degraded mode at publish
-      // time) — arc proceeds with a warning, consistent with meta-factory's
-      // own graceful degradation.
-      const sigResult = await verifyVersionSignature(
-        resolved.source,
-        {
-          registry_signature: resolved.registrySignature,
-          registry_key_id: resolved.registryKeyId,
-        },
-        resolved.manifestCanonical,
-      );
-      if (sigResult.verified === false) {
-        // Distinguish infrastructure unavailability from a genuine
-        // signature mismatch. Both fail-closed, but the user-facing
-        // framing differs: "try again later" vs "investigate now".
-        const infraFailure = /public key unavailable|manifest_canonical missing/i.test(
-          sigResult.reason,
-        );
-        console.error(`Registry signature verification failed: ${sigResult.reason}`);
-        if (infraFailure) {
-          console.error(`The registry may be temporarily unreachable or misconfigured. Try again later.`);
-        } else {
-          console.error(`This could indicate a compromised registry or a tampered manifest.`);
-        }
-        if (await Bun.file(download.tempPath).exists()) {
-          Bun.spawnSync(["rm", "-f", download.tempPath]);
-        }
-        process.exit(1);
-      }
-      if (sigResult.verified === true) {
-        console.log(`Registry signature verified (${sigResult.reason})`);
+      if (verification.registrySignature.status === "verified") {
+        console.log(`Registry signature verified (${verification.registrySignature.reason})`);
       } else {
-        console.warn(`Registry signature: ${sigResult.reason}`);
+        console.warn(`Registry signature: ${verification.registrySignature.reason}`);
       }
 
-      // A-503: verify Sigstore bundle (cosign) when signature_bundle_key is
-      // present. Scope OQ-14: GitHub Actions OIDC only. verified=null means
-      // the version predates Sigstore signing — proceed with a warning.
-      const sigstoreResult = await verifyPackageSigstore({
-        source: resolved.source,
-        sha256: resolved.sha256,
-        signing: {
-          signature_bundle_key: resolved.signatureBundleKey,
-          signer_identity: resolved.signerIdentity,
-        },
-        artifactPath: download.tempPath,
-        tempDir: paths.reposDir,
-      });
-      if (sigstoreResult.verified === false) {
-        console.error(`Sigstore verification failed: ${sigstoreResult.reason}`);
-        console.error(`This could indicate a tampered artifact or an unexpected signer.`);
-        if (await Bun.file(download.tempPath).exists()) {
-          Bun.spawnSync(["rm", "-f", download.tempPath]);
+      // arc#158: resolved manifest identity is known here, before landing artifacts.
+      const existingRow = getSkill(db, resolvedPackage.manifest.name);
+      if (existingRow && !existingRow.library_name) {
+        let hint: string;
+        if (existingRow.status === "disabled") {
+          hint = `Run \`arc enable ${resolvedPackage.manifest.name}\` to re-enable it, or \`arc remove ${resolvedPackage.manifest.name}\` first if you want a clean install.`;
+        } else if (existingRow.version === resolvedPackage.version) {
+          hint = `Already at v${resolvedPackage.version}. Run \`arc remove ${resolvedPackage.manifest.name}\` first to reinstall.`;
+        } else {
+          hint = `Run \`arc upgrade ${resolvedPackage.manifest.name}\`, or \`arc remove ${resolvedPackage.manifest.name}\` first if the existing install can't be upgraded in place.`;
         }
+        await rm(resolvedPackage.installPath, { recursive: true, force: true }).catch(() => undefined);
+        console.error(`'${resolvedPackage.manifest.name}' v${existingRow.version} is already installed (status: ${existingRow.status}). ${hint}`);
         process.exit(1);
       }
+
       // arc#160: a missing Sigstore signature on an official-tier source is
       // a real risk, not a side note. Promote it to a prominent warning, and
       // let --strict-signing turn it into a hard failure.
-      let sigstoreVerified = false;
-      if (sigstoreResult.verified === true) {
-        console.log(`Sigstore signature verified (${sigstoreResult.reason})`);
-        sigstoreVerified = true;
-      } else if (resolved.source.tier === "official") {
+      const sigstoreVerified = verification.sigstore.status === "verified";
+      if (sigstoreVerified) {
+        console.log(`Sigstore signature verified (${verification.sigstore.reason})`);
+      } else if (resolvedPackage.source.tier === "official") {
         console.warn(`⚠️  Sigstore signature MISSING for official-tier package`);
-        console.warn(`   ${sigstoreResult.reason}`);
+        console.warn(`   ${verification.sigstore.reason}`);
         console.warn(`   SHA-256 and registry signature are verified, but the package itself is not Sigstore-signed.`);
         console.warn(`   This means the identity that produced the bytes cannot be cryptographically attested.`);
         if (opts.strictSigning) {
           console.error(`Refusing to install: --strict-signing is set and Sigstore signature is missing.`);
-          if (await Bun.file(download.tempPath).exists()) {
-            Bun.spawnSync(["rm", "-f", download.tempPath]);
-          }
+          await rm(resolvedPackage.installPath, { recursive: true, force: true }).catch(() => undefined);
           process.exit(1);
         }
       } else {
-        console.warn(`Sigstore signature: ${sigstoreResult.reason}`);
+        console.warn(`Sigstore signature: ${verification.sigstore.reason}`);
       }
 
-      // Extract
-      const packageDir = `${resolved.scope}__${resolved.name}`;
-      const extract = await extractPackage(download.tempPath, paths.reposDir, packageDir);
-      if (!extract.success) {
-        console.error(`${extract.error}`);
+      const finalInstallPath = join(
+        paths.reposDir,
+        `${resolvedPackage.ref.scope}__${resolvedPackage.ref.name}`,
+      );
+      if (existsSync(finalInstallPath)) {
+        await rm(resolvedPackage.installPath, { recursive: true, force: true }).catch(() => undefined);
+        console.error(`Refusing to install: target directory already exists at ${finalInstallPath}. Remove it first or run \`arc upgrade ${resolvedPackage.manifest.name}\`.`);
         process.exit(1);
       }
+      await rename(resolvedPackage.installPath, finalInstallPath);
 
       // Continue with standard install flow (manifest, symlinks, hooks, DB).
       // Use preExtractedPath so install() skips git clone.
@@ -376,11 +300,11 @@ program
         arc: paths,
         host,
         db,
-        repoUrl: formatPackageRef({ scope: resolved.scope, name: resolved.name, version: resolved.version }),
+        repoUrl: resolvedPackage.repoUrl,
         yes: opts.yes,
-        preExtractedPath: extract.extractedPath,
-        sourceName: resolved.source.name,
-        sourceTier: resolved.source.tier,
+        preExtractedPath: finalInstallPath,
+        sourceName: resolvedPackage.source.name,
+        sourceTier: resolvedPackage.source.tier,
       });
       if (result.success) {
         // arc#160: don't claim "(verified)" on the final line when only the

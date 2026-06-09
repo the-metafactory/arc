@@ -14,7 +14,7 @@ import { findInAllSources } from "../lib/remote-registry.js";
 import {
   parsePackageRef,
   resolveFromRegistry,
-  fetchAndVerifyRegistryPackage,
+  resolveVerifiedPackage,
 } from "../lib/registry-install.js";
 import { runScript } from "../lib/scripts.js";
 import { registerHooks, removeHooks, resolveHooksFromManifest } from "../lib/hooks.js";
@@ -202,17 +202,17 @@ export async function upgradePackage(
     // with no install — which is the remove+install hazard (bug 3).
     const sources = await loadSources(arc.sourcesPath);
     const tmpDirName = `${ref.scope}__${ref.name}.arc-upgrade-tmp`;
-    const fetched = await fetchAndVerifyRegistryPackage({
+    const fetched = await resolveVerifiedPackage({
       ref: { scope: ref.scope, name: ref.name },
       sources: sources.sources,
       reposDir: arc.reposDir,
       targetDirName: tmpDirName,
     });
-    if (!fetched.success || !fetched.extractedPath) {
+    if (!fetched.success) {
       return { success: false, name, oldVersion: skill.version, error: fetched.error ?? "registry re-download failed" };
     }
 
-    const newPath = fetched.extractedPath;
+    const newPath = fetched.resolvedPackage.installPath;
     const backupPath = `${installPath}.arc-upgrade-bak`;
     Bun.spawnSync(["rm", "-rf", backupPath], { stdout: "pipe", stderr: "pipe" });
     const aside = Bun.spawnSync(["mv", installPath, backupPath], { stdout: "pipe", stderr: "pipe" });
