@@ -60,18 +60,38 @@ export function repoNameFromPreExtracted(
 }
 
 /**
- * Extract a safe directory name from a git repo URL.
+ * Does `url` denote a local filesystem path rather than a remote git URL?
  *
- * Handles local paths, SSH URLs, and HTTPS URLs.
- * Rejects names containing path traversal characters.
+ * Covers POSIX absolute (`/repo`), relative (`./repo`, `..\repo`), and — via
+ * the path flavor's `isAbsolute` — Windows absolute paths (`C:\repo`, `\\unc`).
+ * Remote forms (`https://…`, `git@host:…`) are not absolute under either flavor
+ * and don't start with `/` or `.`, so they fall through to URL parsing (even on
+ * win32, where `isAbsolute("https://…")`/`isAbsolute("git@…")` are both false).
  */
-export function extractRepoName(url: string): string {
+function isLocalPath(url: string, p: PathFlavor): boolean {
+  return url.startsWith("/") || url.startsWith(".") || p.isAbsolute(url);
+}
+
+/**
+ * Extract a safe directory name from a git repo URL or local path.
+ *
+ * Handles local paths, SSH URLs, and HTTPS URLs. Rejects names containing path
+ * traversal characters.
+ *
+ * Takes an injectable path flavor (defaults to the platform's `path`) so the
+ * Windows `\`-separator behavior is testable on a posix CI host — mirroring
+ * {@link isInsideRepos} / {@link repoNameFromPreExtracted}. A #219 follow-on:
+ * that fix made the registry / pre-extracted path separator-safe, but this
+ * URL-derived path still used `split("/")`, which returned the WHOLE string for
+ * a `\`-separated Windows local path (e.g. `C:\…\repo`) — it never matched the
+ * `/`-only local-path test, fell through to URL parsing, and then tripped the
+ * traversal guard below. `basename` is separator-aware for the active flavor.
+ */
+export function extractRepoName(url: string, p: PathFlavor = nodePath): string {
   let name: string;
 
-  // Local path
-  if (url.startsWith("/") || url.startsWith(".")) {
-    const parts = url.split("/").filter(Boolean);
-    name = parts[parts.length - 1].replace(/\.git$/, "");
+  if (isLocalPath(url, p)) {
+    name = p.basename(url).replace(/\.git$/, "");
   }
   // SSH: git@github.com:user/repo.git
   else {
