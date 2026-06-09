@@ -144,6 +144,9 @@ export async function fetchCosignBinary(): Promise<{ path?: string; error?: stri
       await mkdir(destDir, { recursive: true });
     }
     await writeFile(destPath, Buffer.from(buffer));
+    // Make the binary executable on unix. On Windows fs.chmod is a harmless
+    // no-op (NTFS has no POSIX permission bits), and the .exe extension is
+    // what makes the file runnable there — so this needs no platform guard.
     await chmod(destPath, 0o755);
 
     process.stderr.write(`cosign ${COSIGN_VERSION} downloaded and verified.\n`);
