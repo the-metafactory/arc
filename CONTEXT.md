@@ -12,6 +12,10 @@ _Avoid_: Artifact landing, install pipeline, install flow
 A package whose source, version, manifest location, and install material have been determined before installation begins.
 _Avoid_: Lookup result, found package
 
+**Package Verification Evidence**:
+The structured record of checksum, registry signature, Sigstore, quarantine, and source-trust facts gathered while resolving install material.
+_Avoid_: Verification result, install check, warning flags
+
 **Install Authorization**:
 A decision that the package is allowed to land after trust, capability, and operator policy checks have completed.
 _Avoid_: Approval flag, yes option, confirmation
@@ -27,6 +31,8 @@ _Avoid_: Result object, debug details
 ## Relationships
 
 - An **Install Transaction** starts from exactly one **Resolved Package**.
+- A **Resolved Package** carries **Package Verification Evidence** when it comes from a verifiable registry source.
+- **Package Verification Evidence** informs **Install Authorization** but does not decide it.
 - An **Install Transaction** requires exactly one **Install Authorization** before landing artifacts.
 - An **Install Transaction** may create many **Landed Artifacts**.
 - An **Install Transaction** returns **Transaction Evidence** whether it succeeds or fails.

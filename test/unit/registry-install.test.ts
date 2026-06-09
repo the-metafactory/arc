@@ -1,13 +1,15 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { createTestEnv, type TestEnv } from "../helpers/test-env.js";
 import { join } from "path";
-import { writeFile } from "fs/promises";
+import { existsSync } from "fs";
+import { mkdir, writeFile } from "fs/promises";
 import {
   parsePackageRef,
   formatPackageRef,
   verifyChecksum,
   extractPackage,
   resolveFromRegistry,
+  resolveVerifiedPackage,
   downloadPackage,
   formatQuarantineMessage,
   isQuarantineReasonCode,
@@ -30,6 +32,81 @@ function metafactorySource(token?: string): RegistrySource {
     enabled: true,
     type: "metafactory",
     ...(token ? { token } : {}),
+  };
+}
+
+async function buildPackageTarball(opts: {
+  baseDir: string;
+  name: string;
+  version: string;
+  manifestBody?: string;
+}): Promise<{ bytes: Uint8Array; sha256: string }> {
+  const stageRoot = join(opts.baseDir, `__resolved-fixture-${opts.name}-${opts.version}-${Date.now()}`);
+  const topDir = join(stageRoot, "pkg");
+  await mkdir(join(topDir, "skill"), { recursive: true });
+  await writeFile(join(topDir, "skill", "SKILL.md"), `# ${opts.name}\n`);
+  await writeFile(
+    join(topDir, "arc-manifest.yaml"),
+    opts.manifestBody ?? [
+      `name: ${opts.name}`,
+      `version: ${opts.version}`,
+      "type: skill",
+      "capabilities:",
+      "  filesystem:",
+      "    read: []",
+      "    write: []",
+      "  network: []",
+      "  bash:",
+      "    allowed: false",
+      "  secrets: []",
+      "",
+    ].join("\n"),
+  );
+  const tarPath = join(opts.baseDir, `__resolved-fixture-${opts.name}-${opts.version}.tar.gz`);
+  Bun.spawnSync(["tar", "czf", tarPath, "-C", stageRoot, "pkg"], {
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const buf = await Bun.file(tarPath).arrayBuffer();
+  const hasher = new Bun.CryptoHasher("sha256");
+  hasher.update(buf);
+  return { bytes: new Uint8Array(buf), sha256: hasher.digest("hex") };
+}
+
+function metafactoryResolveHandler(opts: {
+  scope: string;
+  name: string;
+  version: string;
+  sha256: string;
+  tarball: Uint8Array;
+}) {
+  return async (input: any) => {
+    const url = typeof input === "string" ? input : input.url;
+    if (url.includes("/storage/download/")) {
+      return new Response(opts.tarball as unknown as BodyInit, { status: 200 });
+    }
+    if (/\/packages\/[^/]+\/[^/]+@/.test(url)) {
+      return new Response(JSON.stringify({
+        version: opts.version,
+        sha256: opts.sha256,
+        manifest_canonical: `{"name":"@${opts.scope}/${opts.name}","version":"${opts.version}"}`,
+        signing: { registry_signature: null, registry_key_id: null },
+      }), { status: 200 });
+    }
+    return new Response(JSON.stringify({
+      namespace: `@${opts.scope}`,
+      name: opts.name,
+      display_name: null,
+      description: "",
+      type: "skill",
+      license: "MIT",
+      latest_version: opts.version,
+      versions: [opts.version],
+      publisher: { display_name: "Test", tier: "official", mfa_enabled: true, github_username: null },
+      sponsor: null,
+      created_at: 0,
+      updated_at: 0,
+    }), { status: 200 });
   };
 }
 
@@ -343,6 +420,139 @@ describe("resolveFromRegistry", () => {
         [metafactorySource()],
       );
       expect(result).toBeNull();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resolveVerifiedPackage tests
+// ---------------------------------------------------------------------------
+
+describe("resolveVerifiedPackage", () => {
+  test("returns a Resolved Package with Package Verification Evidence", async () => {
+    const originalFetch = globalThis.fetch;
+    const fixture = await buildPackageTarball({
+      baseDir: env.arc.reposDir,
+      name: "soma",
+      version: "1.2.3",
+    });
+    globalThis.fetch = mockFetch(metafactoryResolveHandler({
+      scope: "metafactory",
+      name: "soma",
+      version: "1.2.3",
+      sha256: fixture.sha256,
+      tarball: fixture.bytes,
+    }));
+
+    try {
+      const result = await resolveVerifiedPackage({
+        ref: { scope: "metafactory", name: "soma" },
+        sources: [metafactorySource()],
+        reposDir: env.arc.reposDir,
+        targetDirName: "metafactory__soma",
+      });
+
+      expect(result.success).toBe(true);
+      if (!result.success) throw new Error(result.error);
+
+      expect(result.resolvedPackage.ref).toEqual({
+        scope: "metafactory",
+        name: "soma",
+        version: "1.2.3",
+      });
+      expect(result.resolvedPackage.version).toBe("1.2.3");
+      expect(result.resolvedPackage.repoUrl).toBe("@metafactory/soma@1.2.3");
+      expect(result.resolvedPackage.manifest.name).toBe("soma");
+      expect(result.resolvedPackage.manifestPath).toBe(join(
+        result.resolvedPackage.installPath,
+        "arc-manifest.yaml",
+      ));
+      expect(existsSync(result.resolvedPackage.installPath)).toBe(true);
+
+      const evidence = result.resolvedPackage.packageVerificationEvidence;
+      expect(evidence.checksum).toEqual({
+        status: "verified",
+        expected: fixture.sha256,
+        actual: fixture.sha256,
+      });
+      expect(evidence.registrySignature.status).toBe("missing");
+      expect(evidence.sigstore.status).toBe("missing");
+      expect(evidence.sourceTrust).toEqual({
+        sourceName: "mf-test",
+        sourceTier: "official",
+        sourceType: "metafactory",
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("cleans up extracted material when manifest validation fails", async () => {
+    const originalFetch = globalThis.fetch;
+    const targetDirName = "bad-manifest";
+    const fixture = await buildPackageTarball({
+      baseDir: env.arc.reposDir,
+      name: "bad",
+      version: "1.0.0",
+      manifestBody: "name: bad\nversion: 1.0.0\ntype: skill\n",
+    });
+    globalThis.fetch = mockFetch(metafactoryResolveHandler({
+      scope: "metafactory",
+      name: "bad",
+      version: "1.0.0",
+      sha256: fixture.sha256,
+      tarball: fixture.bytes,
+    }));
+
+    try {
+      const result = await resolveVerifiedPackage({
+        ref: { scope: "metafactory", name: "bad" },
+        sources: [metafactorySource()],
+        reposDir: env.arc.reposDir,
+        targetDirName,
+      });
+
+      expect(result.success).toBe(false);
+      if (result.success) throw new Error("expected manifest validation to fail");
+      expect(result.error).toContain("Failed to read manifest");
+      expect(result.packageVerificationEvidence?.checksum?.status).toBe("verified");
+      expect(existsSync(join(env.arc.reposDir, targetDirName))).toBe(false);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("rejects and cleans up when manifest identity differs from registry identity", async () => {
+    const originalFetch = globalThis.fetch;
+    const targetDirName = "wrong-identity";
+    const fixture = await buildPackageTarball({
+      baseDir: env.arc.reposDir,
+      name: "other",
+      version: "9.9.9",
+    });
+    globalThis.fetch = mockFetch(metafactoryResolveHandler({
+      scope: "metafactory",
+      name: "soma",
+      version: "1.2.3",
+      sha256: fixture.sha256,
+      tarball: fixture.bytes,
+    }));
+
+    try {
+      const result = await resolveVerifiedPackage({
+        ref: { scope: "metafactory", name: "soma" },
+        sources: [metafactorySource()],
+        reposDir: env.arc.reposDir,
+        targetDirName,
+      });
+
+      expect(result.success).toBe(false);
+      if (result.success) throw new Error("expected manifest identity mismatch to fail");
+      expect(result.error).toContain("Manifest identity mismatch");
+      expect(result.packageVerificationEvidence?.checksum?.status).toBe("verified");
+      expect(existsSync(join(env.arc.reposDir, targetDirName))).toBe(false);
     } finally {
       globalThis.fetch = originalFetch;
     }

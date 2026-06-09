@@ -1,8 +1,10 @@
 import { join } from "path";
 import { existsSync } from "fs";
-import { writeFile, unlink, mkdir } from "fs/promises";
+import { writeFile, unlink, mkdir, rm } from "fs/promises";
 import type {
+  ArcManifest,
   PackageRef,
+  PackageTier,
   VerifyResult,
   RegistrySource,
 } from "../types.js";
@@ -10,6 +12,7 @@ import { getSourceType } from "./sources.js";
 import { fetchMetafactoryPackageDetail } from "./metafactory-api.js";
 import { verifyVersionSignature } from "./registry-signing.js";
 import { verifyPackageSigstore } from "./cosign-verify.js";
+import { readManifest } from "./manifest.js";
 
 // ---------------------------------------------------------------------------
 // Package reference parsing
@@ -500,25 +503,82 @@ export async function extractPackage(
 }
 
 // ---------------------------------------------------------------------------
-// Verified registry fetch (shared install + upgrade path) — arc#187
+// Resolved Package verification (shared install + upgrade path) — arc#187
 // ---------------------------------------------------------------------------
 
-export interface VerifiedFetchResult {
-  success: boolean;
-  /** Path the verified tarball was extracted to (a temp dir name under reposDir). */
-  extractedPath?: string;
-  /** Resolved registry metadata (version, source, …). */
-  resolved?: ResolvedRegistryPackage;
-  error?: string;
+export interface PackageVerificationEvidence {
+  checksum: {
+    status: "verified" | "failed";
+    expected: string;
+    actual?: string;
+  };
+  registrySignature: {
+    status: "verified" | "missing" | "failed";
+    reason: string;
+    keyId?: string | null;
+  };
+  sigstore: {
+    status: "verified" | "missing" | "failed";
+    reason: string;
+    signerIdentity?: string | null;
+    bundleKey?: string | null;
+  };
+  sourceTrust: {
+    sourceName: string;
+    sourceTier: PackageTier;
+    sourceType: "metafactory";
+  };
   quarantine?: QuarantineInfo;
 }
 
+export interface VerifiedResolvedPackage {
+  ref: PackageRef;
+  version: string;
+  source: RegistrySource;
+  repoUrl: string;
+  installPath: string;
+  manifestPath: string;
+  manifest: ArcManifest;
+  packageVerificationEvidence: PackageVerificationEvidence;
+}
+
+export type ResolveVerifiedPackageResult =
+  | {
+      success: true;
+      resolvedPackage: VerifiedResolvedPackage;
+    }
+  | {
+      success: false;
+      error?: string;
+      packageVerificationEvidence?: Partial<PackageVerificationEvidence>;
+      quarantine?: QuarantineInfo;
+    };
+
+function sourceTrustEvidence(source: RegistrySource): PackageVerificationEvidence["sourceTrust"] {
+  return {
+    sourceName: source.name,
+    sourceTier: source.tier,
+    sourceType: "metafactory",
+  };
+}
+
+function manifestPathFor(extractedPath: string): string | null {
+  const arcManifestPath = join(extractedPath, "arc-manifest.yaml");
+  if (existsSync(arcManifestPath)) return arcManifestPath;
+  const paiManifestPath = join(extractedPath, "pai-manifest.yaml");
+  if (existsSync(paiManifestPath)) return paiManifestPath;
+  return null;
+}
+
 /**
- * Resolve, download, fully verify, and extract a registry package — arc#187.
+ * Resolve a metafactory package ref into verified install material.
  *
- * This is the secure registry pipeline factored out of the `arc install`
- * inline flow (cli.ts) so `arc upgrade` can re-download a registry-extracted
- * package with the SAME verification guarantees instead of a weaker check.
+ * This is the secure registry pipeline shared by `arc install @scope/name`
+ * and registry-backed `arc upgrade`. It produces a **Resolved Package**:
+ * verified, extracted material plus its manifest and **Package Verification
+ * Evidence**. Callers still own duplicate checks, strict-signing policy,
+ * user-facing rendering, Install Authorization, and artifact landing.
+ *
  * It performs, in order:
  *   1. resolveFromRegistry (metafactory API) → version + sha256 + signing block
  *   2. downloadPackage (anonymous by default; bearer attached for auth'd storage)
@@ -526,22 +586,22 @@ export interface VerifiedFetchResult {
  *   4. Ed25519 registry-signature verification (A-504; fail-closed on `false`)
  *   5. Sigstore bundle verification (A-503; fail-closed on `false`, `null` = proceed)
  *   6. extract to `<reposDir>/<targetDirName>`
+ *   7. read the extracted arc-manifest.yaml / pai-manifest.yaml
  *
  * The artifact is extracted to a caller-chosen dir name (typically a `.tmp`
  * sibling of the real install path) so the caller can atomically swap it into
  * place only after success — never destroying the working install first.
  *
- * Unsigned/legacy versions (`verified: null`) proceed, mirroring install-side
- * graceful degradation. A genuine signature mismatch (`verified: false`)
- * fails closed. Console output is the caller's responsibility — this function
- * is silent so it can be used in non-interactive upgrade flows.
+ * Missing signatures (`verified: null`) proceed with explicit evidence.
+ * Genuine signature mismatches (`verified: false`) fail closed. Console
+ * output is the caller's responsibility.
  */
-export async function fetchAndVerifyRegistryPackage(opts: {
+export async function resolveVerifiedPackage(opts: {
   ref: PackageRef;
   sources: RegistrySource[];
   reposDir: string;
   targetDirName: string;
-}): Promise<VerifiedFetchResult> {
+}): Promise<ResolveVerifiedPackageResult> {
   const resolved = await resolveFromRegistry(opts.ref, opts.sources);
   if (!resolved) {
     return {
@@ -552,15 +612,30 @@ export async function fetchAndVerifyRegistryPackage(opts: {
 
   const download = await downloadPackage(resolved.downloadUrl, opts.reposDir, resolved.source);
   if (!download.success || !download.tempPath) {
-    return { success: false, error: download.error, quarantine: download.quarantine };
+    return {
+      success: false,
+      error: download.error,
+      quarantine: download.quarantine,
+      packageVerificationEvidence: {
+        sourceTrust: sourceTrustEvidence(resolved.source),
+        ...(download.quarantine ? { quarantine: download.quarantine } : {}),
+      },
+    };
   }
 
   const checksum = await verifyChecksum(download.tempPath, resolved.sha256);
+  const checksumEvidence: PackageVerificationEvidence["checksum"] = checksum.valid
+    ? { status: "verified", expected: checksum.expected, actual: checksum.actual }
+    : { status: "failed", expected: checksum.expected, actual: checksum.actual };
   if (!checksum.valid) {
     await unlink(download.tempPath).catch(() => undefined);
     return {
       success: false,
       error: `Checksum verification failed (expected ${checksum.expected}, got ${checksum.actual}).`,
+      packageVerificationEvidence: {
+        checksum: checksumEvidence,
+        sourceTrust: sourceTrustEvidence(resolved.source),
+      },
     };
   }
 
@@ -569,9 +644,26 @@ export async function fetchAndVerifyRegistryPackage(opts: {
     { registry_signature: resolved.registrySignature, registry_key_id: resolved.registryKeyId },
     resolved.manifestCanonical,
   );
+  const registrySignatureEvidence: PackageVerificationEvidence["registrySignature"] = {
+    status: sigResult.verified === true
+      ? "verified"
+      : sigResult.verified === false
+        ? "failed"
+        : "missing",
+    reason: sigResult.reason,
+    keyId: resolved.registryKeyId,
+  };
   if (sigResult.verified === false) {
     await unlink(download.tempPath).catch(() => undefined);
-    return { success: false, error: `Registry signature verification failed: ${sigResult.reason}` };
+    return {
+      success: false,
+      error: `Registry signature verification failed: ${sigResult.reason}`,
+      packageVerificationEvidence: {
+        checksum: checksumEvidence,
+        registrySignature: registrySignatureEvidence,
+        sourceTrust: sourceTrustEvidence(resolved.source),
+      },
+    };
   }
 
   const sigstoreResult = await verifyPackageSigstore({
@@ -584,15 +676,114 @@ export async function fetchAndVerifyRegistryPackage(opts: {
     artifactPath: download.tempPath,
     tempDir: opts.reposDir,
   });
+  const sigstoreEvidence: PackageVerificationEvidence["sigstore"] = {
+    status: sigstoreResult.verified === true
+      ? "verified"
+      : sigstoreResult.verified === false
+        ? "failed"
+        : "missing",
+    reason: sigstoreResult.reason,
+    signerIdentity: resolved.signerIdentity,
+    bundleKey: resolved.signatureBundleKey,
+  };
   if (sigstoreResult.verified === false) {
     await unlink(download.tempPath).catch(() => undefined);
-    return { success: false, error: `Sigstore verification failed: ${sigstoreResult.reason}` };
+    return {
+      success: false,
+      error: `Sigstore verification failed: ${sigstoreResult.reason}`,
+      packageVerificationEvidence: {
+        checksum: checksumEvidence,
+        registrySignature: registrySignatureEvidence,
+        sigstore: sigstoreEvidence,
+        sourceTrust: sourceTrustEvidence(resolved.source),
+      },
+    };
   }
 
   const extract = await extractPackage(download.tempPath, opts.reposDir, opts.targetDirName);
   if (!extract.success) {
-    return { success: false, error: extract.error };
+    return {
+      success: false,
+      error: extract.error,
+      packageVerificationEvidence: {
+        checksum: checksumEvidence,
+        registrySignature: registrySignatureEvidence,
+        sigstore: sigstoreEvidence,
+        sourceTrust: sourceTrustEvidence(resolved.source),
+      },
+    };
   }
 
-  return { success: true, extractedPath: extract.extractedPath, resolved };
+  let manifest: ArcManifest | null;
+  try {
+    manifest = await readManifest(extract.extractedPath);
+  } catch (err) {
+    await rm(extract.extractedPath, { recursive: true, force: true }).catch(() => undefined);
+    return {
+      success: false,
+      error: `Failed to read manifest: ${err instanceof Error ? err.message : String(err)}`,
+      packageVerificationEvidence: {
+        checksum: checksumEvidence,
+        registrySignature: registrySignatureEvidence,
+        sigstore: sigstoreEvidence,
+        sourceTrust: sourceTrustEvidence(resolved.source),
+      },
+    };
+  }
+
+  const manifestPath = manifestPathFor(extract.extractedPath);
+  if (!manifest || !manifestPath) {
+    await rm(extract.extractedPath, { recursive: true, force: true }).catch(() => undefined);
+    return {
+      success: false,
+      error: "Failed to read manifest from verified package material.",
+      packageVerificationEvidence: {
+        checksum: checksumEvidence,
+        registrySignature: registrySignatureEvidence,
+        sigstore: sigstoreEvidence,
+        sourceTrust: sourceTrustEvidence(resolved.source),
+      },
+    };
+  }
+
+  if (manifest.name !== resolved.name || manifest.version !== resolved.version) {
+    await rm(extract.extractedPath, { recursive: true, force: true }).catch(() => undefined);
+    return {
+      success: false,
+      error: `Manifest identity mismatch: registry resolved ${resolved.name} v${resolved.version}, package manifest declares ${manifest.name} v${manifest.version}.`,
+      packageVerificationEvidence: {
+        checksum: checksumEvidence,
+        registrySignature: registrySignatureEvidence,
+        sigstore: sigstoreEvidence,
+        sourceTrust: sourceTrustEvidence(resolved.source),
+      },
+    };
+  }
+
+  return {
+    success: true,
+    resolvedPackage: {
+      ref: {
+        scope: resolved.scope,
+        name: resolved.name,
+        version: resolved.version,
+      },
+      version: resolved.version,
+      source: resolved.source,
+      repoUrl: formatPackageRef({
+        scope: resolved.scope,
+        name: resolved.name,
+        version: resolved.version,
+      }),
+      installPath: extract.extractedPath,
+      manifestPath,
+      manifest,
+      packageVerificationEvidence: {
+        checksum: checksumEvidence,
+        registrySignature: registrySignatureEvidence,
+        sigstore: sigstoreEvidence,
+        sourceTrust: sourceTrustEvidence(resolved.source),
+      },
+    },
+  };
 }
