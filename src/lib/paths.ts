@@ -1,4 +1,4 @@
-import { join, dirname } from "path";
+import { join, dirname, delimiter as pathDelimiter } from "path";
 import { homedir } from "os";
 import { existsSync, renameSync } from "fs";
 import { mkdir } from "fs/promises";
@@ -53,21 +53,40 @@ function resolveConfigRoot(override?: string): string {
   return configRoot;
 }
 
+/**
+ * Is `dir` present on a PATH-style string? Splits on the platform's PATH
+ * delimiter — `;` on Windows, `:` on POSIX — which is injectable (defaults to
+ * `path.delimiter`) so the Windows behavior is testable on a POSIX CI host.
+ * The previous hard-coded `:` split mangled Windows `PATH` entries: it uses
+ * `;`, and each entry's `C:\...` drive letter contains a `:`, so a `:`-split
+ * shredded every path. Entries and `dir` are home-expanded and
+ * trailing-separator-normalized so equivalent spellings compare equal.
+ */
+export function isDirOnPath(
+  dir: string,
+  pathEnv: string = process.env.PATH ?? "",
+  delimiter: string = pathDelimiter,
+  home: string = homedir(),
+): boolean {
+  const target = normalizeUserPath(dir, home);
+  return pathEnv
+    .split(delimiter)
+    .filter(Boolean)
+    .some((entry) => normalizeUserPath(entry, home) === target);
+}
+
 export function resolveDefaultShimDir(opts?: {
   home?: string;
   pathEnv?: string;
   configuredBinDir?: string;
+  delimiter?: string;
 }): string {
   const home = opts?.home ?? homedir();
   const configured = opts?.configuredBinDir?.trim();
   if (configured) return normalizeUserPath(configured, home);
 
-  const pathEntries = new Set(
-    (opts?.pathEnv ?? process.env.PATH ?? "")
-      .split(":")
-      .filter(Boolean)
-      .map((entry) => normalizeUserPath(entry, home)),
-  );
+  const pathEnv = opts?.pathEnv ?? process.env.PATH ?? "";
+  const delimiter = opts?.delimiter ?? pathDelimiter;
 
   const preferred = [
     join(home, ".local", "bin"),
@@ -75,7 +94,7 @@ export function resolveDefaultShimDir(opts?: {
   ];
 
   for (const candidate of preferred) {
-    if (pathEntries.has(candidate)) return candidate;
+    if (isDirOnPath(candidate, pathEnv, delimiter, home)) return candidate;
   }
 
   return join(home, ".local", "bin");

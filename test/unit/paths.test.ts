@@ -4,6 +4,7 @@ import {
   getDefaultHost,
   migrateConfigIfNeeded,
   resolveDefaultShimDir,
+  isDirOnPath,
 } from "../../src/lib/paths.js";
 import { homedir } from "os";
 import { join } from "path";
@@ -138,6 +139,56 @@ describe("resolveDefaultShimDir", () => {
     });
 
     expect(dir).toBe(`${home}/.arc/bin`);
+  });
+});
+
+/**
+ * isDirOnPath splits a PATH-style string on the platform delimiter. The old
+ * hard-coded `:` split mangled Windows PATHs — `;`-delimited, with a `:` inside
+ * every `C:\...` drive letter — so `arc install` wrongly reported the shim dir
+ * "not on PATH". These literal-string cases prove the win32 behavior on any host.
+ */
+describe("isDirOnPath", () => {
+  test("win32: finds the dir on a ';'-delimited PATH despite drive-letter colons", () => {
+    expect(
+      isDirOnPath(
+        "C:\\Users\\k\\.local\\bin",
+        "C:\\Windows;C:\\Users\\k\\.local\\bin;C:\\Program Files\\bin",
+        ";",
+      ),
+    ).toBe(true);
+  });
+
+  test("win32: a ':' split mangles drive letters and misses the dir (the bug)", () => {
+    expect(
+      isDirOnPath(
+        "C:\\Users\\k\\.local\\bin",
+        "C:\\Windows;C:\\Users\\k\\.local\\bin",
+        ":",
+      ),
+    ).toBe(false);
+  });
+
+  test("win32: returns false when the dir is genuinely absent", () => {
+    expect(
+      isDirOnPath("C:\\Users\\k\\.local\\bin", "C:\\Windows;C:\\Other", ";"),
+    ).toBe(false);
+  });
+
+  test("posix: finds the dir on a ':'-delimited PATH", () => {
+    expect(
+      isDirOnPath("/Users/k/.local/bin", "/usr/bin:/Users/k/.local/bin:/bin", ":"),
+    ).toBe(true);
+  });
+
+  test("posix: matches an entry with a trailing slash", () => {
+    expect(
+      isDirOnPath("/Users/k/.local/bin", "/Users/k/.local/bin/:/usr/bin", ":"),
+    ).toBe(true);
+  });
+
+  test("posix: returns false when the dir is absent", () => {
+    expect(isDirOnPath("/opt/bin", "/usr/bin:/bin", ":")).toBe(false);
   });
 });
 
