@@ -1,6 +1,10 @@
 import { describe, test, expect } from "bun:test";
 import path from "path";
-import { isInsideRepos, repoNameFromPreExtracted } from "../../src/lib/repo-name.js";
+import {
+  isInsideRepos,
+  repoNameFromPreExtracted,
+  extractRepoName,
+} from "../../src/lib/repo-name.js";
 
 /**
  * Regression coverage for #219 — the cross-platform install path guard.
@@ -83,5 +87,75 @@ describe("repoNameFromPreExtracted — repo-name extraction", () => {
 
   test("undefined pre-extracted path yields undefined (caller falls back)", () => {
     expect(repoNameFromPreExtracted(undefined, path.win32)).toBeUndefined();
+  });
+});
+
+/**
+ * #219 follow-on: extractRepoName derives the name from the repo URL / local
+ * path. The original `split("/")` returned the whole string for a Windows
+ * `\`-separated local path, which then tripped the traversal guard — so
+ * `arc install C:\path\to\repo` (and every command/e2e test that installs from
+ * a local mock-repo path) failed on Windows. These win32 cases ARE the
+ * Windows verification; the remote-URL cases prove the fix didn't regress URL
+ * parsing on win32.
+ */
+describe("extractRepoName — URL / local-path → safe name", () => {
+  describe("win32 local paths (the bug)", () => {
+    test("absolute Windows path returns the basename, not the whole path", () => {
+      const url = "C:\\Users\\klittle\\AppData\\Local\\Temp\\arc-xyz\\mock-soma";
+      expect(extractRepoName(url, path.win32)).toBe("mock-soma");
+    });
+
+    test("strips a trailing .git suffix", () => {
+      expect(extractRepoName("C:\\dev\\soma.git", path.win32)).toBe("soma");
+    });
+
+    test("relative Windows path (.\\repo)", () => {
+      expect(extractRepoName(".\\my-skill", path.win32)).toBe("my-skill");
+    });
+
+    test("UNC path returns the basename", () => {
+      expect(extractRepoName("\\\\server\\share\\repo", path.win32)).toBe("repo");
+    });
+
+    test("traversal guard still fires for a `..` basename", () => {
+      expect(() => extractRepoName("C:\\repos\\..", path.win32)).toThrow();
+    });
+  });
+
+  describe("win32 remote URLs (must still parse — no regression)", () => {
+    test("HTTPS URL", () => {
+      expect(extractRepoName("https://github.com/user/repo.git", path.win32)).toBe("repo");
+    });
+
+    test("SSH URL", () => {
+      expect(extractRepoName("git@github.com:user/repo.git", path.win32)).toBe("repo");
+    });
+
+    test("HTTPS URL without a .git suffix", () => {
+      expect(extractRepoName("https://github.com/user/repo", path.win32)).toBe("repo");
+    });
+  });
+
+  describe("posix (unchanged behavior)", () => {
+    test("absolute local path", () => {
+      expect(extractRepoName("/home/klittle/dev/soma", path.posix)).toBe("soma");
+    });
+
+    test("relative local path", () => {
+      expect(extractRepoName("./my-skill", path.posix)).toBe("my-skill");
+    });
+
+    test("HTTPS URL", () => {
+      expect(extractRepoName("https://github.com/user/repo.git", path.posix)).toBe("repo");
+    });
+
+    test("SSH URL", () => {
+      expect(extractRepoName("git@github.com:user/repo.git", path.posix)).toBe("repo");
+    });
+
+    test("HTTPS URL without a .git suffix", () => {
+      expect(extractRepoName("https://github.com/user/repo", path.posix)).toBe("repo");
+    });
   });
 });
