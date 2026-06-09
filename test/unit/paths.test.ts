@@ -140,6 +140,20 @@ describe("resolveDefaultShimDir", () => {
 
     expect(dir).toBe(`${home}/.arc/bin`);
   });
+
+  test("honors the injected PATH delimiter (Windows uses ';')", () => {
+    // Host-independent: build the matching entry with the same `join` the
+    // function uses, so it matches whether the host renders it with `/` or `\`.
+    const home = "/Users/tester";
+    const localBin = join(home, ".local", "bin");
+    const dir = resolveDefaultShimDir({
+      home,
+      pathEnv: ["/usr/bin", localBin, "/opt/bin"].join(";"),
+      delimiter: ";",
+    });
+
+    expect(dir).toBe(localBin);
+  });
 });
 
 /**
