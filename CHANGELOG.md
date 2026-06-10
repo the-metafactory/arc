@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.30.5
+
+### Added
+
+- **`type: process` is now a valid manifest type** ([#230](https://github.com/the-metafactory/arc/pull/230)). The arc manifest schema accepts process packages alongside the existing package types.
+- **Library installs now respect artifact dependency ordering with atomic rollback** ([#231](https://github.com/the-metafactory/arc/pull/231)). Multi-artifact installs topologically order artifacts and roll back partial work when a later artifact fails.
+
+### Fixed
+
+- **Windows local repository paths no longer false-reject during install** ([#222](https://github.com/the-metafactory/arc/pull/222)). `extractRepoName` now treats Windows absolute paths as local paths and derives names with the active path flavor instead of POSIX-only `/` splitting.
+- **Windows CLI shims are generated as `.cmd` launchers** ([#224](https://github.com/the-metafactory/arc/pull/224)). Installed tools are runnable through Windows `PATHEXT`, non-bun shim commands resolve relative to the bin directory, and removal cleans up both current `.cmd` shims and legacy extensionless shims.
+- **PATH membership checks use platform-specific rules** ([#226](https://github.com/the-metafactory/arc/pull/226)). Windows shim-dir detection now splits on `;`, handles drive letters correctly, and compares path entries case-insensitively while preserving POSIX byte-sensitive behavior.
+
 ## 0.30.3
 
 ### Fixed

@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 
 import { Command } from "commander";
-import { createArcPaths, ensureDirectories, getDefaultHost } from "./lib/paths.js";
+import { createArcPaths, ensureDirectories, getDefaultHost, isDirOnPath } from "./lib/paths.js";
 import { openDatabase, getSkill } from "./lib/db.js";
 import { extractAllCliInfo, SymlinkConflictError } from "./lib/symlinks.js";
 import { install, parseNameVersion } from "./commands/install.js";
@@ -122,11 +122,6 @@ function createInstallPaths(opts: { binDir?: string }): ReturnType<typeof create
   );
 }
 
-function shimDirIsOnPath(shimDir: string, pathEnv = process.env.PATH ?? ""): boolean {
-  const entries = pathEnv.split(":").filter(Boolean).map((entry) => normalizeUserPath(entry));
-  return entries.includes(normalizeUserPath(shimDir));
-}
-
 function quoteForSingleQuotedShell(value: string): string {
   return value.replace(/'/g, "'\\''");
 }
@@ -156,7 +151,7 @@ function installResultProvidesCli(result: Awaited<ReturnType<typeof install>>): 
 }
 
 function printShimPathNotice(paths: ReturnType<typeof createArcPaths>, result: Awaited<ReturnType<typeof install>>): void {
-  if (!installResultProvidesCli(result) || shimDirIsOnPath(paths.shimDir)) return;
+  if (!installResultProvidesCli(result) || isDirOnPath(paths.shimDir)) return;
 
   console.log(`\nCommand shims were installed in ${paths.shimDir}, but that directory is not on PATH.`);
   console.log(`Add it with: ${formatPathRepairCommand(paths.shimDir)}`);
@@ -662,7 +657,7 @@ doctor
   .description("Check whether Arc command shims are on PATH")
   .action(() => {
     const paths = createArcPaths();
-    if (shimDirIsOnPath(paths.shimDir)) {
+    if (isDirOnPath(paths.shimDir)) {
       console.log(`OK: ${paths.shimDir} is on PATH`);
       return;
     }

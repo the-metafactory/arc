@@ -487,21 +487,34 @@ describe("Full lifecycle: install → list → info → audit → disable → en
 
     expect(result.success).toBe(true);
 
+    // Shim filenames are platform-specific: `.cmd` on Windows (PATHEXT-driven
+    // execution), bare on POSIX. Bin symlinks stay extensionless on both.
+    const shim = (n: string): string =>
+      process.platform === "win32" ? `${n}.cmd` : n;
+
     // Both bin symlinks exist
     expect(existsSync(join(env.host.paths.binDir, "multitool"))).toBe(true);
     expect(existsSync(join(env.host.paths.binDir, "multi-alt"))).toBe(true);
 
     // Both shims exist
-    expect(existsSync(join(env.arc.shimDir, "multitool"))).toBe(true);
-    expect(existsSync(join(env.arc.shimDir, "multi-alt"))).toBe(true);
+    expect(existsSync(join(env.arc.shimDir, shim("multitool")))).toBe(true);
+    expect(existsSync(join(env.arc.shimDir, shim("multi-alt")))).toBe(true);
 
-    // Second shim uses direct exec (not bun) for non-bun command
-    const altShimContent = await Bun.file(join(env.arc.shimDir, "multi-alt")).text();
-    expect(altShimContent).toContain("exec ./bin/multi-alt");
+    // Second shim invokes the script directly (not bun) for a non-bun command
+    const altShimContent = await Bun.file(
+      join(env.arc.shimDir, shim("multi-alt")),
+    ).text();
+    if (process.platform === "win32") {
+      expect(altShimContent).toContain(".\\bin/multi-alt %*");
+    } else {
+      expect(altShimContent).toContain("exec ./bin/multi-alt");
+    }
     expect(altShimContent).not.toContain("bun run");
 
     // First shim uses bun run
-    const mainShimContent = await Bun.file(join(env.arc.shimDir, "multitool")).text();
+    const mainShimContent = await Bun.file(
+      join(env.arc.shimDir, shim("multitool")),
+    ).text();
     expect(mainShimContent).toContain("bun run");
 
     // --- DISABLE removes all ---
@@ -509,23 +522,23 @@ describe("Full lifecycle: install → list → info → audit → disable → en
     expect(disableResult.success).toBe(true);
     expect(existsSync(join(env.host.paths.binDir, "multitool"))).toBe(false);
     expect(existsSync(join(env.host.paths.binDir, "multi-alt"))).toBe(false);
-    expect(existsSync(join(env.arc.shimDir, "multitool"))).toBe(false);
-    expect(existsSync(join(env.arc.shimDir, "multi-alt"))).toBe(false);
+    expect(existsSync(join(env.arc.shimDir, shim("multitool")))).toBe(false);
+    expect(existsSync(join(env.arc.shimDir, shim("multi-alt")))).toBe(false);
 
     // --- ENABLE restores all ---
     const enableResult = await enable(env.db, env.arc, env.host, "multitool");
     expect(enableResult.success).toBe(true);
     expect(existsSync(join(env.host.paths.binDir, "multitool"))).toBe(true);
     expect(existsSync(join(env.host.paths.binDir, "multi-alt"))).toBe(true);
-    expect(existsSync(join(env.arc.shimDir, "multitool"))).toBe(true);
-    expect(existsSync(join(env.arc.shimDir, "multi-alt"))).toBe(true);
+    expect(existsSync(join(env.arc.shimDir, shim("multitool")))).toBe(true);
+    expect(existsSync(join(env.arc.shimDir, shim("multi-alt")))).toBe(true);
 
     // --- REMOVE cleans up all ---
     const removeResult = await remove(env.db, env.arc, env.host, "multitool");
     expect(removeResult.success).toBe(true);
     expect(existsSync(join(env.host.paths.binDir, "multitool"))).toBe(false);
     expect(existsSync(join(env.host.paths.binDir, "multi-alt"))).toBe(false);
-    expect(existsSync(join(env.arc.shimDir, "multitool"))).toBe(false);
-    expect(existsSync(join(env.arc.shimDir, "multi-alt"))).toBe(false);
+    expect(existsSync(join(env.arc.shimDir, shim("multitool")))).toBe(false);
+    expect(existsSync(join(env.arc.shimDir, shim("multi-alt")))).toBe(false);
   });
 });
