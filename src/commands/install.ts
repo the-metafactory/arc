@@ -49,6 +49,14 @@ import {
   type InstallTransactionEvidence,
   type LibraryInstallJournal,
 } from "../lib/install-transaction.js";
+// F-6b (arc#228): agent identity provisioning. Lives in its own module; wired
+// in below as a SINGLE hook call at the identity step (merge-coordination with
+// the F-6c / F-6e install lanes — keep this concern isolated and its insertion
+// point non-adjacent to theirs).
+import {
+  maybeProvisionAgentIdentity,
+  reportProvisioningResult,
+} from "../lib/identity-provision.js";
 
 export interface InstallOptions {
   /** arc's own state paths (configRoot, dbPath, reposDir, …). Host-independent. */
@@ -525,6 +533,17 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
   );
   tx.recordDbCommit(manifest.name);
 
+  // F-6b (arc#228) — IDENTITY STEP. For type:agent packages, provision the
+  // agent's NKey seed + DID and scaffold its instance state. Best-effort and
+  // fail-closed (cortex#563): on any guard trip this WARNs and returns without
+  // throwing, so the install still succeeds and the agent boots unidentified
+  // until the operator closes the gap. The SECRETS step (F-6e) owns a separate,
+  // non-adjacent hook; LIBRARY ORDERING (F-6c) lives in install-transaction.ts.
+  // A fail-closed/skip outcome is surfaced UNCONDITIONALLY (even under --yes) so
+  // a non-interactive install never hides an unidentified-agent gap.
+  const identityResult = await maybeProvisionAgentIdentity(manifest, { quiet: opts.yes });
+  reportProvisioningResult(identityResult);
+
   return {
     success: true,
     name: manifest.name,
@@ -944,6 +963,13 @@ export async function installSingleArtifact(
     manifest,
   );
   tx.recordDbCommit(manifest.name);
+
+  // F-6b (arc#228) — IDENTITY STEP (library-artifact path). dev-loop ships its
+  // agents as library artifacts (design §6.1), so the per-artifact install must
+  // also provision identity. Same fail-closed, best-effort hook as the
+  // standalone path above — and the same unconditional failure-visibility rule.
+  const artifactIdentityResult = await maybeProvisionAgentIdentity(manifest, { quiet: opts.yes });
+  reportProvisioningResult(artifactIdentityResult);
 
   return {
     success: true,
