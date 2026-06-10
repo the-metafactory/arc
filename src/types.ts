@@ -402,6 +402,28 @@ export interface ArcManifest {
   category?: string;
 }
 
+/**
+ * Per-artifact outcome state for a library install (arc#227 / F-6c).
+ *
+ * Distinguishes the four terminal states an artifact reaches inside a
+ * library-install transaction so InstallResult can report partial state:
+ *   - SKIPPED      — already installed before this run; left untouched.
+ *   - SUCCESS      — installed cleanly in this run.
+ *   - FAILED       — install attempt failed (this is where the sequence stops).
+ *   - ROLLED_BACK  — installed in this run, then unwound because a LATER
+ *                    artifact failed (atomic rollback).
+ *
+ * Canonical definition + the journal types live with the transaction in
+ * `lib/install-transaction.ts`; re-exported here so the public manifest/result
+ * surface stays in one place. (Defined there, not here, to keep the
+ * lib → types dependency arrow one-directional — see arc#227 PR notes.)
+ */
+export {
+  ArtifactInstallState,
+  type ArtifactInstallDetail,
+  type LibraryInstallJournal,
+} from "./lib/install-transaction.js";
+
 /** Trust tier for installed packages */
 export type PackageTier = "official" | "community" | "custom";
 

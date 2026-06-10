@@ -12,7 +12,7 @@ import type {
 import type { Database } from "bun:sqlite";
 import { errorMessage } from "../lib/errors.js";
 import { readManifest, readLibraryArtifacts, assessRisk, formatCapabilities } from "../lib/manifest.js";
-import { recordInstall, getSkill } from "../lib/db.js";
+import { recordInstall, getSkill, removeSkill } from "../lib/db.js";
 import { runScript, runLifecycleScripts } from "../lib/scripts.js";
 import {
   registerHooks,
@@ -25,6 +25,7 @@ import {
   resolveArtifactSourceDir,
   installNodeDependencies,
   rollbackArtifactSymlinks,
+  toposortArtifacts,
 } from "../lib/artifact-installer.js";
 import { wireExtensions } from "../lib/extensions.js";
 import { extractRepoName, isInsideRepos, repoNameFromPreExtracted } from "../lib/repo-name.js";
@@ -41,8 +42,12 @@ import {
 } from "../lib/hosts/launchd-install.js";
 import { isDarwinLaunchdHost } from "../lib/hosts/darwin-launchd.js";
 import {
+  ArtifactInstallState,
   beginInstallTransaction,
+  beginLibraryInstallTransaction,
+  type InstallTransaction,
   type InstallTransactionEvidence,
+  type LibraryInstallJournal,
 } from "../lib/install-transaction.js";
 
 export interface InstallOptions {
@@ -64,6 +69,16 @@ export interface InstallOptions {
   artifactName?: string;
   /** When installing from a library, the library name (for DB tracking) */
   libraryName?: string;
+  /**
+   * Resume a failed library install from the named artifact (arc#227 / F-6c).
+   *
+   * Skips every artifact that orders BEFORE this one in the dependency-sorted
+   * sequence (they are assumed already installed or deliberately skipped), then
+   * installs from this artifact onward with the same ordered / atomic-rollback
+   * semantics. Library installs only; ignored for standalone installs.
+   * Example: `arc install dev-loop --resume-from=dev` after fixing the broker.
+   */
+  resumeFromArtifact?: string;
   /**
    * Pre-extracted install path (for registry installs from F-4).
    * When provided, skips git clone and uses this directory as the source.
@@ -89,8 +104,20 @@ export interface InstallResult {
   error?: string;
   manifest?: ArcManifest;
   evidence?: InstallTransactionEvidence;
-  /** For library installs: results for each artifact */
+  /**
+   * For library installs: per-artifact result (backward-compat shape).
+   *
+   * Retained as `InstallResult[]` so existing callers/tests keep reading
+   * `.success` / `.name` / `.version`. The authoritative per-artifact STATE
+   * (skipped / success / failed / rolled_back) lives in `journal` (arc#227).
+   */
   artifacts?: InstallResult[];
+  /**
+   * For library installs (arc#227 / F-6c): the full transactional journal —
+   * ordered per-artifact state, errors, and landed-artifact evidence. Present
+   * on every library install (success or failure), absent for standalone.
+   */
+  journal?: LibraryInstallJournal;
 }
 
 /**
@@ -535,7 +562,10 @@ async function installLibrary(
     return { success: false, error: errorMessage(err) };
   }
 
-  // Filter to specific artifact if requested
+  // Filter to specific artifact if requested. A single-artifact install keeps
+  // the original semantics — no ordering / atomic-rollback applies to a set of
+  // one — but still flows through the ordered path below (toposort of one
+  // element is itself).
   if (opts.artifactName) {
     const match = artifactEntries.find(
       (a) => a.manifest.name === opts.artifactName
@@ -550,23 +580,85 @@ async function installLibrary(
     artifactEntries = [match];
   }
 
-  if (!opts.yes && !opts.artifactName) {
-    console.log(`\nArtifacts (${artifactEntries.length}):`);
-    for (const { entry, manifest } of artifactEntries) {
-      console.log(`  ${manifest.name} [${manifest.type}] v${manifest.version} — ${entry.description ?? entry.path}`);
+  // arc#227 / F-6c: order artifacts by depends_on so each lands after the
+  // intra-library artifacts it depends on. A cycle (or unresolvable graph) is
+  // a manifest authoring error — fail before touching the filesystem.
+  let orderedArtifacts: typeof artifactEntries;
+  try {
+    orderedArtifacts = toposortArtifacts(artifactEntries);
+  } catch (err) {
+    return {
+      success: false,
+      name: libraryName,
+      version: libraryManifest.version,
+      error: `Cannot order artifacts of library '${libraryName}': ${errorMessage(err)}`,
+    };
+  }
+
+  // arc#227 / F-6c: resume a failed install from a named artifact. Everything
+  // ordered before it is assumed already installed (or deliberately skipped).
+  let startIndex = 0;
+  if (opts.resumeFromArtifact) {
+    startIndex = orderedArtifacts.findIndex(
+      (a) => a.manifest.name === opts.resumeFromArtifact,
+    );
+    if (startIndex === -1) {
+      const available = orderedArtifacts.map((a) => a.manifest.name).join(", ");
+      return {
+        success: false,
+        name: libraryName,
+        version: libraryManifest.version,
+        error: `Resume artifact '${opts.resumeFromArtifact}' not found in library '${libraryName}'. Available: ${available}`,
+      };
     }
   }
 
-  // Install each artifact
-  const results: InstallResult[] = [];
+  if (!opts.yes && !opts.artifactName) {
+    console.log(`\nArtifact install order (${orderedArtifacts.length}):`);
+    for (const { entry, manifest } of orderedArtifacts) {
+      const depNames = manifest.depends_on?.packages?.map((p) => p.name) ?? [];
+      const deps = depNames.length ? depNames.join(", ") : "(none)";
+      console.log(
+        `  → ${manifest.name} [${manifest.type}] v${manifest.version} — ${entry.description ?? entry.path} [depends on: ${deps}]`,
+      );
+    }
+    if (opts.resumeFromArtifact) {
+      console.log(`  (resuming from '${opts.resumeFromArtifact}')`);
+    }
+  }
 
-  for (const { entry, manifest: artifactManifest } of artifactEntries) {
-    // Check if this specific artifact is already installed
+  // arc#227 / F-6c: a multi-artifact transaction journals each artifact's
+  // outcome and, on a mid-sequence failure, unwinds every artifact landed in
+  // THIS run in reverse order (symlinks/hooks/launchd via each sub-transaction;
+  // committed DB rows via removeDbRow). This lifts the arc#140 P4 single-package
+  // rollback model to the library level.
+  const tx = beginLibraryInstallTransaction({
+    libraryName,
+    removeDbRow: (name) => {
+      removeSkill(db, name);
+    },
+  });
+
+  // Backward-compat result shape (callers read `.success` / `.name`).
+  const results: InstallResult[] = [];
+  let firstFailure: { name: string; error: string } | null = null;
+
+  for (let i = startIndex; i < orderedArtifacts.length; i++) {
+    const { entry, manifest: artifactManifest } = orderedArtifacts[i];
+
+    // Already installed (from a previous run, a sibling library, or this
+    // session's resume): a skip counts as success and is NEVER rolled back —
+    // it predates this transaction.
     const existing = getSkill(db, artifactManifest.name);
     if (existing?.status === "active") {
       if (!opts.yes) {
         console.log(`  ⏩ ${artifactManifest.name} already installed, skipping`);
       }
+      tx.recordArtifactSkipped(
+        artifactManifest.name,
+        artifactManifest.version,
+        artifactManifest.type,
+      );
       results.push({
         success: true,
         name: artifactManifest.name,
@@ -575,44 +667,124 @@ async function installLibrary(
       continue;
     }
 
-    // The artifact's install path is the artifact subdirectory within the library clone
     const artifactInstallPath = join(installPath, entry.path);
 
-    // Re-use the standard install flow for each artifact, pointing at the artifact subdir
-    // We call install() recursively with libraryName set to track provenance
-    const artifactResult = await installSingleArtifact(opts, artifactInstallPath, artifactManifest, libraryName);
+    // Capture the live sub-transaction so a LATER failure can roll this one
+    // back. installSingleArtifact rolls back its OWN partial state on internal
+    // failure; on success it hands us the committed transaction here.
+    let artifactTx: InstallTransaction | undefined;
+    const artifactResult = await installSingleArtifact(
+      opts,
+      artifactInstallPath,
+      artifactManifest,
+      libraryName,
+      (handle) => {
+        artifactTx = handle;
+      },
+    );
     results.push(artifactResult);
 
     if (!artifactResult.success) {
       if (!opts.yes) {
         console.log(`  ❌ ${artifactManifest.name}: ${artifactResult.error}`);
       }
-    } else if (!opts.yes) {
+      const failureError = artifactResult.error ?? "unknown error";
+      tx.recordArtifactFailure(
+        artifactManifest.name,
+        failureError,
+        artifactManifest.version,
+        artifactManifest.type,
+      );
+      firstFailure = {
+        name: artifactManifest.name,
+        error: failureError,
+      };
+      // Stop the sequence — do not attempt later artifacts. Rollback follows.
+      break;
+    }
+
+    if (!opts.yes) {
       console.log(`  ✅ ${artifactResult.name} v${artifactResult.version}`);
+    }
+    if (artifactTx) {
+      tx.recordArtifactSuccess(
+        artifactManifest.name,
+        artifactTx,
+        artifactManifest.version,
+        artifactManifest.type,
+      );
+    } else {
+      // Defensive: a success without a captured transaction means nothing for
+      // us to unwind — record state but with no rollback handle.
+      tx.recordArtifactSkipped(
+        artifactManifest.name,
+        artifactManifest.version,
+        artifactManifest.type,
+      );
     }
   }
 
-  const allSuccess = results.every((r) => r.success);
-  const installedCount = results.filter((r) => r.success).length;
+  // Mid-sequence failure → atomically roll back everything this run landed.
+  if (firstFailure) {
+    if (!opts.yes) {
+      console.log(
+        `\n↩️  Rolling back ${libraryName} — artifact '${firstFailure.name}' failed; unwinding landed artifacts in reverse order…`,
+      );
+    }
+    const journal = await tx.rollback();
+    if (!opts.yes) {
+      for (const detail of journal.artifacts) {
+        const icon =
+          detail.state === ArtifactInstallState.ROLLED_BACK
+            ? "↩️ "
+            : detail.state === ArtifactInstallState.FAILED
+              ? "❌"
+              : detail.state === ArtifactInstallState.SKIPPED
+                ? "⏩"
+                : "✅";
+        console.log(`  ${icon} ${detail.name}: ${detail.state}`);
+        if (detail.error) console.log(`     ${detail.error}`);
+      }
+    }
+    return {
+      success: false,
+      name: libraryName,
+      version: libraryManifest.version,
+      error: `Library '${libraryName}' install failed at artifact '${firstFailure.name}': ${firstFailure.error}. Rolled back all artifacts installed in this run.`,
+      artifacts: results,
+      journal,
+    };
+  }
 
+  const journal = tx.journal();
   return {
-    success: allSuccess || installedCount > 0,
+    success: true,
     name: libraryName,
     version: libraryManifest.version,
     manifest: libraryManifest,
     artifacts: results,
+    journal,
   };
 }
 
 /**
  * Install a single artifact from a library (or standalone).
  * The artifactDir is the resolved directory containing the artifact's manifest.
+ *
+ * @param onTransaction Optional hook (arc#227 / F-6c) invoked with the live
+ *   InstallTransaction once it is opened — BEFORE any hook/postinstall gate.
+ *   The library-install caller captures the handle so that, if a LATER artifact
+ *   in the sequence fails, this artifact's landed state can be rolled back.
+ *   On a SUCCESS return the handle is the committed transaction; on a failure
+ *   return installSingleArtifact has already rolled its own state back, so the
+ *   library caller does not record it as a rollback target.
  */
 export async function installSingleArtifact(
   opts: InstallOptions,
   artifactDir: string,
   manifest: ArcManifest,
   libraryName: string,
+  onTransaction?: (tx: InstallTransaction) => void,
 ): Promise<InstallResult> {
   const { arc, host, db, repoUrl } = opts;
 
@@ -672,6 +844,10 @@ export async function installSingleArtifact(
     packageName: manifest.name,
     authorization: { approved: true },
   });
+  // Hand the live transaction to the library-install caller (arc#227 / F-6c)
+  // so a later artifact's failure can roll this one back. No-op for standalone
+  // installs (callback absent).
+  onTransaction?.(tx);
   tx.recordSymlinks(symlinkResult.record);
 
   // Register hooks (with consent gating — same as standalone install).

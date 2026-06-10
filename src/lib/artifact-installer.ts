@@ -2,7 +2,13 @@ import { join, dirname } from "path";
 import { existsSync } from "fs";
 import { mkdir } from "fs/promises";
 import { homedir } from "os";
-import type { ArtifactType, ArcManifest, ArcPaths, HostAdapter } from "../types.js";
+import type {
+  ArtifactType,
+  ArcManifest,
+  ArcPaths,
+  HostAdapter,
+  LibraryArtifactEntry,
+} from "../types.js";
 import { errorMessage, isErrno } from "./errors.js";
 import {
   createSymlink,
@@ -366,4 +372,87 @@ export function parseLibraryRef(ref: string): { libraryName: string; artifactNam
   }
 
   return { libraryName, artifactName: artifactName || undefined };
+}
+
+/** A library artifact paired with its manifest, as read by readLibraryArtifacts. */
+export interface ArtifactEntry {
+  entry: LibraryArtifactEntry;
+  manifest: ArcManifest;
+}
+
+/**
+ * Topologically sort a library's artifacts by `depends_on.packages`.
+ *
+ * F-6c (arc#227): library installs must land each artifact AFTER the artifacts
+ * it depends on, so that e.g. `pilot` (depends_on agent-state) installs only
+ * once `agent-state` is in place. Only intra-library dependencies constrain
+ * ordering — a `depends_on.packages` entry that names a package NOT contained
+ * in this library (an external dep such as a tool, or another repo's package)
+ * is an install-time gate handled elsewhere (`install.ts` dep check), not an
+ * ordering edge, so it is ignored here.
+ *
+ * Algorithm: Kahn's algorithm over the dependency DAG. Independent peers keep
+ * their declaration order (stable), which keeps console output and the journal
+ * deterministic. A cycle (direct, self, or transitive) leaves nodes unemitted
+ * and throws with the offending names so the operator can fix the manifests.
+ *
+ * @throws Error if a dependency cycle is detected.
+ */
+export function toposortArtifacts(artifacts: ArtifactEntry[]): ArtifactEntry[] {
+  // Index by artifact name so we can tell intra-library deps from external ones.
+  const byName = new Map<string, ArtifactEntry>();
+  for (const a of artifacts) {
+    byName.set(a.manifest.name, a);
+  }
+
+  // Build the dependency edges (dependency -> dependent) and in-degrees,
+  // counting only deps that resolve to another artifact in THIS library.
+  const inDegree = new Map<string, number>();
+  const dependents = new Map<string, string[]>();
+  for (const a of artifacts) {
+    inDegree.set(a.manifest.name, inDegree.get(a.manifest.name) ?? 0);
+  }
+  for (const a of artifacts) {
+    const deps = a.manifest.depends_on?.packages ?? [];
+    for (const dep of deps) {
+      if (!byName.has(dep.name)) continue; // external dep — not an ordering edge
+      const list = dependents.get(dep.name) ?? [];
+      list.push(a.manifest.name);
+      dependents.set(dep.name, list);
+      inDegree.set(a.manifest.name, (inDegree.get(a.manifest.name) ?? 0) + 1);
+    }
+  }
+
+  // Kahn's algorithm. Seed the queue in declaration order to keep peers stable.
+  const queue: string[] = [];
+  for (const a of artifacts) {
+    if ((inDegree.get(a.manifest.name) ?? 0) === 0) {
+      queue.push(a.manifest.name);
+    }
+  }
+
+  const ordered: ArtifactEntry[] = [];
+  let cursor = 0;
+  while (cursor < queue.length) {
+    const name = queue[cursor++];
+    const node = byName.get(name);
+    if (node) ordered.push(node);
+    for (const dependent of dependents.get(name) ?? []) {
+      const next = (inDegree.get(dependent) ?? 0) - 1;
+      inDegree.set(dependent, next);
+      if (next === 0) queue.push(dependent);
+    }
+  }
+
+  if (ordered.length !== artifacts.length) {
+    const emitted = new Set(ordered.map((o) => o.manifest.name));
+    const unresolved = artifacts
+      .map((a) => a.manifest.name)
+      .filter((n) => !emitted.has(n));
+    throw new Error(
+      `Dependency cycle detected among library artifacts: ${unresolved.join(", ")}`,
+    );
+  }
+
+  return ordered;
 }
