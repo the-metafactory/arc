@@ -21,9 +21,12 @@ import {
   resolveSecretBackend,
   secretServiceKey,
   redactSecret,
+  isSharedOrCiHost,
+  SecretListUnsupportedError,
   type SecurityRunner,
   type SecurityResult,
 } from "../../src/lib/secrets.js";
+import { readdir } from "fs/promises";
 
 let tempDir: string;
 let secretsRoot: string;
@@ -128,6 +131,36 @@ describe("FileBackend", () => {
   test("rejects path-traversal in the agent name", () => {
     expect(() => new FileBackend(secretsRoot, "../etc")).toThrow(/invalid agent name/i);
   });
+
+  // arc#234 review nit 1: atomic write.
+  test("overwrite preserves 0600 and leaves no temp orphan (atomic write)", async () => {
+    const backend = new FileBackend(secretsRoot, "dev");
+    await backend.store("GITHUB_TOKEN", "first");
+    await backend.store("GITHUB_TOKEN", "second");
+    const path = join(secretsRoot, "dev", "GITHUB_TOKEN");
+    expect(await readFile(path, "utf-8")).toBe("second");
+    expect((await stat(path)).mode & 0o777).toBe(0o600);
+    // No leftover `.NAME.<rand>.tmp` files in the agent dir.
+    const entries = await readdir(join(secretsRoot, "dev"));
+    expect(entries.some((e) => e.includes(".tmp"))).toBe(false);
+    expect(entries).toEqual(["GITHUB_TOKEN"]);
+  });
+
+  test("list ignores temp + dotfiles (only env-var-shaped names)", async () => {
+    const backend = new FileBackend(secretsRoot, "dev");
+    await backend.store("REAL_TOKEN", "v");
+    // Drop a stray dotfile/temp that an interrupted write could leave.
+    await mkdir(join(secretsRoot, "dev"), { recursive: true });
+    await writeFile(join(secretsRoot, "dev", ".REAL_TOKEN.abc123.tmp"), "junk");
+    const names = await backend.list();
+    expect(names).toEqual(["REAL_TOKEN"]);
+  });
+
+  test("round-trips a value byte-for-byte, including a trailing newline", async () => {
+    const backend = new FileBackend(secretsRoot, "dev");
+    await backend.store("MULTILINE", "line1\nline2\n");
+    expect(await backend.retrieve("MULTILINE")).toBe("line1\nline2\n");
+  });
 });
 
 describe("KeychainBackend", () => {
@@ -218,6 +251,33 @@ describe("KeychainBackend", () => {
     expect(await backend.retrieve("GITHUB_TOKEN")).toBeNull();
     await expect(backend.remove("GITHUB_TOKEN")).resolves.toBeUndefined();
   });
+
+  // arc#234 review nit 2: list() must NOT silently return [] (would lie
+  // "no secrets" on macOS). It rejects with a typed unsupported error.
+  test("list rejects with SecretListUnsupportedError (never a silent empty list)", async () => {
+    const { runner } = makeRunner();
+    const backend = new KeychainBackend("dev", "alice", runner);
+    await expect(backend.list()).rejects.toBeInstanceOf(SecretListUnsupportedError);
+  });
+
+  // arc#234 review nit 4: strip ONLY the single newline `security -w` appends;
+  // a value that itself ends in "\n" must round-trip correctly.
+  test("retrieve strips exactly one trailing newline that security adds", async () => {
+    const { runner, store } = makeRunner();
+    const backend = new KeychainBackend("dev", "alice", runner);
+    // Simulate a stored value that genuinely ends in "\n"; on store we wrote it
+    // verbatim, and `security -w` prints it back with ITS extra "\n" appended.
+    store.set("ai.meta-factory.cortex.dev.NL_TOKEN", "value-with-nl\n");
+    const got = await backend.retrieve("NL_TOKEN");
+    expect(got).toBe("value-with-nl\n");
+  });
+
+  test("retrieve of a no-newline value is unchanged", async () => {
+    const { runner } = makeRunner();
+    const backend = new KeychainBackend("dev", "alice", runner);
+    await backend.store("PLAIN", "no-newline-here");
+    expect(await backend.retrieve("PLAIN")).toBe("no-newline-here");
+  });
 });
 
 describe("resolveSecretBackend", () => {
@@ -230,13 +290,14 @@ describe("resolveSecretBackend", () => {
     expect(backend).toBeInstanceOf(FileBackend);
   });
 
-  test("selects KeychainBackend on darwin when security CLI is available", () => {
+  test("selects KeychainBackend on a NON-shared darwin host when security CLI is available", () => {
     const backend = resolveSecretBackend("dev", {
       platform: "darwin",
       secretsRoot,
       username: "alice",
       securityRunner: () => ({ exitCode: 0, stdout: "", stderr: "" }),
       keychainAvailable: true,
+      sharedHost: false,
     });
     expect(backend).toBeInstanceOf(KeychainBackend);
   });
@@ -247,7 +308,81 @@ describe("resolveSecretBackend", () => {
       secretsRoot,
       username: "alice",
       keychainAvailable: false,
+      sharedHost: false,
     });
     expect(backend).toBeInstanceOf(FileBackend);
+  });
+
+  // arc#234 review MAJOR: on a shared/CI macOS host, prefer the file backend so
+  // the Keychain `security -w` argv-exposure window is opt-in on dev boxes only.
+  test("auto prefers FileBackend on a SHARED darwin host even when keychain is available", () => {
+    const backend = resolveSecretBackend("dev", {
+      platform: "darwin",
+      secretsRoot,
+      username: "alice",
+      keychainAvailable: true,
+      sharedHost: true,
+    });
+    expect(backend).toBeInstanceOf(FileBackend);
+  });
+
+  test("auto detects a CI host via the CI env var and prefers FileBackend", () => {
+    const backend = resolveSecretBackend("dev", {
+      platform: "darwin",
+      secretsRoot,
+      username: "alice",
+      keychainAvailable: true,
+      env: { CI: "true" },
+    });
+    expect(backend).toBeInstanceOf(FileBackend);
+  });
+
+  test("--secret-backend keychain forces Keychain even on a shared darwin host", () => {
+    const backend = resolveSecretBackend("dev", {
+      platform: "darwin",
+      secretsRoot,
+      username: "alice",
+      keychainAvailable: true,
+      sharedHost: true,
+      backendChoice: "keychain",
+    });
+    expect(backend).toBeInstanceOf(KeychainBackend);
+  });
+
+  test("--secret-backend keychain on a non-darwin host falls back to FileBackend", () => {
+    const backend = resolveSecretBackend("dev", {
+      platform: "linux",
+      secretsRoot,
+      username: "alice",
+      backendChoice: "keychain",
+    });
+    expect(backend).toBeInstanceOf(FileBackend);
+  });
+
+  test("--secret-backend file forces FileBackend on a non-shared darwin host", () => {
+    const backend = resolveSecretBackend("dev", {
+      platform: "darwin",
+      secretsRoot,
+      username: "alice",
+      keychainAvailable: true,
+      sharedHost: false,
+      backendChoice: "file",
+    });
+    expect(backend).toBeInstanceOf(FileBackend);
+  });
+});
+
+describe("isSharedOrCiHost", () => {
+  test("true under common CI markers", () => {
+    expect(isSharedOrCiHost({ CI: "true" })).toBe(true);
+    expect(isSharedOrCiHost({ GITHUB_ACTIONS: "true" })).toBe(true);
+    expect(isSharedOrCiHost({ ARC_SHARED_HOST: "1" })).toBe(true);
+  });
+
+  test("false on a clean single-user env", () => {
+    expect(isSharedOrCiHost({})).toBe(false);
+    expect(isSharedOrCiHost({ CI: "" })).toBe(false);
+    expect(isSharedOrCiHost({ CI: "0" })).toBe(false);
+    expect(isSharedOrCiHost({ CI: "false" })).toBe(false);
   });
 });

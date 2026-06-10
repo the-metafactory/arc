@@ -18,6 +18,7 @@ import type { ArcManifest, ArcPaths } from "../types.js";
 import {
   resolveSecretBackend,
   type SecretBackend,
+  type SecretBackendChoice,
 } from "./secrets.js";
 import {
   provisionSecrets,
@@ -32,6 +33,7 @@ export function backendForManifest(
     platform?: string;
     username?: string;
     backend?: SecretBackend;
+    backendChoice?: SecretBackendChoice;
   },
 ): SecretBackend {
   if (overrides?.backend) return overrides.backend;
@@ -39,6 +41,7 @@ export function backendForManifest(
     platform: overrides?.platform ?? process.platform,
     secretsRoot: arc.secretsDir,
     username: overrides?.username ?? safeUsername(),
+    backendChoice: overrides?.backendChoice,
   });
 }
 
@@ -75,6 +78,12 @@ export interface InstallSecretStepOpts {
   backend?: SecretBackend;
   env?: Record<string, string | undefined>;
   prompt?: (name: string) => Promise<string>;
+  /**
+   * `--secret-backend` override. MUST match the choice used by
+   * {@link buildSecretEnvForInstall} for the same install, or a secret stored
+   * to one backend won't be retrieved from the other.
+   */
+  backendChoice?: SecretBackendChoice;
 }
 
 /**
@@ -96,6 +105,7 @@ export async function installTimeProvisionSecrets(
     platform: opts.platform,
     username: opts.username,
     backend: opts.backend,
+    backendChoice: opts.backendChoice,
   });
 
   try {
@@ -146,6 +156,7 @@ export async function buildSecretEnvForInstall(
     username?: string;
     backend?: SecretBackend;
     baseEnv?: Record<string, string>;
+    backendChoice?: SecretBackendChoice;
   },
 ): Promise<Record<string, string>> {
   const declared = manifest.capabilities?.secrets ?? [];
@@ -159,6 +170,7 @@ export async function buildSecretEnvForInstall(
     platform: opts.platform,
     username: opts.username,
     backend: opts.backend,
+    backendChoice: opts.backendChoice,
   });
 
   return injectSecretsIntoEnv(manifest, {

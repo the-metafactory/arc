@@ -43,6 +43,38 @@ agent's scoped forge token).
 `resolveSecretBackend()` picks the native backend when available, else the
 universal chmod-600 `FileBackend`.
 
+### macOS Keychain argv exposure (and the shared-host gate)
+
+`security add-generic-password -w <value>` places the secret **value on the
+spawned process's argv** for the lifetime of the `spawnSync` call. On a shared
+multi-user macOS host (or a shared-PID-namespace container) another user can
+read it via `ps auxww` or `/proc/<pid>/cmdline`. This is a limitation of the
+macOS `security` CLI: its `-w` flag has no stdin channel, so a value passed
+non-interactively *must* go through argv. (This is **not** how `gh auth login`
+works — gh reads its token from stdin via `--with-token`. An earlier code
+comment claimed parity with gh; that was wrong and has been corrected.)
+
+Mitigation — backend selection, not the call site:
+
+- **`--secret-backend auto`** (default): on macOS, prefer Keychain **only on a
+  single-user host**. On a shared/CI host (the `CI`, `GITHUB_ACTIONS`,
+  `CONTINUOUS_INTEGRATION`, or `ARC_SHARED_HOST` env marker is set) arc selects
+  the chmod-600 `FileBackend` instead, so the argv window is opt-in on dev
+  machines only.
+- **`--secret-backend keychain`**: force the Keychain even on a shared host
+  (you accept the argv window).
+- **`--secret-backend file`**: force the chmod-600 file backend everywhere.
+
+Residual risk on a single-user dev box: the value is on argv for the
+few-millisecond spawn duration — acceptable for a single-user machine,
+mitigated everywhere else.
+
+`arc secrets list` is **unsupported on the Keychain backend** (the `security`
+CLI can't enumerate items for a service prefix without dumping the whole login
+keychain). Rather than silently report "no secrets", it exits non-zero with a
+message pointing at `arc secrets check <agent>`, which resolves presence per
+manifest-declared name and works on every backend.
+
 ## Injection
 
 - **Postinstall env** — `arc install` injects the agent's stored secrets into
@@ -73,6 +105,10 @@ place: `(secret redacted)`.
 Other guardrails:
 
 - **chmod 600** enforced on the file fallback on every write and read.
+- **Atomic write** — the file backend writes into a fresh 0600 temp file in the
+  same directory and `rename(2)`s it over the target, so a concurrent reader
+  sees the old complete file or the new one — never a truncated value, and never
+  old content sitting at a transiently-loose mode on overwrite.
 - **No in-place overwrite on rotate** — delete then add (two steps).
 - **One secret per file** — no mixing in the file backend.
 - **Keychain/file scope** — locked to the principal's user account; a

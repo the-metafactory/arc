@@ -18,7 +18,7 @@
  */
 
 import type { ArcManifest } from "../types.js";
-import type { SecretBackend } from "../lib/secrets.js";
+import { type SecretBackend, SecretListUnsupportedError } from "../lib/secrets.js";
 import {
   provisionSecrets,
   validateSecretPresence,
@@ -33,7 +33,19 @@ interface BaseCtx {
 
 /** `arc secrets list <agent>` — stored secret NAMES only. */
 export async function secretsList(ctx: BaseCtx): Promise<number> {
-  const names = await ctx.backend.list();
+  let names: string[];
+  try {
+    names = await ctx.backend.list();
+  } catch (err) {
+    if (err instanceof SecretListUnsupportedError) {
+      // Honest report instead of a silently-empty list (arc#234 review nit 2):
+      // the Keychain backend can't enumerate. Point at the backend-agnostic
+      // `check` verb. Exit 2 (distinct from 0 "none" and 1 "error").
+      console.error(err.message);
+      return 2;
+    }
+    throw err;
+  }
   if (names.length === 0) {
     console.log(`No secrets stored for agent '${ctx.agent}'.`);
     return 0;

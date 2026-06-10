@@ -25,9 +25,10 @@
  * agent + secret NAME only — never the value.
  */
 
-import { mkdir, readFile, writeFile, chmod, stat, unlink, readdir } from "fs/promises";
+import { mkdir, readFile, writeFile, chmod, stat, unlink, readdir, rename } from "fs/promises";
 import { existsSync } from "fs";
 import { join } from "path";
+import { randomBytes } from "crypto";
 import { errorMessage, isErrno } from "./errors.js";
 
 /** Fixed sentinel printed in place of a secret value in any diagnostic. */
@@ -133,11 +134,26 @@ const SEC_ITEM_NOT_FOUND = 44;
  * macOS Keychain backend. Each secret is a generic password keyed by
  * `secretServiceKey(agent, name)` and scoped to the principal's username.
  *
- * The VALUE is passed to `security` via `-w <value>` through the injected
- * runner only; this class never logs argv (issue §E). Note: `security`'s own
- * `-w` does place the value on the spawned process's argv — that is the OS
- * keychain tool's contract and is the same path `gh auth login` uses. arc's
- * obligation is to never *log* it, which it does not.
+ * ARGV EXPOSURE (security finding, arc#234 review): `security
+ * add-generic-password -w <value>` places the secret VALUE on the spawned
+ * process's argv. For the lifetime of the spawn it is readable by any process
+ * that can see this user's process table — via `ps auxww` or
+ * `/proc/<pid>/cmdline` — which on a SHARED multi-user macOS host (or a
+ * shared-PID-namespace container) is another user. This is a limitation of the
+ * macOS `security` CLI: its `-w` flag has no stdin channel, so a value passed
+ * non-interactively MUST go through argv. (Contrast: `gh auth login` reads its
+ * token from STDIN via `--with-token` — `security -w` has no equivalent. The
+ * earlier comment here claimed parity with gh; that was factually wrong.)
+ *
+ * Mitigation lives in {@link resolveSecretBackend}, NOT here: on a host that
+ * indicates a shared / CI context, arc selects the chmod-600 FileBackend
+ * instead, so the argv window is opt-in on single-user dev machines only.
+ * Residual risk on a dev machine: the value is on argv for the few-millisecond
+ * `spawnSync` duration; acceptable for a single-user box, mitigated everywhere
+ * else.
+ *
+ * This class never *logs* argv (issue §E) — that obligation is upheld
+ * regardless of the argv exposure above.
  */
 export class KeychainBackend implements SecretBackend {
   constructor(
@@ -188,8 +204,16 @@ export class KeychainBackend implements SecretBackend {
           `Re-run \`arc secrets set <agent> ${name}\` to repair.`,
       );
     }
-    // `-w` prints the raw value plus a trailing newline.
-    return Promise.resolve(r.stdout.replace(/\n$/, ""));
+    // `security -w` prints the raw value plus exactly ONE trailing newline it
+    // adds itself. Strip only that single appended "\n" — a regex like
+    // /\n$/ collapses to the same single strip, but `slice` makes the intent
+    // explicit and provably touches at most one char, so a value that
+    // legitimately ends in "\n" round-trips as `value + "\n"` → stored, then
+    // retrieved as `value + "\n\n"` from `security` → sliced back to
+    // `value + "\n"`. (FileBackend has no such transform; values round-trip
+    // byte-for-byte there.)
+    const out = r.stdout;
+    return Promise.resolve(out.endsWith("\n") ? out.slice(0, -1) : out);
   }
 
   remove(name: string): Promise<void> {
@@ -215,13 +239,30 @@ export class KeychainBackend implements SecretBackend {
   }
 
   list(): Promise<string[]> {
-    // `security` has no clean "list items for a service prefix" without
-    // dumping the whole keychain. The authoritative roster of an agent's
-    // secrets is the manifest's `capabilities.secrets`; `list`/`check` resolve
-    // presence per declared name via retrieve(). So the backend-level list is
-    // intentionally empty here, and SecretResolver-level enumeration is driven
-    // by the manifest (see secret-provision.ts validateSecretPresence).
-    return Promise.resolve([]);
+    // `security` has no clean "enumerate items for a service prefix" without
+    // dumping the whole login keychain (and parsing an unstable text format).
+    // Rather than silently return [] — which would make `arc secrets list`
+    // lie "no secrets" on macOS even when secrets exist (arc#234 review nit 2)
+    // — we signal unsupported. The command layer catches this and tells the
+    // operator to use `arc secrets check <agent>` instead, which resolves
+    // presence per manifest-declared name via retrieve() and works on every
+    // backend.
+    return Promise.reject(new SecretListUnsupportedError("keychain"));
+  }
+}
+
+/**
+ * Thrown by a backend whose storage primitive cannot enumerate stored secret
+ * names (e.g. the macOS Keychain). The command layer catches it and points the
+ * operator at `arc secrets check <agent>` (manifest-driven, backend-agnostic).
+ */
+export class SecretListUnsupportedError extends Error {
+  constructor(public readonly backend: string) {
+    super(
+      `Listing stored secrets is not supported on the ${backend} backend. ` +
+        `Use \`arc secrets check <agent>\` to see which declared secrets are present.`,
+    );
+    this.name = "SecretListUnsupportedError";
   }
 }
 
@@ -248,10 +289,29 @@ export class FileBackend implements SecretBackend {
   async store(name: string, value: string): Promise<void> {
     const path = this.pathFor(name);
     await mkdir(this.agentDir, { recursive: true });
-    // Write with mode 600 from the start, then re-chmod in case the file
-    // pre-existed with looser perms (write-with-mode only applies on create).
-    await writeFile(path, value, { mode: 0o600 });
-    await chmod(path, 0o600);
+    // Atomic write (arc#234 review nit 1): write the new value into a fresh
+    // 0600 temp file in the SAME directory, then rename it over the target.
+    // `rename(2)` within one filesystem is atomic, so a concurrent reader sees
+    // either the old complete file or the new one — never a truncated value,
+    // and never the old content sitting at a transiently-loose mode (the
+    // earlier `writeFile`-then-`chmod` left that TOCTOU window on overwrite).
+    // The temp name is unguessable so two concurrent stores don't collide.
+    const tmpPath = join(this.agentDir, `.${name}.${randomBytes(6).toString("hex")}.tmp`);
+    try {
+      await writeFile(tmpPath, value, { mode: 0o600 });
+      // writeFile's `mode` is honored only on create + subject to umask; force
+      // 0600 explicitly before the value is visible at the final path.
+      await chmod(tmpPath, 0o600);
+      await rename(tmpPath, path);
+    } catch (err) {
+      // Best-effort cleanup of the temp file so a failed store never leaves a
+      // secret-bearing orphan behind. Swallow ENOENT (rename already consumed
+      // it); never log the value.
+      await unlink(tmpPath).catch(() => {
+        /* temp file already gone or never created — nothing to clean up */
+      });
+      throw new Error(`failed to store secret file: ${errorMessage(err)}`, { cause: err });
+    }
   }
 
   async retrieve(name: string): Promise<string | null> {
@@ -306,6 +366,9 @@ export async function enforceChmod600(path: string): Promise<void> {
   }
 }
 
+/** Explicit backend selection override (`--secret-backend`). */
+export type SecretBackendChoice = "auto" | "keychain" | "file";
+
 /** Options for {@link resolveSecretBackend}. */
 export interface ResolveBackendOpts {
   /** `process.platform` (or an override for tests). */
@@ -321,28 +384,97 @@ export interface ResolveBackendOpts {
    * existence on darwin. Pass explicitly in tests to avoid touching the host.
    */
   keychainAvailable?: boolean;
+  /**
+   * Explicit operator choice (`--secret-backend`): `keychain` forces the
+   * Keychain even on a shared/CI host (accepting the argv exposure), `file`
+   * forces the chmod-600 file backend, `auto` (default) applies the
+   * shared-host heuristic below.
+   */
+  backendChoice?: SecretBackendChoice;
+  /**
+   * Whether the host is a shared / CI context where the Keychain argv-exposure
+   * window (see {@link KeychainBackend}) is unacceptable. Defaults to the
+   * {@link isSharedOrCiHost} env heuristic. When true under `auto`, arc selects
+   * the FileBackend even on darwin.
+   */
+  sharedHost?: boolean;
+  /** Env source for the shared-host heuristic (defaults to `process.env`). */
+  env?: Record<string, string | undefined>;
 }
 
 /**
- * Select the storage backend for an agent: native (Keychain on macOS) when
- * available, else the universal chmod-600 FileBackend.
+ * Select the storage backend for an agent.
  *
- * Linux uses the FileBackend at install time; the systemd unit's
- * `LoadCredential` resolves the file at daemon-start. There is no install-time
- * SystemdCredentialsBackend (the credential is read by systemd, not arc).
+ * Default (`auto`): native Keychain on macOS — UNLESS the host looks shared /
+ * CI, in which case the chmod-600 FileBackend is preferred so the macOS
+ * `security` argv-exposure window (see {@link KeychainBackend}) is opt-in on
+ * single-user dev machines only (arc#234 review MAJOR). `--secret-backend
+ * keychain|file` overrides the heuristic.
+ *
+ * Linux/Windows always use the FileBackend at install time; on Linux the
+ * systemd unit's `LoadCredential` resolves the file at daemon-start. There is
+ * no install-time SystemdCredentialsBackend (the credential is read by systemd,
+ * not arc).
  */
 export function resolveSecretBackend(
   agent: string,
   opts: ResolveBackendOpts,
 ): SecretBackend {
-  if (opts.platform === "darwin") {
-    const available =
-      opts.keychainAvailable ?? isSecurityCliAvailable();
-    if (available) {
-      return new KeychainBackend(agent, opts.username, opts.securityRunner);
-    }
+  const choice = opts.backendChoice ?? "auto";
+
+  if (choice === "file") {
+    return new FileBackend(opts.secretsRoot, agent);
   }
-  return new FileBackend(opts.secretsRoot, agent);
+
+  const fileBackend = () => new FileBackend(opts.secretsRoot, agent);
+  const keychainBackend = () =>
+    new KeychainBackend(agent, opts.username, opts.securityRunner);
+
+  if (choice === "keychain") {
+    // Operator explicitly opted in — honor it even on a shared host, but only
+    // where the Keychain actually exists.
+    if (opts.platform === "darwin") {
+      const available = opts.keychainAvailable ?? isSecurityCliAvailable();
+      if (available) return keychainBackend();
+    }
+    // Asked for keychain on a non-darwin host — fall back rather than fail.
+    return fileBackend();
+  }
+
+  // auto
+  if (opts.platform === "darwin") {
+    const shared = opts.sharedHost ?? isSharedOrCiHost(opts.env);
+    if (shared) {
+      // Prefer the file backend on a shared/CI macOS host: the argv exposure
+      // is the at-risk case there.
+      return fileBackend();
+    }
+    const available = opts.keychainAvailable ?? isSecurityCliAvailable();
+    if (available) return keychainBackend();
+  }
+  return fileBackend();
+}
+
+/**
+ * Heuristic for "this is a shared / CI host where another user could read the
+ * process table". Conservative: any common CI marker, or an explicit
+ * `ARC_SHARED_HOST=1`, flips it on. False on a typical single-user dev box.
+ */
+export function isSharedOrCiHost(
+  env: Record<string, string | undefined> = process.env,
+): boolean {
+  if (truthyEnv(env.ARC_SHARED_HOST)) return true;
+  // Common CI providers set `CI`; GitHub Actions also sets `GITHUB_ACTIONS`.
+  if (truthyEnv(env.CI)) return true;
+  if (truthyEnv(env.GITHUB_ACTIONS)) return true;
+  if (truthyEnv(env.CONTINUOUS_INTEGRATION)) return true;
+  return false;
+}
+
+function truthyEnv(v: string | undefined): boolean {
+  if (v === undefined) return false;
+  const s = v.trim().toLowerCase();
+  return s !== "" && s !== "0" && s !== "false" && s !== "no";
 }
 
 /** Probe whether the macOS `security` CLI is on PATH. */

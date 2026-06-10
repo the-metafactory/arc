@@ -53,6 +53,7 @@ import {
   installTimeProvisionSecrets,
   buildSecretEnvForInstall,
 } from "../lib/secret-provision-install.js";
+import type { SecretBackendChoice } from "../lib/secrets.js";
 
 export interface InstallOptions {
   /** arc's own state paths (configRoot, dbPath, reposDir, …). Host-independent. */
@@ -96,9 +97,14 @@ export interface InstallOptions {
    * left unstored and the daemon fails at first use with a clear message.
    * `--from-env`: resolve each declared secret from the current environment
    * instead of prompting (CI / scripted installs).
+   * `secretBackend`: `--secret-backend keychain|file|auto` override. `auto`
+   * (default) prefers Keychain on a single-user macOS dev box but the
+   * chmod-600 file backend on a shared/CI host (where the macOS `security`
+   * argv-exposure window is at risk — arc#234 review).
    */
   skipSecrets?: boolean;
   fromEnv?: boolean;
+  secretBackend?: SecretBackendChoice;
 }
 
 export interface InstallResult {
@@ -366,6 +372,7 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
     skipSecrets: opts.skipSecrets,
     fromEnv: opts.fromEnv,
     quiet: opts.yes,
+    backendChoice: opts.secretBackend,
   });
   if (!secretStep.success) {
     Bun.spawnSync(["rm", "-rf", installPath], { stdout: "pipe", stderr: "pipe" });
@@ -505,7 +512,10 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
   // a fresh object scoped to this child invocation; arc's own process env is
   // never mutated, so the secrets are gone the moment postinstall exits
   // (issue §E "unset after postinstall").
-  const postinstallEnv = await buildSecretEnvForInstall(manifest, { arc });
+  const postinstallEnv = await buildSecretEnvForInstall(manifest, {
+    arc,
+    backendChoice: opts.secretBackend,
+  });
   const postinstallResult = runPostinstallPhase(
     installPath,
     manifest,
@@ -700,6 +710,7 @@ export async function installSingleArtifact(
     skipSecrets: opts.skipSecrets,
     fromEnv: opts.fromEnv,
     quiet: opts.yes,
+    backendChoice: opts.secretBackend,
   });
   if (!secretStep.success) {
     return { success: false, error: secretStep.error };
@@ -794,7 +805,10 @@ export async function installSingleArtifact(
 
   // Run postinstall script(s). F-6e: inject the artifact's stored secrets into
   // the postinstall env only (per-agent env, never the brief).
-  const artifactPostinstallEnv = await buildSecretEnvForInstall(manifest, { arc });
+  const artifactPostinstallEnv = await buildSecretEnvForInstall(manifest, {
+    arc,
+    backendChoice: opts.secretBackend,
+  });
   const postinstallResult = runPostinstallPhase(
     artifactDir,
     manifest,
