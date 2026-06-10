@@ -3,7 +3,7 @@
 // ── Catalog types ──────────────────────────────────────────────
 
 /** Artifact types in the catalog */
-export type ArtifactType = "skill" | "agent" | "prompt" | "tool" | "component" | "pipeline" | "rules" | "library" | "action";
+export type ArtifactType = "skill" | "agent" | "prompt" | "tool" | "component" | "pipeline" | "process" | "rules" | "library" | "action";
 
 /** Catalog entry type — controls trust level and install behavior */
 export type CatalogEntryType = "builtin" | "community" | "system" | "custom";
@@ -265,14 +265,109 @@ export interface ExtensionEntry {
   name: string;
 }
 
+// ── Process types (DD-47 D/A/H taxonomy, dev-loop F-6d, meta-factory#550) ──
+//
+// A `type: process` manifest packages a pulse process definition. The schema
+// DESCRIBES pulse's real vocabulary (the-metafactory/pulse src/types/pipeline.ts
+// + src/types/agent.ts), NOT the idealised explicit-DAG sketched in the issue
+// body. A process is an ORDERED `actions:` array — sequencing is positional,
+// there are no edge/`dependsOn` declarations. Each step is one of:
+//   - a bare string           → Deterministic [D] action ref (e.g. "A_BUILD")
+//   - `{ agent: AgentStep }`  → Agentic [A] step (capability-addressed LLM task)
+//   - `{ gate: GateStep }`    → Human gate [H] step (approval pause)
+// The composition primitives pulse also supports (map/filter/reduce/parallel/
+// retry) are accepted as opaque pass-through objects — arc validates the D/A/H
+// surface only and does not re-implement pulse's runner semantics (DD-47).
+
+/**
+ * Sovereignty constraints carried in an agent task envelope. Mirrors pulse
+ * `AgentSovereignty` (src/types/agent.ts), itself mirroring the myelin v3
+ * envelope schema. Declared by the process; enforced by the bus + fleet.
+ */
+export interface ProcessAgentSovereignty {
+  classification?: "local" | "federated" | "public";
+  data_residency?: string;
+  max_hop?: number;
+  frontier_ok?: boolean;
+  model_class?: "local-only" | "frontier" | "any";
+}
+
+/** Cross-principal routing for a federated agent step (pulse `AgentFederation`). */
+export interface ProcessAgentFederation {
+  principal: string;
+  stack?: string;
+}
+
+/**
+ * Agentic [A] step — a capability-addressed, sovereignty-constrained LLM task.
+ * Mirrors pulse `AgentStepSpec`. `capability` + `name` + `prompt` are required;
+ * everything else is optional routing/sovereignty metadata.
+ */
+export interface ProcessAgentStep {
+  name: string;
+  capability: string;
+  prompt: string;
+  sovereignty?: ProcessAgentSovereignty;
+  distribution_mode?: "offer" | "direct" | "delegate";
+  target_assistant?: string;
+  federate?: ProcessAgentFederation;
+  /** Soft deadline in MILLISECONDS (pulse uses ms, not ISO-8601 durations). */
+  timeout_ms?: number;
+  collect?: string;
+}
+
+/**
+ * Human gate [H] step — pauses execution for an operator verdict.
+ * Mirrors pulse `GateStepSpec`. `name` + `prompt` are required.
+ */
+export interface ProcessGateStep {
+  name: string;
+  prompt: string;
+  /** Optional timeout in MILLISECONDS. Omit for an indefinite wait. */
+  timeout_ms?: number;
+  collect?: string;
+}
+
+/**
+ * A single process step (pulse `PipelineStep`). A bare string is a
+ * Deterministic [D] action reference; the keyword maps select A/H steps;
+ * the composition-primitive maps are accepted opaquely.
+ */
+export type ProcessStep =
+  | string
+  | { agent: ProcessAgentStep }
+  | { gate: ProcessGateStep }
+  | { map: Record<string, unknown> }
+  | { filter: Record<string, unknown> }
+  | { reduce: Record<string, unknown> }
+  | { parallel: Record<string, unknown> }
+  | { retry: Record<string, unknown> };
+
+/**
+ * The `process:` block on a `type: process` manifest — a named, ordered
+ * pulse process definition. Mirrors the shape of a pulse pipeline.yaml.
+ */
+export interface ProcessSpec {
+  /** Process name, e.g. "P_BUILD_JOURNAL". */
+  name: string;
+  description?: string;
+  /** Ordered D/A/H steps. Sequencing is positional; non-empty. */
+  actions: ProcessStep[];
+}
+
 /** The full arc-manifest.yaml schema (also accepts legacy pai-manifest.yaml) */
 export interface ArcManifest {
   schema?: "arc/v1" | "pai/v1";
   name: string;
   version: string;
-  type: "skill" | "system" | "tool" | "agent" | "prompt" | "component" | "pipeline" | "rules" | "library";
+  type: "skill" | "system" | "tool" | "agent" | "prompt" | "component" | "pipeline" | "process" | "rules" | "library";
   /** Only present when type is "library" — lists contained artifacts */
   artifacts?: LibraryArtifactEntry[];
+  /**
+   * Only present when type is "process" — the packaged pulse process
+   * definition (DD-47 D/A/H taxonomy, dev-loop F-6d). See ProcessSpec.
+   */
+  process?: ProcessSpec;
   /**
    * Multi-target install destinations (arc#117 multi-backend HostAdapter).
    *
