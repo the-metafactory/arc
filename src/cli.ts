@@ -5,6 +5,15 @@ import { createArcPaths, ensureDirectories, getDefaultHost, isDirOnPath } from "
 import { openDatabase, getSkill } from "./lib/db.js";
 import { extractAllCliInfo, SymlinkConflictError } from "./lib/symlinks.js";
 import { install, parseNameVersion } from "./commands/install.js";
+import {
+  secretsList,
+  secretsCheck,
+  secretsSet,
+  secretsRotate,
+  secretsRemove,
+} from "./commands/secrets.js";
+import { readManifest } from "./lib/manifest.js";
+import { resolveSecretBackend, type SecretBackend, type SecretBackendChoice } from "./lib/secrets.js";
 import { list, formatList, formatListJson } from "./commands/list.js";
 import { info, formatInfo, formatInfoJson } from "./commands/info.js";
 import { audit, formatAudit } from "./commands/audit.js";
@@ -97,7 +106,7 @@ import {
   findInAllSources,
   updateAllSources,
 } from "./lib/remote-registry.js";
-import { homedir } from "os";
+import { homedir, userInfo } from "os";
 import { join } from "path";
 import { parseLibraryRef } from "./lib/artifact-installer.js";
 import { errorMessage } from "./lib/errors.js";
@@ -160,13 +169,21 @@ program
   .option("--pin <version>", "Pin to a specific version (git tag)")
   .option("--bin-dir <path>", "Directory for PATH-accessible command shims")
   .option("--strict-signing", "Refuse to install if Sigstore signature is missing on an official-tier package")
-  .action(async (nameOrUrl: string, opts: { yes?: boolean; pin?: string; binDir?: string; strictSigning?: boolean }) => {
+  .option("--skip-secrets", "Install without provisioning declared secrets (daemon fails at first use with a clear message)")
+  .option("--from-env", "Resolve declared secrets from the current environment instead of prompting")
+  .option("--secret-backend <choice>", "Secret storage backend: auto (default) | keychain | file. 'auto' uses the chmod-600 file backend on shared/CI hosts to avoid the macOS Keychain argv-exposure window")
+  .action(async (nameOrUrl: string, opts: { yes?: boolean; pin?: string; binDir?: string; strictSigning?: boolean; skipSecrets?: boolean; fromEnv?: boolean; secretBackend?: string }) => {
     // Non-TTY guard: fail loud rather than silently half-installing
     if (!opts.yes && !process.stdin.isTTY) {
       console.error("Error: arc install requires an interactive terminal for capability confirmation.");
       console.error("Pass --yes (-y) to approve non-interactively.");
       process.exit(1);
     }
+
+    // Validate --secret-backend (F-6e). `auto` applies the shared-host
+    // heuristic; `keychain` forces the macOS Keychain (accepting its argv
+    // exposure); `file` forces the chmod-600 file backend.
+    const secretBackend = parseSecretBackendChoice(opts.secretBackend);
 
     const paths = createInstallPaths(opts);
     const host = getDefaultHost();
@@ -376,6 +393,9 @@ program
         preExtractedPath: extract.extractedPath,
         sourceName: resolved.source.name,
         sourceTier: resolved.source.tier,
+        skipSecrets: opts.skipSecrets,
+        fromEnv: opts.fromEnv,
+        secretBackend,
       });
       if (result.success) {
         // arc#160: don't claim "(verified)" on the final line when only the
@@ -392,7 +412,7 @@ program
       }
     } else if (isUrl) {
       // Direct git install
-      const result = await install({ arc: paths, host, db, repoUrl: nameOrUrl, yes: opts.yes, artifactName, pinnedVersion });
+      const result = await install({ arc: paths, host, db, repoUrl: nameOrUrl, yes: opts.yes, artifactName, pinnedVersion, skipSecrets: opts.skipSecrets, fromEnv: opts.fromEnv, secretBackend });
       if (result.success) {
         if (result.artifacts?.length) {
           console.log(`\n✅ Installed ${result.artifacts.filter(a => a.success).length} artifact(s) from ${result.name}`);
@@ -429,6 +449,9 @@ program
         artifactName,
         libraryName,
         pinnedVersion,
+        skipSecrets: opts.skipSecrets,
+        fromEnv: opts.fromEnv,
+        secretBackend,
       });
       if (result.success) {
         if (result.artifacts?.length) {
@@ -1513,6 +1536,137 @@ nats
       return;
     }
     await setupOperator(account, botNames, { force: opts.force });
+  });
+
+// ── F-6e (arc#229) secret provisioning commands ───────────────────
+//
+// `arc secrets <verb> <agent> [<secret>]` manages the per-agent secrets a
+// `type: agent` package declares in `capabilities.secrets`. Storage is the
+// platform backend (Keychain on macOS, chmod-600 file fallback). The verbs
+// print NAMES only — a secret value never reaches stdout/stderr (issue §E).
+
+/**
+ * Resolve an installed agent's manifest from the package DB, plus a storage
+ * backend scoped to that agent. Exits the process with a clear message when
+ * the agent isn't installed (no value is ever involved here).
+ */
+async function resolveAgentSecretContext(
+  agent: string,
+  backendChoice?: SecretBackendChoice,
+): Promise<{ manifest: ArcManifest; backend: SecretBackend }> {
+  const paths = createArcPaths();
+  const db = openDatabase(paths.dbPath);
+  const skill = getSkill(db, agent);
+  db.close();
+  if (!skill) {
+    console.error(`No installed package named '${agent}'. Run \`arc list\` to see installed agents.`);
+    process.exit(1);
+  }
+  const manifest = await readManifest(skill.install_path);
+  if (!manifest) {
+    console.error(`Could not read the manifest for '${agent}' at ${skill.install_path}.`);
+    process.exit(1);
+  }
+  const backend = resolveSecretBackend(agent, {
+    platform: process.platform,
+    secretsRoot: paths.secretsDir,
+    username: secretUsername(),
+    backendChoice,
+  });
+  return { manifest, backend };
+}
+
+/**
+ * Validate a `--secret-backend` flag value into a {@link SecretBackendChoice}.
+ * Exits with a clear message on an unknown value. `undefined` → `auto`.
+ */
+function parseSecretBackendChoice(value: string | undefined): SecretBackendChoice {
+  if (value === undefined) return "auto";
+  if (value === "auto" || value === "keychain" || value === "file") return value;
+  console.error(`Invalid --secret-backend "${value}". Expected: auto | keychain | file.`);
+  process.exit(1);
+}
+
+/** Best-effort current username for the Keychain account scope. */
+function secretUsername(): string {
+  try {
+    return userInfo().username;
+  } catch {
+    return homedir().split("/").filter(Boolean).pop() ?? "user";
+  }
+}
+
+const secrets = program
+  .command("secrets")
+  .description("Provision and manage per-agent secrets (capabilities.secrets)");
+
+// All five verbs accept `--secret-backend` so an operator who provisioned with
+// a forced backend (e.g. `file` on a shared host) reads/rotates/removes against
+// that same backend. Omitted → `auto`.
+const SECRET_BACKEND_OPT = "--secret-backend <choice>";
+const SECRET_BACKEND_DESC =
+  "Secret storage backend: auto (default) | keychain | file";
+
+secrets
+  .command("list <agent>")
+  .description("List the secret names stored for an agent (never values)")
+  .option(SECRET_BACKEND_OPT, SECRET_BACKEND_DESC)
+  .action(async (agent: string, opts: { secretBackend?: string }) => {
+    const { backend } = await resolveAgentSecretContext(
+      agent,
+      parseSecretBackendChoice(opts.secretBackend),
+    );
+    process.exit(await secretsList({ agent, backend }));
+  });
+
+secrets
+  .command("check <agent>")
+  .description("Verify every declared secret is stored; exit 1 if any missing")
+  .option(SECRET_BACKEND_OPT, SECRET_BACKEND_DESC)
+  .action(async (agent: string, opts: { secretBackend?: string }) => {
+    const { manifest, backend } = await resolveAgentSecretContext(
+      agent,
+      parseSecretBackendChoice(opts.secretBackend),
+    );
+    process.exit(await secretsCheck(manifest, { agent, backend }));
+  });
+
+secrets
+  .command("set <agent> <secret>")
+  .description("Store a secret (prompts securely, or use --from-env)")
+  .option("--from-env", "Take the value from the env var of the same name")
+  .option(SECRET_BACKEND_OPT, SECRET_BACKEND_DESC)
+  .action(async (agent: string, secret: string, opts: { fromEnv?: boolean; secretBackend?: string }) => {
+    const { backend } = await resolveAgentSecretContext(
+      agent,
+      parseSecretBackendChoice(opts.secretBackend),
+    );
+    process.exit(await secretsSet(secret, { agent, backend, fromEnv: opts.fromEnv }));
+  });
+
+secrets
+  .command("rotate <agent> <secret>")
+  .description("Replace a secret with no in-place overwrite (delete then add)")
+  .option("--from-env", "Take the new value from the env var of the same name")
+  .option(SECRET_BACKEND_OPT, SECRET_BACKEND_DESC)
+  .action(async (agent: string, secret: string, opts: { fromEnv?: boolean; secretBackend?: string }) => {
+    const { backend } = await resolveAgentSecretContext(
+      agent,
+      parseSecretBackendChoice(opts.secretBackend),
+    );
+    process.exit(await secretsRotate(secret, { agent, backend, fromEnv: opts.fromEnv }));
+  });
+
+secrets
+  .command("remove <agent> [secret]")
+  .description("Remove one secret, or all declared secrets when none is named")
+  .option(SECRET_BACKEND_OPT, SECRET_BACKEND_DESC)
+  .action(async (agent: string, secret: string | undefined, opts: { secretBackend?: string }) => {
+    const { manifest, backend } = await resolveAgentSecretContext(
+      agent,
+      parseSecretBackendChoice(opts.secretBackend),
+    );
+    process.exit(await secretsRemove({ agent, backend, name: secret, manifest }));
   });
 
 /**

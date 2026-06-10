@@ -49,6 +49,16 @@ import {
   type InstallTransactionEvidence,
   type LibraryInstallJournal,
 } from "../lib/install-transaction.js";
+// F-6e (arc#229): SECRETS provisioning. Lives in its own module
+// (secret-provision.ts / secrets.ts); wired in below as a SINGLE clearly
+// commented hook at the SECRETS step — non-adjacent to F-6b's identity hook
+// (near the return) and F-6c's library-ordering (install-transaction.ts), per
+// the batch-merge coordination note on arc#229. Concern: SECRETS only.
+import {
+  installTimeProvisionSecrets,
+  buildSecretEnvForInstall,
+} from "../lib/secret-provision-install.js";
+import type { SecretBackendChoice } from "../lib/secrets.js";
 // F-6b (arc#228): agent identity provisioning. Lives in its own module; wired
 // in below as a SINGLE hook call at the identity step (merge-coordination with
 // the F-6c / F-6e install lanes — keep this concern isolated and its insertion
@@ -104,6 +114,21 @@ export interface InstallOptions {
    * to sandboxed temp dirs. Production calls leave this absent.
    */
   hostOverrides?: HostOverrides;
+  /**
+   * F-6e (arc#229) — secret provisioning controls.
+   *
+   * `--skip-secrets`: install proceeds without prompting; declared secrets are
+   * left unstored and the daemon fails at first use with a clear message.
+   * `--from-env`: resolve each declared secret from the current environment
+   * instead of prompting (CI / scripted installs).
+   * `secretBackend`: `--secret-backend keychain|file|auto` override. `auto`
+   * (default) prefers Keychain on a single-user macOS dev box but the
+   * chmod-600 file backend on a shared/CI host (where the macOS `security`
+   * argv-exposure window is at risk — arc#234 review).
+   */
+  skipSecrets?: boolean;
+  fromEnv?: boolean;
+  secretBackend?: SecretBackendChoice;
 }
 
 export interface InstallResult {
@@ -368,6 +393,28 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
     }
   }
 
+  // ── F-6e (arc#229) SECRETS STEP ──────────────────────────────────────────
+  // Provision the package's declared `capabilities.secrets` (prompt / --from-env
+  // / --skip-secrets) and store them via the platform backend (Keychain on
+  // macOS, chmod-600 file fallback elsewhere) BEFORE preinstall — so a
+  // preinstall/postinstall script that bootstraps a token can read it from the
+  // injected env. Best-effort + fail-closed-loud: a store failure aborts the
+  // install (clean — no symlinks placed yet); a skipped secret just WARNs.
+  // Values never touch stdout/argv-we-log (issue §E). IDENTITY (F-6b) owns a
+  // separate hook near the return; LIBRARY ORDERING (F-6c) lives in
+  // install-transaction.ts. Concern here: SECRETS only.
+  const secretStep = await installTimeProvisionSecrets(manifest, {
+    arc,
+    skipSecrets: opts.skipSecrets,
+    fromEnv: opts.fromEnv,
+    quiet: opts.yes,
+    backendChoice: opts.secretBackend,
+  });
+  if (!secretStep.success) {
+    Bun.spawnSync(["rm", "-rf", installPath], { stdout: "pipe", stderr: "pipe" });
+    return { success: false, error: secretStep.error };
+  }
+
   // 3b. Run preinstall script(s) if declared
   const preinstallResult = runPreinstallPhase(installPath, manifest, opts.yes);
   if (!preinstallResult.success) {
@@ -495,8 +542,22 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
   // 6. Run bun install if package.json exists
   installNodeDependencies(installPath);
 
-  // 6b. Run postinstall script(s) if declared
-  const postinstallResult = runPostinstallPhase(installPath, manifest, opts.yes);
+  // 6b. Run postinstall script(s) if declared.
+  // F-6e (arc#229): inject the agent's stored secrets into the postinstall env
+  // ONLY (per design §6.2 step 5 — per-agent env, never the brief). The env is
+  // a fresh object scoped to this child invocation; arc's own process env is
+  // never mutated, so the secrets are gone the moment postinstall exits
+  // (issue §E "unset after postinstall").
+  const postinstallEnv = await buildSecretEnvForInstall(manifest, {
+    arc,
+    backendChoice: opts.secretBackend,
+  });
+  const postinstallResult = runPostinstallPhase(
+    installPath,
+    manifest,
+    opts.yes,
+    postinstallEnv,
+  );
   if (!postinstallResult.success) {
     // #97: postinstall failure leaves the same partial-state shape as the
     // hook-validation gate (#89) plus registered hooks pointing at a package
@@ -835,6 +896,21 @@ export async function installSingleArtifact(
     }
   }
 
+  // F-6e (arc#229) SECRETS STEP — library-artifact path. dev-loop ships its
+  // agents as library artifacts (design §6.1), so per-artifact install also
+  // provisions declared secrets. Same fail-closed-loud hook + env injection as
+  // the standalone path. Concern: SECRETS only.
+  const secretStep = await installTimeProvisionSecrets(manifest, {
+    arc,
+    skipSecrets: opts.skipSecrets,
+    fromEnv: opts.fromEnv,
+    quiet: opts.yes,
+    backendChoice: opts.secretBackend,
+  });
+  if (!secretStep.success) {
+    return { success: false, error: secretStep.error };
+  }
+
   // Run preinstall script(s)
   const preinstallResult = runPreinstallPhase(artifactDir, manifest, opts.yes);
   if (!preinstallResult.success) {
@@ -926,8 +1002,18 @@ export async function installSingleArtifact(
   // Run bun install if package.json exists in artifact dir
   installNodeDependencies(artifactDir);
 
-  // Run postinstall script(s)
-  const postinstallResult = runPostinstallPhase(artifactDir, manifest, opts.yes);
+  // Run postinstall script(s). F-6e: inject the artifact's stored secrets into
+  // the postinstall env only (per-agent env, never the brief).
+  const artifactPostinstallEnv = await buildSecretEnvForInstall(manifest, {
+    arc,
+    backendChoice: opts.secretBackend,
+  });
+  const postinstallResult = runPostinstallPhase(
+    artifactDir,
+    manifest,
+    opts.yes,
+    artifactPostinstallEnv,
+  );
   if (!postinstallResult.success) {
     // #97: postinstall failure leaves the same partial-state shape as the
     // hook-validation gate (#89) plus registered hooks pointing at a package
@@ -1174,6 +1260,12 @@ function runPostinstallPhase(
   installPath: string,
   manifest: ArcManifest,
   quiet?: boolean,
+  /**
+   * F-6e (arc#229): extra env injected into the postinstall child only —
+   * carries the agent's stored secrets. Scoped to the child invocation; arc's
+   * own process env is untouched.
+   */
+  env?: Record<string, string>,
 ): InstallResult {
   if (manifest.scripts?.postinstall) {
     const result = runScript({
@@ -1181,6 +1273,7 @@ function runPostinstallPhase(
       scriptPath: manifest.scripts.postinstall,
       hookName: "postinstall",
       quiet,
+      env,
     });
     if (!result.success && !result.skipped) {
       return {
@@ -1197,6 +1290,7 @@ function runPostinstallPhase(
       scriptPaths: lifecycle,
       phase: "postinstall",
       quiet,
+      env,
     });
     if (!result.success) {
       return {
