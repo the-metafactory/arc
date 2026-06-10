@@ -10,7 +10,24 @@ import {
   instanceDirForAgent,
   provisionAgentIdentity,
   maybeProvisionAgentIdentity,
+  reportProvisioningResult,
 } from "../../src/lib/identity-provision.js";
+
+/** Capture everything written to process.stderr during `fn`. */
+async function captureStderr(fn: () => void | Promise<void>): Promise<string> {
+  const original = process.stderr.write.bind(process.stderr);
+  let buf = "";
+  process.stderr.write = (chunk: string | Uint8Array): boolean => {
+    buf += typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk);
+    return true;
+  };
+  try {
+    await fn();
+  } finally {
+    process.stderr.write = original;
+  }
+  return buf;
+}
 
 async function sandbox(): Promise<{ root: string; natsDir: string; agentsDir: string }> {
   const root = await mkdtemp(join(tmpdir(), "arc-f6b-"));
@@ -241,6 +258,63 @@ describe("maybeProvisionAgentIdentity — install.ts hook", () => {
       else process.env.MF_INSTANCE_DIR = prevInstance;
       if (prevNats === undefined) delete process.env.MF_NATS_DIR;
       else process.env.MF_NATS_DIR = prevNats;
+    }
+  });
+});
+
+describe("reportProvisioningResult — failure visibility (MAJOR)", () => {
+  test("null result (non-agent) writes nothing", async () => {
+    const out = await captureStderr(() => reportProvisioningResult(null));
+    expect(out).toBe("");
+  });
+
+  test("successful provision writes nothing", async () => {
+    const { natsDir, agentsDir } = await sandbox();
+    const result = await provisionAgentIdentity({
+      agentId: "forge",
+      instanceDir: join(agentsDir, "forge"),
+      natsDir,
+      quiet: true,
+    });
+    const out = await captureStderr(() => reportProvisioningResult(result));
+    expect(out).toBe("");
+  });
+
+  test("fail-closed SKIP with quiet=true STILL surfaces a stderr warning", async () => {
+    const { natsDir, agentsDir } = await sandbox();
+    // quiet:true suppresses the per-action record() lines, but a fail-closed
+    // outcome (here: invalid id) must remain visible on the install log.
+    const result = await provisionAgentIdentity({
+      agentId: "Bad_ID",
+      instanceDir: join(agentsDir, "bad"),
+      natsDir,
+      quiet: true,
+    });
+    expect(result.provisioned).toBe(false);
+
+    const out = await captureStderr(() => reportProvisioningResult(result));
+    expect(out).toContain("agent identity NOT provisioned");
+    expect(out).toContain("Bad_ID");
+    expect(out).toContain(result.warning!);
+  });
+
+  test("EACCES fail-closed under quiet=true surfaces a stderr warning", async () => {
+    const { natsDir, root } = await sandbox();
+    const lockedParent = join(root, "locked");
+    await Bun.write(join(lockedParent, ".keep"), "");
+    await chmod(lockedParent, 0o500);
+    try {
+      const result = await provisionAgentIdentity({
+        agentId: "forge",
+        instanceDir: join(lockedParent, "child", "forge"),
+        natsDir,
+        quiet: true,
+      });
+      expect(result.provisioned).toBe(false);
+      const out = await captureStderr(() => reportProvisioningResult(result));
+      expect(out).toContain("agent identity NOT provisioned for forge");
+    } finally {
+      await chmod(lockedParent, 0o700);
     }
   });
 });

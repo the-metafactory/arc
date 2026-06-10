@@ -10,13 +10,13 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import { getPublicKeyAsync } from "@noble/ed25519";
 import { randomBytes } from "node:crypto";
+import { AGENT_ID_RE as NAMING_RE, formatDisplayName } from "../lib/agent-naming.js";
 
 const CONFIG_BASE = process.env.METAFACTORY_CONFIG_DIR ?? join(homedir(), ".config", "metafactory");
 const KEYS_DIR = join(CONFIG_BASE, "keys");
 const REGISTRY_PATH = join(CONFIG_BASE, "principals.json");
 const DID_RE = /^did:mf:[a-z][a-z0-9._-]+$/;
 const BASE64_RE = /^[A-Za-z0-9+/]+=*$/;
-const NAMING_RE = /^[a-z](?:[a-z0-9]|-(?=[a-z0-9]))*$/;
 
 export interface Principal {
   id: string;
@@ -73,10 +73,6 @@ function saveRegistry(registry: PrincipalRegistryFile): void {
   }
   writeFileSync(REGISTRY_PATH, JSON.stringify(registry, null, 2) + "\n");
   console.log(`  registry: ${REGISTRY_PATH}`);
-}
-
-function formatDisplayName(name: string): string {
-  return name.split("-").filter(Boolean).map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
 }
 
 export async function generateIdentity(

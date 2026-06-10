@@ -49,9 +49,9 @@ import { homedir } from "node:os";
 import { randomBytes } from "node:crypto";
 import { Database } from "bun:sqlite";
 import { getPublicKeyAsync } from "@noble/ed25519";
-
-/** Canonical agent-id grammar: lowercase alnum + non-leading/non-trailing single hyphens. */
-const AGENT_ID_RE = /^[a-z](?:[a-z0-9]|-(?=[a-z0-9]))*$/;
+// Shared agent-id grammar + display-name formatting (one source of truth, also
+// used by src/commands/identity.ts) — nit (4) from the F-6b security review.
+import { AGENT_ID_RE, formatDisplayName } from "./agent-naming.js";
 
 /**
  * Derive an agent's DID from its canonical id.
@@ -182,7 +182,12 @@ export async function provisionAgentIdentity(
   //    creation FAILURE (e.g. EACCES) trips the guard.
   if (!existsSync(instanceDir)) {
     try {
-      mkdirSync(instanceDir, { recursive: true });
+      // 0o700: the instance dir holds state.sqlite, which records the
+      // nkey_seed_path + nkey_pub. Keep it owner-only (mirrors identity.ts's
+      // ensureKeysDir pattern) so sibling-readable defaults don't leak the
+      // location of the signing seed. (Security review nit (2).)
+      mkdirSync(instanceDir, { recursive: true, mode: 0o700 });
+      chmodSync(instanceDir, 0o700); // recursive:true only modes the leaf; be explicit
       record("created", "instance-dir");
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -192,10 +197,17 @@ export async function provisionAgentIdentity(
           `to a writable path or fix permissions, then re-run`,
       );
     }
+  } else {
+    // Existing dir (upgrade path): re-assert owner-only perms defensively.
+    chmodSync(instanceDir, 0o700);
   }
 
   // 3. NKey seed — generate if missing (idempotency Rule 2: reuse if present).
   if (existsSync(nkeySeedPath)) {
+    // Defensively re-assert 0o600 on the upgrade path: a pre-existing seed that
+    // was created (or copied) with looser perms must not silently stay
+    // world/group-readable just because we're skipping generation. (Nit (3).)
+    chmodSync(nkeySeedPath, 0o600);
     record("skipped", "nkey-seed", "exists");
   } else {
     const gen = generateNkeySeed(nkeySeedPath);
@@ -278,6 +290,25 @@ export async function maybeProvisionAgentIdentity(
   });
 }
 
+/**
+ * Surface a provisioning result's fail-closed/skip outcome on the install log.
+ *
+ * Security-material rule (F-6b security review, MAJOR): a provisioning FAILURE
+ * (bad id, EACCES, generation error → `provisioned: false`) must ALWAYS be
+ * visible, even in non-interactive installs (`arc install --yes`, the dev-loop's
+ * primary path). The per-action `record()` lines respect the `quiet` flag, but
+ * a failure warning does NOT — it is written to stderr unconditionally so the
+ * agent never silently boots unidentified without a trace in the install log.
+ *
+ * No-op for a null result (non-agent) or a successful provision.
+ */
+export function reportProvisioningResult(result: ProvisionIdentityResult | null): void {
+  if (!result || result.provisioned) return;
+  const warning =
+    result.warning ?? "agent identity provisioning did not complete (booting unidentified)";
+  process.stderr.write(`arc: agent identity NOT provisioned for ${result.agentId}: ${warning}\n`);
+}
+
 /** Read an env var, treating an empty string the same as unset (→ undefined). */
 function envOrUndefined(key: string): string | undefined {
   const v = process.env[key];
@@ -343,8 +374,10 @@ export async function derivePubkeyFromSeed(seedPath: string): Promise<string | n
     const { rawSeed } = decodeSeed(readFileSync(seedPath, "utf-8").trim());
     const pub = await getPublicKeyAsync(rawSeed);
     return encodePublic(pub, PREFIX_BYTE_USER);
-  } catch {
-    // Malformed seed — empty pubkey is acceptable; cortex logs it at boot.
+  } catch (_err) {
+    // Safe to ignore: a malformed/unreadable seed yields an empty pubkey, which
+    // is acceptable by contract (cortex derives + logs the pubkey at boot). The
+    // seed file itself is untouched, so there is nothing to clean up here.
     return null;
   }
 }
@@ -507,6 +540,9 @@ function ensureStateDb(statePath: string): void {
   } finally {
     db.close();
   }
+  // state.sqlite records nkey_seed_path + nkey_pub — keep it owner-only (the DB
+  // is created with the process umask, typically 0o644). (Security review nit (2).)
+  chmodSync(statePath, 0o600);
 }
 
 /**
@@ -561,14 +597,6 @@ function writeIfAbsent(
 function dirOf(p: string): string {
   const idx = p.lastIndexOf("/");
   return idx <= 0 ? "/" : p.slice(0, idx);
-}
-
-function formatDisplayName(name: string): string {
-  return name
-    .split("-")
-    .filter(Boolean)
-    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
-    .join(" ");
 }
 
 function dashboardTemplate(displayName: string, agentId: string): string {

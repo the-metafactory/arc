@@ -115,4 +115,39 @@ describe("install() — F-6b agent identity provisioning", () => {
     expect(await readFile(seedPath, "utf-8")).toBe(seedBefore);
     expect(second?.actions.find((a) => a.what === "nkey-seed")?.kind).toBe("skipped");
   });
+
+  test("non-interactive install (yes=true) STILL surfaces a provisioning failure on stderr", async () => {
+    // Force a fail-closed outcome via an invalid MF_AGENT_ID. Under `yes:true`
+    // the per-action lines are suppressed, but the failure warning must remain
+    // visible — a non-interactive install can't silently boot an unidentified
+    // agent. (Security review MAJOR — both install sites use the same hook.)
+    const prevAgent = process.env.MF_AGENT_ID;
+    const originalWrite = process.stderr.write.bind(process.stderr);
+    let stderr = "";
+    process.stderr.write = (chunk: string | Uint8Array): boolean => {
+      stderr += typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk);
+      return true;
+    };
+    try {
+      process.env.MF_AGENT_ID = "Bad_ID"; // violates the agent-id grammar
+      const repo = await createMockSkillRepo(env.root, { name: "scout", type: "agent" });
+      const result = await install({
+        arc: env.arc,
+        host: env.host,
+        db: env.db,
+        repoUrl: repo.url,
+        yes: true,
+      });
+      // Install still succeeds (fail-closed is best-effort, never aborts).
+      expect(result.success).toBe(true);
+      // …but the failure is on the install log.
+      expect(stderr).toContain("agent identity NOT provisioned for Bad_ID");
+      // …and no seed was orphaned.
+      expect(existsSync(join(natsDir, "Bad_ID.nk"))).toBe(false);
+    } finally {
+      process.stderr.write = originalWrite;
+      if (prevAgent === undefined) delete process.env.MF_AGENT_ID;
+      else process.env.MF_AGENT_ID = prevAgent;
+    }
+  });
 });
