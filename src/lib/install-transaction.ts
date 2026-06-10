@@ -38,6 +38,164 @@ export interface InstallTransaction {
   rollback(): Promise<InstallTransactionEvidence>;
 }
 
+// ── Library (multi-artifact) install transaction (arc#227 / F-6c) ───────────
+//
+// The single-package InstallTransaction above (arc#140 P4 lineage) tracks ONE
+// artifact's landed state and unwinds it on failure. A `type: library` install
+// lands an ORDERED SEQUENCE of artifacts; if artifact N fails, artifacts 1..N-1
+// — which have already committed their DB rows + symlinks + hooks + launchd —
+// must be unwound in REVERSE order to leave the stack in a known-good state.
+//
+// beginLibraryInstallTransaction is that lift: it holds each successful
+// artifact's live sub-transaction handle (so rollback reuses the exact same
+// rollback path, not a re-derived one) plus a `removeDbRow` callback for the
+// committed DB rows the sub-transaction itself does not undo (the DB commit is
+// the last step of a single-artifact install, so single-artifact rollback never
+// needs it — the library level does).
+
+/** Per-artifact outcome within a library install (arc#227 / F-6c). */
+export enum ArtifactInstallState {
+  /** Already installed before this run; left untouched. */
+  SKIPPED = "skipped",
+  /** Installed cleanly in this run. */
+  SUCCESS = "success",
+  /** Install attempt failed — the sequence stops here. */
+  FAILED = "failed",
+  /** Installed in this run, then unwound because a later artifact failed. */
+  ROLLED_BACK = "rolled_back",
+}
+
+/** Reported per-artifact state for a library install (extends InstallResult). */
+export interface ArtifactInstallDetail {
+  name: string;
+  version?: string;
+  type?: string;
+  state: ArtifactInstallState;
+  /** Failure reason when state === FAILED. */
+  error?: string;
+  /** Landed-artifact evidence captured for SUCCESS / ROLLED_BACK entries. */
+  evidence?: InstallTransactionEvidence;
+}
+
+/** Full transactional journal of a library install (arc#227 / F-6c). */
+export interface LibraryInstallJournal {
+  libraryName: string;
+  artifacts: ArtifactInstallDetail[];
+  /** ISO timestamp the library transaction opened. */
+  startedAt: string;
+}
+
+export interface LibraryInstallTransaction {
+  /** Record an artifact that was already installed (pre-existing — not unwound). */
+  recordArtifactSkipped(name: string, version?: string, type?: string): void;
+  /** Record a successful artifact install, capturing its live sub-transaction. */
+  recordArtifactSuccess(
+    name: string,
+    tx: InstallTransaction,
+    version?: string,
+    type?: string,
+  ): void;
+  /** Record the failing artifact; the sequence stops and rollback follows. */
+  recordArtifactFailure(name: string, error: string, version?: string, type?: string): void;
+  /** Unwind every SUCCESS artifact in reverse order (symlinks/hooks/launchd + DB row). */
+  rollback(): Promise<LibraryInstallJournal>;
+  /** Snapshot of the journal as it currently stands. */
+  journal(): LibraryInstallJournal;
+}
+
+export function beginLibraryInstallTransaction(opts: {
+  libraryName: string;
+  /**
+   * Teardown callback for a committed DB row. Injected (rather than importing
+   * the db module) so this transaction stays a pure unit. install.ts passes a
+   * closure over `removeSkill(db, name)`.
+   */
+  removeDbRow?: (name: string) => void;
+}): LibraryInstallTransaction {
+  const startedAt = new Date().toISOString();
+
+  // Ordered details, mirrored by the live sub-transaction handles for the
+  // SUCCESS entries (parallel arrays keyed by insertion order).
+  const details: ArtifactInstallDetail[] = [];
+  const landed: { name: string; tx: InstallTransaction }[] = [];
+
+  const find = (name: string) => details.find((d) => d.name === name);
+
+  return {
+    recordArtifactSkipped(name, version, type) {
+      details.push({ name, version, type, state: ArtifactInstallState.SKIPPED });
+    },
+
+    recordArtifactSuccess(name, tx, version, type) {
+      details.push({
+        name,
+        version,
+        type,
+        state: ArtifactInstallState.SUCCESS,
+        evidence: tx.evidence,
+      });
+      landed.push({ name, tx });
+    },
+
+    recordArtifactFailure(name, error, version, type) {
+      details.push({ name, version, type, state: ArtifactInstallState.FAILED, error });
+    },
+
+    async rollback() {
+      // Reverse order: last landed artifact unwinds first.
+      //
+      // Every teardown step here is best-effort and MUST NOT abort the loop:
+      // the atomic-rollback invariant (no earlier-sequence artifact left with
+      // its symlinks/hooks/launchd behind) requires that we unwind ALL landed
+      // artifacts even if one step throws. The filesystem teardown
+      // (tx.rollback()) runs first and is itself best-effort across its own
+      // steps; the DB-row removal that follows is the one call the
+      // sub-transaction does not own, so we wrap it here to match the same
+      // warn-and-continue discipline.
+      for (let i = landed.length - 1; i >= 0; i--) {
+        const { name, tx } = landed[i];
+
+        // Filesystem teardown (symlinks/hooks/launchd/extensions). Internally
+        // best-effort; if it ever threw, the DB row + later artifacts must
+        // still be cleaned, so guard it too.
+        try {
+          await tx.rollback();
+        } catch (err) {
+          process.stderr.write(
+            `  ⚠ rollback: failed to unwind artifact '${name}': ${errorMessage(err)}\n`,
+          );
+        }
+
+        // The sub-transaction's own rollback does NOT remove the committed DB
+        // row (the DB commit is the last step of a single-artifact install, so
+        // it never had to). The library level removes it here — and a failure
+        // (SQLITE_BUSY, locked DB, schema drift) must not abort the unwind of
+        // the remaining artifacts.
+        if (opts.removeDbRow) {
+          try {
+            opts.removeDbRow(name);
+          } catch (err) {
+            process.stderr.write(
+              `  ⚠ rollback: failed to remove DB row for '${name}': ${errorMessage(err)}\n`,
+            );
+          }
+        }
+
+        const detail = find(name);
+        if (detail) {
+          detail.state = ArtifactInstallState.ROLLED_BACK;
+          detail.evidence = tx.evidence;
+        }
+      }
+      return { libraryName: opts.libraryName, artifacts: details, startedAt };
+    },
+
+    journal() {
+      return { libraryName: opts.libraryName, artifacts: details, startedAt };
+    },
+  };
+}
+
 export function beginInstallTransaction(opts: {
   packageName: string;
   authorization: InstallAuthorization;
