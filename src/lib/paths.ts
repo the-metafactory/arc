@@ -53,21 +53,56 @@ function resolveConfigRoot(override?: string): string {
   return configRoot;
 }
 
+/**
+ * Comparison key for a PATH entry or candidate dir, after home expansion.
+ * POSIX paths compare byte-for-byte. Windows paths are case-insensitive and
+ * separator-agnostic, so the win32 key is case-folded, `/`-unified to `\`,
+ * and stripped of trailing separators — `C:\Users\K\.local\bin`,
+ * `c:\users\k\.local\bin\`, and `C:/Users/k/.local/bin` all collapse to the
+ * same key.
+ */
+function pathComparisonKey(path: string, home: string, platform: string): string {
+  const normalized = normalizeUserPath(path, home);
+  if (platform !== "win32") return normalized;
+  return normalized.toLowerCase().replaceAll("/", "\\").replace(/\\+$/, "");
+}
+
+/**
+ * Is `dir` present on a PATH-style string? The split delimiter (`;` vs `:`)
+ * and the comparison rules (Windows is case-insensitive and
+ * separator-agnostic; POSIX is byte-sensitive) are both facts of the
+ * platform, so the injectable is the platform itself — defaults to the host,
+ * overridable so the win32 behavior is unit-testable on a POSIX CI host
+ * (the same pattern as createCliShim in symlinks.ts). The previous
+ * hard-coded `:` split mangled Windows `PATH` entries: each entry's `C:\...`
+ * drive letter contains a `:`, so the split shredded every path.
+ */
+export function isDirOnPath(
+  dir: string,
+  pathEnv: string = process.env.PATH ?? "",
+  platform: string = process.platform,
+  home: string = homedir(),
+): boolean {
+  const delimiter = platform === "win32" ? ";" : ":";
+  const target = pathComparisonKey(dir, home, platform);
+  return pathEnv
+    .split(delimiter)
+    .filter(Boolean)
+    .some((entry) => pathComparisonKey(entry, home, platform) === target);
+}
+
 export function resolveDefaultShimDir(opts?: {
   home?: string;
   pathEnv?: string;
   configuredBinDir?: string;
+  platform?: string;
 }): string {
   const home = opts?.home ?? homedir();
   const configured = opts?.configuredBinDir?.trim();
   if (configured) return normalizeUserPath(configured, home);
 
-  const pathEntries = new Set(
-    (opts?.pathEnv ?? process.env.PATH ?? "")
-      .split(":")
-      .filter(Boolean)
-      .map((entry) => normalizeUserPath(entry, home)),
-  );
+  const pathEnv = opts?.pathEnv ?? process.env.PATH ?? "";
+  const platform = opts?.platform ?? process.platform;
 
   const preferred = [
     join(home, ".local", "bin"),
@@ -75,7 +110,7 @@ export function resolveDefaultShimDir(opts?: {
   ];
 
   for (const candidate of preferred) {
-    if (pathEntries.has(candidate)) return candidate;
+    if (isDirOnPath(candidate, pathEnv, platform, home)) return candidate;
   }
 
   return join(home, ".local", "bin");
