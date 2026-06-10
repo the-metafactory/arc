@@ -316,6 +316,18 @@ export async function createMockLibraryRepo(
       type: "skill" | "tool" | "agent" | "prompt" | "pipeline" | "component" | "action";
       version?: string;
       description?: string;
+      /**
+       * Names of OTHER artifacts in this library this one depends on (arc#227).
+       * Rendered into `depends_on.packages` as `{ name, repo }` so the library
+       * install toposort orders this artifact after its dependencies.
+       */
+      dependsOn?: string[];
+      /**
+       * Optional postinstall script (arc#227 rollback tests). Written to disk
+       * and declared in the artifact manifest's `scripts.postinstall`. Use a
+       * non-zero exit (`exit 1`) to simulate a mid-sequence install failure.
+       */
+      postinstall?: { path: string; content: string };
     }[];
   }
 ): Promise<MockLibraryRepo> {
@@ -341,7 +353,13 @@ export async function createMockLibraryRepo(
   for (const artifact of opts.artifacts) {
     const artifactDir = join(repoDir, artifact.path);
 
-    const artifactManifest = {
+    // Intra-library package deps (arc#227) plus the default bun tool dep.
+    const packageDeps = (artifact.dependsOn ?? []).map((name) => ({
+      name,
+      repo: `the-metafactory/${name}`,
+    }));
+
+    const artifactManifest: Record<string, unknown> = {
       schema: "arc/v1",
       name: artifact.name,
       version: artifact.version ?? "1.0.0",
@@ -350,7 +368,13 @@ export async function createMockLibraryRepo(
       provides: artifact.type === "skill"
         ? { skill: [{ trigger: artifact.name.toLowerCase() }] }
         : {},
-      depends_on: { tools: [{ name: "bun", version: ">=1.0.0" }] },
+      depends_on: {
+        tools: [{ name: "bun", version: ">=1.0.0" }],
+        ...(packageDeps.length ? { packages: packageDeps } : {}),
+      },
+      ...(artifact.postinstall
+        ? { scripts: { postinstall: artifact.postinstall.path } }
+        : {}),
       capabilities: {
         filesystem: { read: ["./"], write: [] },
         network: [],
@@ -360,6 +384,13 @@ export async function createMockLibraryRepo(
     };
 
     await Bun.write(join(artifactDir, "arc-manifest.yaml"), buildYaml(artifactManifest));
+
+    // Write the postinstall script (executable) when declared.
+    if (artifact.postinstall) {
+      const scriptAbsPath = join(artifactDir, artifact.postinstall.path);
+      await Bun.write(scriptAbsPath, artifact.postinstall.content);
+      Bun.spawnSync(["chmod", "+x", scriptAbsPath], { stdout: "pipe", stderr: "pipe" });
+    }
 
     // Create type-specific content
     if (artifact.type === "skill") {

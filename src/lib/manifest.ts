@@ -76,6 +76,16 @@ async function readManifestFromDir(
         return parsed;
       }
 
+      // Process-specific validation (dev-loop F-6d, meta-factory#550). A
+      // process declares its dependencies per-node, so the top-level
+      // `capabilities` block is optional (like component/rules/agent).
+      if (parsed.type === "process") {
+        validateProcess(parsed, filename);
+        validateTargets(parsed, filename);
+        validateLifecycle(parsed, filename);
+        return parsed;
+      }
+
       // capabilities optional for component, rules, and agent types, required for others.
       // Persona-driven agents (arc#100 §12 / arc#102) declare authority via
       // `guardrails` instead of `capabilities` — the host enforces guardrails
@@ -90,7 +100,7 @@ async function readManifestFromDir(
         throw new Error(
           [
             `Invalid ${filename}: missing required field 'capabilities'`,
-            `Required for type: skill, tool, prompt, pipeline, system (optional only for: component, rules, agent).`,
+            `Required for type: skill, tool, prompt, pipeline, system (optional only for: component, rules, agent, process).`,
             ``,
             `Minimal example:`,
             ``,
@@ -292,6 +302,151 @@ export function validateLifecycle(manifest: ArcManifest, filename: string): void
         );
       }
     }
+  }
+}
+
+/** Step keywords arc understands. `agent`/`gate` carry the D/A/H surface arc
+ *  validates; the rest are pulse composition primitives accepted opaquely. */
+const KNOWN_PROCESS_STEP_KEYWORDS = new Set([
+  "agent",
+  "gate",
+  "map",
+  "filter",
+  "reduce",
+  "parallel",
+  "retry",
+]);
+
+/**
+ * Validate a `type: process` manifest (dev-loop F-6d, meta-factory#550).
+ *
+ * The schema DESCRIBES pulse's real process vocabulary, NOT the idealised
+ * explicit-DAG (`nodes`/`startNode`/`endNodes`/`dependsOn`) sketched in the
+ * issue body — that shape does not round-trip a real pulse pipeline. A process
+ * is an ORDERED `actions:` array; sequencing is positional, there are no edge
+ * declarations, so there is no DAG/cycle check to run. arc validates only the
+ * D/A/H step surface and trusts pulse for runner semantics (DD-47 / Anti-
+ * Abstraction Gate).
+ *
+ * Rules:
+ *   1. `process` block present with a non-empty `actions` array.
+ *   2. Every step is a string (D action ref) or a single-keyword map.
+ *   3. The keyword is one arc recognises (agent/gate or a composition primitive).
+ *   4. `agent:` steps declare `name` + `capability` + `prompt`.
+ *   5. `gate:` steps declare `name` + `prompt`.
+ *   6. `timeout_ms` (agent or gate), when present, is a positive number — pulse
+ *      uses milliseconds, NOT ISO-8601 durations.
+ */
+export function validateProcess(manifest: ArcManifest, filename: string): void {
+  // YAML is untyped at the parse boundary — treat the block as `unknown` and
+  // validate it up to the typed ProcessSpec contract rather than trusting the
+  // optimistic cast. This is what makes the guards below genuinely load-bearing.
+  const proc = manifest.process as unknown;
+  if (!isRecord(proc)) {
+    throw new Error(
+      `Invalid ${filename}: type 'process' requires a 'process' block with a 'name' and an 'actions' array.`,
+    );
+  }
+  if (typeof proc.name !== "string" || proc.name.length === 0) {
+    throw new Error(
+      `Invalid ${filename}: process requires a 'name' (e.g. 'P_BUILD_JOURNAL').`,
+    );
+  }
+  if (!Array.isArray(proc.actions) || proc.actions.length === 0) {
+    throw new Error(
+      `Invalid ${filename}: process 'actions' must be a non-empty array (at least one step).`,
+    );
+  }
+
+  proc.actions.forEach((step: unknown, i: number) => {
+    // A bare string is a deterministic [D] action reference.
+    if (typeof step === "string") {
+      if (step.length === 0) {
+        throw new Error(
+          `Invalid ${filename}: process action[${i}] is an empty string; a deterministic action ref must be named.`,
+        );
+      }
+      return;
+    }
+
+    if (!isRecord(step)) {
+      throw new Error(
+        `Invalid ${filename}: process action[${i}] must be a string (deterministic action ref) or a single-keyword map (agent/gate/…), got ${JSON.stringify(step)}.`,
+      );
+    }
+
+    const keys = Object.keys(step);
+    if (keys.length !== 1) {
+      throw new Error(
+        `Invalid ${filename}: process action[${i}] must have exactly one keyword, got [${keys.join(", ")}].`,
+      );
+    }
+    const keyword = keys[0];
+    if (!KNOWN_PROCESS_STEP_KEYWORDS.has(keyword)) {
+      throw new Error(
+        `Invalid ${filename}: process action[${i}] has unknown step keyword '${keyword}'. Known: ${[...KNOWN_PROCESS_STEP_KEYWORDS].join(", ")}.`,
+      );
+    }
+
+    if (keyword === "agent") {
+      validateAgentStep(step.agent, i, filename);
+    } else if (keyword === "gate") {
+      validateGateStep(step.gate, i, filename);
+    }
+    // map/filter/reduce/parallel/retry: accepted opaquely — pulse owns their
+    // runner semantics (Anti-Abstraction Gate). No further validation here.
+  });
+}
+
+/** Narrow an `unknown` to a plain object (not null, not an array). */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Validate an `agent:` step's required surface (name + capability + prompt). */
+function validateAgentStep(value: unknown, i: number, filename: string): void {
+  if (!isRecord(value)) {
+    throw new Error(`Invalid ${filename}: process action[${i}] 'agent' must be an object.`);
+  }
+  const name = value.name;
+  if (typeof name !== "string" || name.length === 0) {
+    throw new Error(`Invalid ${filename}: agent step at action[${i}] is missing required 'name'.`);
+  }
+  if (typeof value.capability !== "string" || value.capability.length === 0) {
+    throw new Error(`Invalid ${filename}: agent step '${name}' is missing required 'capability'.`);
+  }
+  if (typeof value.prompt !== "string" || value.prompt.length === 0) {
+    throw new Error(`Invalid ${filename}: agent step '${name}' is missing required 'prompt'.`);
+  }
+  assertPositiveTimeout(value.timeout_ms, `agent step '${name}'`, filename);
+}
+
+/** Validate a `gate:` step's required surface (name + prompt). */
+function validateGateStep(value: unknown, i: number, filename: string): void {
+  if (!isRecord(value)) {
+    throw new Error(`Invalid ${filename}: process action[${i}] 'gate' must be an object.`);
+  }
+  const name = value.name;
+  if (typeof name !== "string" || name.length === 0) {
+    throw new Error(`Invalid ${filename}: gate step at action[${i}] is missing required 'name'.`);
+  }
+  if (typeof value.prompt !== "string" || value.prompt.length === 0) {
+    throw new Error(`Invalid ${filename}: gate step '${name}' is missing required 'prompt'.`);
+  }
+  assertPositiveTimeout(value.timeout_ms, `gate step '${name}'`, filename);
+}
+
+/** Reject a present-but-non-positive `timeout_ms`. Pulse timeouts are in ms. */
+function assertPositiveTimeout(
+  timeout: unknown,
+  where: string,
+  filename: string,
+): void {
+  if (timeout === undefined) return;
+  if (typeof timeout !== "number" || !Number.isFinite(timeout) || timeout <= 0) {
+    throw new Error(
+      `Invalid ${filename}: ${where} timeout_ms must be a positive number of milliseconds, got ${JSON.stringify(timeout)}.`,
+    );
   }
 }
 
