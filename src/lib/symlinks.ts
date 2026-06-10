@@ -141,14 +141,63 @@ export function extractAllCliInfo(
 }
 
 /**
- * Create PATH-accessible bash shims for all CLI entries in a manifest.
- * For bun commands: cd into bin dir and exec bun run.
- * For non-bun commands: exec the script directly from the bin dir.
+ * Filesystem name of a CLI shim. On Windows, PATH execution is driven by file
+ * extension (PATHEXT) — an extensionless `#!/bin/bash` script is not runnable —
+ * so shims get a `.cmd` suffix there. POSIX shims stay extensionless.
+ */
+function shimFileName(binName: string, platform: string): string {
+  return platform === "win32" ? `${binName}.cmd` : binName;
+}
+
+/**
+ * Build the contents of a CLI shim for the target platform.
+ *
+ * POSIX: a `#!/bin/bash` script that `cd`s into the bin dir and execs the CLI.
+ * Windows: a `.cmd` launcher that does the same with `cd /d` (so it follows the
+ * bin symlink and switches drive if needed) and forwards args via `%*`. cmd.exe
+ * can't run the bash shim because PATHEXT has no entry for extensionless files.
+ *
+ * For bun commands (`command` starts with `bun `) the shim runs `bun run
+ * <script>`. Non-bun commands are invoked explicitly relative to the bin dir
+ * on both platforms (`./` / `.\`), never via PATH lookup — a bare name would
+ * let a same-named program elsewhere on PATH shadow the installed one. On
+ * Windows this is still best-effort, since arbitrary POSIX entrypoints (e.g.
+ * a `.sh`) aren't natively runnable there — but nearly all arc CLIs are bun.
+ */
+function buildShimContent(
+  info: { scriptPath: string; command: string },
+  binPath: string,
+  platform: string
+): string {
+  const isBunCommand = info.command.startsWith("bun ");
+
+  if (platform === "win32") {
+    const invoke = isBunCommand
+      ? `bun run ${info.scriptPath}`
+      : `.\\${info.command}`;
+    return `@echo off\r\nsetlocal\r\ncd /d "${binPath}" || exit /b 1\r\n${invoke} %*\r\n`;
+  }
+
+  const invoke = isBunCommand
+    ? `exec bun run ${info.scriptPath}`
+    : `exec ./${info.command}`;
+  return `#!/bin/bash\ncd "${binPath}" && ${invoke} "$@"\n`;
+}
+
+/**
+ * Create PATH-accessible shims for all CLI entries in a manifest.
+ *
+ * The shim flavor follows `platform` (defaults to the host, overridable for
+ * tests — mirrors `detectPlatform` in cosign.ts): a `#!/bin/bash` script on
+ * POSIX, a `.cmd` launcher on Windows. Returns the logical bin names created
+ * (not the on-disk filenames), which is what the DB and {@link removeCliShim}
+ * key on.
  */
 export async function createCliShim(
   shimDir: string,
   binDir: string,
-  manifest: ArcManifest
+  manifest: ArcManifest,
+  platform: string = process.platform
 ): Promise<string[]> {
   const entries = extractAllCliInfo(manifest);
   if (!entries.length) return [];
@@ -157,15 +206,12 @@ export async function createCliShim(
 
   const created: string[] = [];
   for (const info of entries) {
-    const shimPath = join(shimDir, info.binName);
+    const shimPath = join(shimDir, shimFileName(info.binName, platform));
     const binPath = join(binDir, info.binName);
 
-    const isBunCommand = info.command.startsWith("bun ");
-    const content = isBunCommand
-      ? `#!/bin/bash\ncd "${binPath}" && exec bun run ${info.scriptPath} "$@"\n`
-      : `#!/bin/bash\ncd "${binPath}" && exec ./${info.command} "$@"\n`;
-
-    await writeFile(shimPath, content, { mode: 0o755 });
+    await writeFile(shimPath, buildShimContent(info, binPath, platform), {
+      mode: 0o755,
+    });
     created.push(info.binName);
   }
 
@@ -174,17 +220,30 @@ export async function createCliShim(
 
 /**
  * Remove a CLI shim from the shim directory.
+ *
+ * Removes the platform-native shim (`<bin>.cmd` on Windows, `<bin>` on POSIX).
+ * On Windows it also sweeps a legacy extensionless shim left by older arc
+ * versions, so `arc remove` never orphans the broken bash file. Returns true if
+ * any shim was removed.
  */
 export async function removeCliShim(
   shimDir: string,
-  binName: string
+  binName: string,
+  platform: string = process.platform
 ): Promise<boolean> {
-  const shimPath = join(shimDir, binName);
-  try {
-    await unlink(shimPath);
-    return true;
-  } catch (err) {
-    if (isErrno(err) && err.code === "ENOENT") return false;
-    throw err;
+  const candidates = [shimFileName(binName, platform)];
+  // win32: also sweep a pre-fix extensionless shim left by older arc versions.
+  if (platform === "win32") candidates.push(binName);
+
+  let removed = false;
+  for (const name of candidates) {
+    try {
+      await unlink(join(shimDir, name));
+      removed = true;
+    } catch (err) {
+      if (isErrno(err) && err.code === "ENOENT") continue;
+      throw err;
+    }
   }
+  return removed;
 }
