@@ -158,9 +158,11 @@ function shimFileName(binName: string, platform: string): string {
  * can't run the bash shim because PATHEXT has no entry for extensionless files.
  *
  * For bun commands (`command` starts with `bun `) the shim runs `bun run
- * <script>`. Non-bun commands are exec'd directly; on Windows this is
- * best-effort (`<command> %*`), since arbitrary POSIX entrypoints (e.g. a
- * `.sh`) aren't natively runnable there — but nearly all arc CLIs are bun.
+ * <script>`. Non-bun commands are invoked explicitly relative to the bin dir
+ * on both platforms (`./` / `.\`), never via PATH lookup — a bare name would
+ * let a same-named program elsewhere on PATH shadow the installed one. On
+ * Windows this is still best-effort, since arbitrary POSIX entrypoints (e.g.
+ * a `.sh`) aren't natively runnable there — but nearly all arc CLIs are bun.
  */
 function buildShimContent(
   info: { scriptPath: string; command: string },
@@ -170,7 +172,9 @@ function buildShimContent(
   const isBunCommand = info.command.startsWith("bun ");
 
   if (platform === "win32") {
-    const invoke = isBunCommand ? `bun run ${info.scriptPath}` : info.command;
+    const invoke = isBunCommand
+      ? `bun run ${info.scriptPath}`
+      : `.\\${info.command}`;
     return `@echo off\r\nsetlocal\r\ncd /d "${binPath}" || exit /b 1\r\n${invoke} %*\r\n`;
   }
 
@@ -227,9 +231,9 @@ export async function removeCliShim(
   binName: string,
   platform: string = process.platform
 ): Promise<boolean> {
-  // win32: the current `.cmd` shim plus any pre-fix extensionless shim.
-  const candidates =
-    platform === "win32" ? [`${binName}.cmd`, binName] : [binName];
+  const candidates = [shimFileName(binName, platform)];
+  // win32: also sweep a pre-fix extensionless shim left by older arc versions.
+  if (platform === "win32") candidates.push(binName);
 
   let removed = false;
   for (const name of candidates) {

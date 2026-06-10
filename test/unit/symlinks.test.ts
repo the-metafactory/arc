@@ -176,7 +176,7 @@ describe("createCliShim", () => {
     expect(content).not.toContain("#!/bin/bash");
   });
 
-  test("non-bun command: exec'd directly per platform", async () => {
+  test("non-bun command: invoked relative to the bin dir on both platforms", async () => {
     const shimDir = join(root, "shim");
     const binDir = join(root, "bin");
     const manifest = cliManifest([{ name: "tool", command: "run.sh" }]);
@@ -186,9 +186,12 @@ describe("createCliShim", () => {
       'exec ./run.sh "$@"',
     );
 
+    // Pin the full invocation line: `.\` keeps resolution inside the bin dir.
+    // A bare `run.sh %*` would let cmd.exe resolve a same-named program
+    // elsewhere on PATH instead of the installed one.
     await createCliShim(shimDir, binDir, manifest, "win32");
     expect(await Bun.file(join(shimDir, "tool.cmd")).text()).toContain(
-      "run.sh %*",
+      "\r\n.\\run.sh %*\r\n",
     );
   });
 

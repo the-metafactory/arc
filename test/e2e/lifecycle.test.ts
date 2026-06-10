@@ -505,7 +505,7 @@ describe("Full lifecycle: install → list → info → audit → disable → en
       join(env.arc.shimDir, shim("multi-alt")),
     ).text();
     if (process.platform === "win32") {
-      expect(altShimContent).toContain("bin/multi-alt %*");
+      expect(altShimContent).toContain(".\\bin/multi-alt %*");
     } else {
       expect(altShimContent).toContain("exec ./bin/multi-alt");
     }
