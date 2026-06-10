@@ -73,9 +73,10 @@ export interface InstallOptions {
    * Resume a failed library install from the named artifact (arc#227 / F-6c).
    *
    * Skips every artifact that orders BEFORE this one in the dependency-sorted
-   * sequence (they are assumed already installed or deliberately skipped), then
-   * installs from this artifact onward with the same ordered / atomic-rollback
-   * semantics. Library installs only; ignored for standalone installs.
+   * sequence (they are assumed already installed or deliberately skipped — NOT
+   * verified against the DB in v1; known gap arc#232), then installs from this
+   * artifact onward with the same ordered / atomic-rollback semantics. Library
+   * installs only; ignored for standalone installs.
    * Example: `arc install dev-loop --resume-from=dev` after fixing the broker.
    */
   resumeFromArtifact?: string;
@@ -596,7 +597,11 @@ async function installLibrary(
   }
 
   // arc#227 / F-6c: resume a failed install from a named artifact. Everything
-  // ordered before it is assumed already installed (or deliberately skipped).
+  // ordered before it is assumed already installed (or deliberately skipped) —
+  // this is NOT verified against the DB in v1, so resuming from an artifact
+  // whose predecessors never landed can install it against a missing
+  // dependency. Known gap, tracked in arc#232 (verify predecessors before
+  // resuming).
   let startIndex = 0;
   if (opts.resumeFromArtifact) {
     startIndex = orderedArtifacts.findIndex(
@@ -706,22 +711,21 @@ async function installLibrary(
     if (!opts.yes) {
       console.log(`  ✅ ${artifactResult.name} v${artifactResult.version}`);
     }
-    if (artifactTx) {
-      tx.recordArtifactSuccess(
-        artifactManifest.name,
-        artifactTx,
-        artifactManifest.version,
-        artifactManifest.type,
-      );
-    } else {
-      // Defensive: a success without a captured transaction means nothing for
-      // us to unwind — record state but with no rollback handle.
-      tx.recordArtifactSkipped(
-        artifactManifest.name,
-        artifactManifest.version,
-        artifactManifest.type,
+    // onTransaction always fires (before any hook/postinstall gate) on the path
+    // that reaches a success return, so artifactTx is guaranteed set here. Guard
+    // the invariant rather than branch on it — a missing handle would mean this
+    // artifact could not be rolled back if a later one fails, so fail loud.
+    if (!artifactTx) {
+      throw new Error(
+        `internal: artifact '${artifactManifest.name}' succeeded without a captured install transaction`,
       );
     }
+    tx.recordArtifactSuccess(
+      artifactManifest.name,
+      artifactTx,
+      artifactManifest.version,
+      artifactManifest.type,
+    );
   }
 
   // Mid-sequence failure → atomically roll back everything this run landed.

@@ -143,15 +143,44 @@ export function beginLibraryInstallTransaction(opts: {
 
     async rollback() {
       // Reverse order: last landed artifact unwinds first.
+      //
+      // Every teardown step here is best-effort and MUST NOT abort the loop:
+      // the atomic-rollback invariant (no earlier-sequence artifact left with
+      // its symlinks/hooks/launchd behind) requires that we unwind ALL landed
+      // artifacts even if one step throws. The filesystem teardown
+      // (tx.rollback()) runs first and is itself best-effort across its own
+      // steps; the DB-row removal that follows is the one call the
+      // sub-transaction does not own, so we wrap it here to match the same
+      // warn-and-continue discipline.
       for (let i = landed.length - 1; i >= 0; i--) {
         const { name, tx } = landed[i];
-        await tx.rollback();
+
+        // Filesystem teardown (symlinks/hooks/launchd/extensions). Internally
+        // best-effort; if it ever threw, the DB row + later artifacts must
+        // still be cleaned, so guard it too.
+        try {
+          await tx.rollback();
+        } catch (err) {
+          process.stderr.write(
+            `  ⚠ rollback: failed to unwind artifact '${name}': ${errorMessage(err)}\n`,
+          );
+        }
+
         // The sub-transaction's own rollback does NOT remove the committed DB
         // row (the DB commit is the last step of a single-artifact install, so
-        // it never had to). The library level removes it here.
+        // it never had to). The library level removes it here — and a failure
+        // (SQLITE_BUSY, locked DB, schema drift) must not abort the unwind of
+        // the remaining artifacts.
         if (opts.removeDbRow) {
-          opts.removeDbRow(name);
+          try {
+            opts.removeDbRow(name);
+          } catch (err) {
+            process.stderr.write(
+              `  ⚠ rollback: failed to remove DB row for '${name}': ${errorMessage(err)}\n`,
+            );
+          }
         }
+
         const detail = find(name);
         if (detail) {
           detail.state = ArtifactInstallState.ROLLED_BACK;

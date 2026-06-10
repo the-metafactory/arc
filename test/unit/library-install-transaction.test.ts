@@ -122,4 +122,60 @@ describe("LibraryInstallTransaction", () => {
     const skipped = journal.artifacts.find((a) => a.name === "agent-state");
     expect(skipped?.state).toBe(ArtifactInstallState.SKIPPED);
   });
+
+  test("a removeDbRow failure mid-unwind does NOT abort rollback of the other artifacts", async () => {
+    // arc#231 review (MAJOR): if removeSkill throws (SQLITE_BUSY / locked DB /
+    // schema drift) on one artifact, every OTHER landed artifact must still get
+    // its filesystem rollback and ROLLED_BACK journal state — the loop cannot
+    // abort, or earlier-sequence artifacts are left with their symlinks behind.
+    const filesystemRolledBack: string[] = [];
+    const dbAttempts: string[] = [];
+
+    const tx = beginLibraryInstallTransaction({
+      libraryName: "dev-loop",
+      removeDbRow: (name) => {
+        dbAttempts.push(name);
+        // Throw on the SECOND artifact unwound (pilot — landed[1], reverse).
+        if (name === "pilot") {
+          throw new Error("SQLITE_BUSY: database is locked");
+        }
+      },
+    });
+
+    // Three artifacts succeed (a, b=pilot, c). Reverse-unwind order: c, pilot, a.
+    const names = ["a", "pilot", "c"];
+    for (const name of names) {
+      const sub = beginInstallTransaction({
+        packageName: name,
+        authorization: { approved: true },
+      });
+      const realRollback = sub.rollback.bind(sub);
+      sub.rollback = async () => {
+        filesystemRolledBack.push(name);
+        return realRollback();
+      };
+      sub.recordDbCommit(name);
+      tx.recordArtifactSuccess(name, sub);
+    }
+
+    tx.recordArtifactFailure("dev", "boom");
+
+    // Must not throw despite removeDbRow throwing on 'pilot'.
+    const journal = await tx.rollback();
+
+    // ALL three got their filesystem rollback, in reverse order.
+    expect(filesystemRolledBack).toEqual(["c", "pilot", "a"]);
+    // The DB removal was ATTEMPTED for all three (the throw didn't skip any).
+    expect(dbAttempts).toEqual(["c", "pilot", "a"]);
+
+    // Every landed artifact is journaled ROLLED_BACK — even the one whose DB
+    // row removal threw — so partial-state reporting stays truthful.
+    const states = Object.fromEntries(
+      journal.artifacts.map((a) => [a.name, a.state]),
+    );
+    expect(states.a).toBe(ArtifactInstallState.ROLLED_BACK);
+    expect(states.pilot).toBe(ArtifactInstallState.ROLLED_BACK);
+    expect(states.c).toBe(ArtifactInstallState.ROLLED_BACK);
+    expect(states.dev).toBe(ArtifactInstallState.FAILED);
+  });
 });
