@@ -1,10 +1,25 @@
 import type { ArtifactSymlinkRecord } from "./artifact-installer.js";
-import { rollbackArtifactSymlinks } from "./artifact-installer.js";
+import { installNodeDependencies, resolveArtifactSourceDir, rollbackArtifactSymlinks } from "./artifact-installer.js";
 import type { LaunchdInstallRecord } from "./hosts/launchd-install.js";
 import { rollbackLaunchdArtifacts } from "./hosts/launchd-install.js";
-import { removeHooks } from "./hooks.js";
+import {
+  findMissingHookFiles,
+  registerHooks,
+  removeHooks,
+  resolveHooksFromManifest,
+} from "./hooks.js";
 import { errorMessage } from "./errors.js";
-import { rollbackWiredExtensions } from "./extensions.js";
+import { rollbackWiredExtensions, wireExtensions } from "./extensions.js";
+import { recordInstall } from "./db.js";
+import { runLifecycleScripts, runScript } from "./scripts.js";
+import type { Database } from "bun:sqlite";
+import { existsSync } from "fs";
+import type {
+  ArcManifest,
+  ArtifactType,
+  HostAdapter,
+  PackageTier,
+} from "../types.js";
 
 export interface InstallAuthorization {
   approved: boolean;
@@ -299,4 +314,235 @@ export function beginInstallTransaction(opts: {
       return evidence;
     },
   };
+}
+
+export interface CompleteInstallTransactionOptions {
+  host: HostAdapter;
+  db: Database;
+  repoUrl: string;
+  installPath: string;
+  manifest: ArcManifest;
+  authorization: InstallAuthorization;
+  symlinks: ArtifactSymlinkRecord;
+  launchdRecords?: LaunchdInstallRecord[];
+  quiet?: boolean;
+  sourceName?: string | null;
+  sourceTier?: PackageTier;
+  libraryName?: string | null;
+  postinstallEnv?: Record<string, string>;
+  onTransaction?: (tx: InstallTransaction) => void;
+}
+
+export interface CompleteInstallTransactionResult {
+  success: boolean;
+  name?: string;
+  version?: string;
+  error?: string;
+  manifest?: ArcManifest;
+  evidence?: InstallTransactionEvidence;
+}
+
+/**
+ * Complete an Install Transaction after the package's primary Landed Artifacts
+ * have been created.
+ *
+ * Callers still own **Resolved Package** creation, **Install Authorization**,
+ * and preinstall gates. This module owns the post-landing invariants:
+ * hook validation/registration, extension wiring, dependency install,
+ * postinstall lifecycle, package DB commit, rollback, and Transaction Evidence.
+ */
+export async function completeInstallTransaction(
+  opts: CompleteInstallTransactionOptions,
+): Promise<CompleteInstallTransactionResult> {
+  const { host, db, repoUrl, installPath, manifest } = opts;
+  const tx = beginInstallTransaction({
+    packageName: manifest.name,
+    authorization: opts.authorization,
+  });
+  opts.onTransaction?.(tx);
+  tx.recordSymlinks(opts.symlinks);
+  tx.recordLaunchd(opts.launchdRecords ?? []);
+
+  const resolvedHooks = resolveHooksFromManifest(
+    manifest.provides?.hooks,
+    installPath,
+    manifest.name,
+    host.paths.root,
+  );
+  if (resolvedHooks?.length) {
+    const missingHookFiles = findMissingHookFiles(resolvedHooks);
+    if (missingHookFiles.length) {
+      const detail = missingHookFiles
+        .map((m) => `  - ${m.event}: ${m.command}\n      missing: ${m.missingPath}`)
+        .join("\n");
+      const evidence = await tx.rollback();
+      return {
+        success: false,
+        evidence,
+        error:
+          `Manifest declares hooks whose command references a file that was not installed:\n${detail}\n` +
+          `Add the file to provides.files (or fix the command path) and reinstall.`,
+      };
+    }
+    const tier = opts.sourceTier ?? manifest.tier ?? "custom";
+    const approved = await promptHookConsent(
+      manifest.name,
+      tier,
+      resolvedHooks,
+      opts.quiet,
+    );
+    if (approved) {
+      const settingsPath = host.paths.settingsPath;
+      await registerHooks(manifest.name, resolvedHooks, settingsPath);
+      tx.recordHookRegistration(settingsPath, resolvedHooks.length);
+      if (!opts.quiet) {
+        console.log("  \u2713 Hooks registered in settings.json");
+      }
+    } else if (!opts.quiet) {
+      console.log("  \u2298 Hook registration declined");
+    }
+  }
+
+  if (manifest.extensions) {
+    const wired = await wireExtensions(manifest, installPath, host.paths.root);
+    tx.recordExtensions(wired, host.paths.root);
+    if (wired.length && !opts.quiet) {
+      for (const ext of wired) {
+        console.log(`  \u2713 Extension wired: ${ext}`);
+      }
+    }
+  }
+
+  installNodeDependencies(installPath);
+
+  const postinstallResult = runPostinstallPhase(
+    installPath,
+    manifest,
+    opts.quiet,
+    opts.postinstallEnv,
+  );
+  if (!postinstallResult.success) {
+    const evidence = await tx.rollback();
+    return { ...postinstallResult, evidence };
+  }
+
+  const now = new Date().toISOString();
+  const artifactType = manifest.type as ArtifactType;
+  const artifactSourceDir = resolveArtifactSourceDir(manifest.type, installPath);
+  recordInstall(
+    db,
+    {
+      name: manifest.name,
+      version: manifest.version,
+      repo_url: repoUrl,
+      install_path: installPath,
+      skill_dir: existsSync(artifactSourceDir) ? artifactSourceDir : installPath,
+      status: "active",
+      artifact_type: artifactType,
+      tier: opts.sourceTier ?? manifest.tier ?? "custom",
+      customization_path: null,
+      install_source: opts.sourceName ?? null,
+      library_name: opts.libraryName ?? null,
+      installed_at: now,
+      updated_at: now,
+    },
+    manifest,
+  );
+  tx.recordDbCommit(manifest.name);
+
+  return {
+    success: true,
+    name: manifest.name,
+    version: manifest.version,
+    manifest,
+    evidence: tx.evidence,
+  };
+}
+
+interface PhaseResult {
+  success: boolean;
+  error?: string;
+}
+
+function runPostinstallPhase(
+  installPath: string,
+  manifest: ArcManifest,
+  quiet?: boolean,
+  env?: Record<string, string>,
+): PhaseResult {
+  if (manifest.scripts?.postinstall) {
+    const result = runScript({
+      installPath,
+      scriptPath: manifest.scripts.postinstall,
+      hookName: "postinstall",
+      quiet,
+      env,
+    });
+    if (!result.success && !result.skipped) {
+      return {
+        success: false,
+        error: `Postinstall script failed (exit ${result.exitCode})`,
+      };
+    }
+  }
+
+  const lifecycle = manifest.lifecycle?.postinstall;
+  if (lifecycle && lifecycle.length > 0) {
+    const result = runLifecycleScripts({
+      installPath,
+      scriptPaths: lifecycle,
+      phase: "postinstall",
+      quiet,
+      env,
+    });
+    if (!result.success) {
+      return {
+        success: false,
+        error: `Postinstall lifecycle script failed: ${result.failedAt} (exit ${result.steps.at(-1)?.exitCode ?? "?"})`,
+      };
+    }
+  }
+
+  return { success: true };
+}
+
+async function promptHookConsent(
+  packageName: string,
+  tier: string,
+  hooks: { event: string; command: string; matcher?: string }[],
+  autoApprove?: boolean,
+): Promise<boolean> {
+  if (autoApprove) return true;
+  if (tier === "official") return true;
+
+  console.log(`\n\u{1F4CB} ${packageName} wants to register hooks:`);
+  for (const hook of hooks) {
+    const matcherLabel = hook.matcher ? ` (${hook.matcher})` : "";
+    console.log(`  \u2022 ${hook.event}${matcherLabel} \u2192 ${hook.command}`);
+  }
+  console.log("");
+  console.log("Hooks run during Claude Code sessions.");
+
+  if (tier === "community" || tier === "custom") {
+    process.stdout.write("Allow? [y/N] ");
+    const response = await readLine();
+    return response.trim().toLowerCase() === "y";
+  }
+
+  return true;
+}
+
+function readLine(): Promise<string> {
+  if (!process.stdin.isTTY) {
+    return Promise.resolve("");
+  }
+  return new Promise((resolve) => {
+    const stdin = process.stdin;
+    stdin.setEncoding("utf-8");
+    stdin.resume();
+    stdin.once("data", (data: string) => {
+      stdin.pause();
+      resolve(data);
+    });
+  });
 }

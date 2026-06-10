@@ -4,7 +4,6 @@ import { rm } from "node:fs/promises";
 import type {
   ArcPaths,
   ArcManifest,
-  ArtifactType,
   HostAdapter,
   HostId,
   PackageTier,
@@ -12,22 +11,14 @@ import type {
 import type { Database } from "bun:sqlite";
 import { errorMessage } from "../lib/errors.js";
 import { readManifest, readLibraryArtifacts, assessRisk, formatCapabilities } from "../lib/manifest.js";
-import { recordInstall, getSkill, removeSkill } from "../lib/db.js";
+import { getSkill, removeSkill } from "../lib/db.js";
 import { runScript, runLifecycleScripts } from "../lib/scripts.js";
-import {
-  registerHooks,
-  resolveHooksFromManifest,
-  findMissingHookFiles,
-} from "../lib/hooks.js";
 import {
   type ArtifactSymlinkRecord,
   createArtifactSymlinks,
-  resolveArtifactSourceDir,
-  installNodeDependencies,
   rollbackArtifactSymlinks,
   toposortArtifacts,
 } from "../lib/artifact-installer.js";
-import { wireExtensions } from "../lib/extensions.js";
 import { extractRepoName, isInsideRepos, repoNameFromPreExtracted } from "../lib/repo-name.js";
 import { requireBrokerForManifest } from "../lib/nats-broker.js";
 import {
@@ -43,8 +34,8 @@ import {
 import { isDarwinLaunchdHost } from "../lib/hosts/darwin-launchd.js";
 import {
   ArtifactInstallState,
-  beginInstallTransaction,
   beginLibraryInstallTransaction,
+  completeInstallTransaction,
   type InstallTransaction,
   type InstallTransactionEvidence,
   type LibraryInstallJournal,
@@ -467,132 +458,27 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
       };
     }
   }
-  const tx = beginInstallTransaction({
-    packageName: manifest.name,
-    authorization: { approved: true },
-  });
-  tx.recordSymlinks(symlinkResult.record);
-  tx.recordLaunchd(launchdRecords);
-
-  // 5b. Register hooks (if declared, with consent gating).
-  // host.paths.root is passed as the $PAI_DIR expansion target so a hook
-  // command like ${PAI_DIR}/hooks/handlers/Foo.ts gets stat'd against the
-  // absolute path the runtime would resolve to (issue #85).
-  const resolvedHooks = resolveHooksFromManifest(
-    manifest.provides?.hooks,
-    installPath,
-    manifest.name,
-    host.paths.root,
-  );
-  if (resolvedHooks?.length) {
-    // Refuse to register hooks whose command points at a file that does not
-    // exist — silent registration of broken hooks was the original symptom of
-    // issue #84.
-    const missingHookFiles = findMissingHookFiles(resolvedHooks);
-    if (missingHookFiles.length) {
-      const detail = missingHookFiles
-        .map((m) => `  - ${m.event}: ${m.command}\n      missing: ${m.missingPath}`)
-        .join("\n");
-      // #89: roll back any symlinks/shims createArtifactSymlinks placed before
-      // we hit this gate, so the install fails clean rather than leaving
-      // orphan entries under ~/.claude/{skills,bin,...} for the user to clean.
-      // arc#140 P3: also unwind any launchd-side state placed by multi-target
-      // dispatch (plist + binary symlink).
-      const evidence = await tx.rollback();
-      return {
-        success: false,
-        evidence,
-        error:
-          `Manifest declares hooks whose command references a file that was not installed:\n${detail}\n` +
-          `Add the file to provides.files (or fix the command path) and reinstall.`,
-      };
-    }
-    const tier = opts.sourceTier ?? manifest.tier ?? "custom";
-    const approved = await promptHookConsent(
-      manifest.name,
-      tier,
-      resolvedHooks,
-      opts.yes,
-    );
-    if (approved) {
-      const settingsPath = host.paths.settingsPath;
-      await registerHooks(manifest.name, resolvedHooks, settingsPath);
-      tx.recordHookRegistration(settingsPath, resolvedHooks.length);
-      if (!opts.yes) {
-        console.log("  \u2713 Hooks registered in settings.json");
-      }
-    } else {
-      if (!opts.yes) {
-        console.log("  \u2298 Hook registration declined");
-      }
-    }
-  }
-
-  // 5c. Wire extensions (if declared)
-  if (manifest.extensions) {
-    const wired = await wireExtensions(manifest, installPath, host.paths.root);
-    tx.recordExtensions(wired, host.paths.root);
-    if (wired.length && !opts.yes) {
-      for (const ext of wired) {
-        console.log(`  \u2713 Extension wired: ${ext}`);
-      }
-    }
-  }
-
-  // 6. Run bun install if package.json exists
-  installNodeDependencies(installPath);
-
-  // 6b. Run postinstall script(s) if declared.
-  // F-6e (arc#229): inject the agent's stored secrets into the postinstall env
-  // ONLY (per design §6.2 step 5 — per-agent env, never the brief). The env is
-  // a fresh object scoped to this child invocation; arc's own process env is
-  // never mutated, so the secrets are gone the moment postinstall exits
-  // (issue §E "unset after postinstall").
+  // 5b. Complete the post-landing Install Transaction.
   const postinstallEnv = await buildSecretEnvForInstall(manifest, {
     arc,
     backendChoice: opts.secretBackend,
   });
-  const postinstallResult = runPostinstallPhase(
+  const transactionResult = await completeInstallTransaction({
+    host,
+    db,
+    repoUrl,
     installPath,
     manifest,
-    opts.yes,
+    authorization: { approved: true },
+    symlinks: symlinkResult.record,
+    launchdRecords,
+    quiet: opts.yes,
+    sourceName: opts.sourceName ?? null,
+    sourceTier: opts.sourceTier ?? manifest.tier ?? "custom",
+    libraryName: opts.libraryName ?? null,
     postinstallEnv,
-  );
-  if (!postinstallResult.success) {
-    // #97: postinstall failure leaves the same partial-state shape as the
-    // hook-validation gate (#89) plus registered hooks pointing at a package
-    // the DB has no record of (recordInstall happens AFTER postinstall).
-    // Tear down hook registrations, symlinks, AND any launchd-side state
-    // (arc#140 P3) before returning so the user gets a clean failure
-    // rather than orphans they have to clean up by hand.
-    const evidence = await tx.rollback();
-    return { ...postinstallResult, evidence };
-  }
-
-  // 7. Record in database
-  const now = new Date().toISOString();
-  const artifactType = manifest.type as ArtifactType;
-  const artifactSourceDir = resolveArtifactSourceDir(manifest.type, installPath);
-  recordInstall(
-    db,
-    {
-      name: manifest.name,
-      version: manifest.version,
-      repo_url: repoUrl,
-      install_path: installPath,
-      skill_dir: existsSync(artifactSourceDir) ? artifactSourceDir : installPath,
-      status: "active",
-      artifact_type: artifactType,
-      tier: opts.sourceTier ?? manifest.tier ?? "custom",
-      customization_path: null,
-      install_source: opts.sourceName ?? null,
-      library_name: opts.libraryName ?? null,
-      installed_at: now,
-      updated_at: now,
-    },
-    manifest
-  );
-  tx.recordDbCommit(manifest.name);
+  });
+  if (!transactionResult.success) return transactionResult;
 
   // F-6b (arc#228) — IDENTITY STEP. For type:agent packages, provision the
   // agent's NKey seed + DID and scaffold its instance state. Best-effort and
@@ -605,13 +491,7 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
   const identityResult = await maybeProvisionAgentIdentity(manifest, { quiet: opts.yes });
   reportProvisioningResult(identityResult);
 
-  return {
-    success: true,
-    name: manifest.name,
-    version: manifest.version,
-    manifest,
-    evidence: tx.evidence,
-  };
+  return transactionResult;
 }
 
 /**
@@ -917,11 +797,8 @@ export async function installSingleArtifact(
     return preinstallResult;
   }
 
-  // Create symlinks based on artifact type
-  const artifactType = manifest.type as ArtifactType;
-
   const symlinkResult = await createArtifactSymlinks({
-    type: artifactType,
+    type: manifest.type,
     manifest,
     arc,
     host,
@@ -939,116 +816,26 @@ export async function installSingleArtifact(
         `Manifest declares provides.files entries whose source does not exist in the package:\n${detail}`,
     };
   }
-  const tx = beginInstallTransaction({
-    packageName: manifest.name,
-    authorization: { approved: true },
-  });
-  // Hand the live transaction to the library-install caller (arc#227 / F-6c)
-  // so a later artifact's failure can roll this one back. No-op for standalone
-  // installs (callback absent).
-  onTransaction?.(tx);
-  tx.recordSymlinks(symlinkResult.record);
-
-  // Register hooks (with consent gating — same as standalone install).
-  // See note above on host.paths.root threading $PAI_DIR substitution.
-  const resolvedHooks = resolveHooksFromManifest(
-    manifest.provides?.hooks,
-    artifactDir,
-    manifest.name,
-    host.paths.root,
-  );
-  if (resolvedHooks?.length) {
-    // Refuse to register hooks whose command points at a file that does not
-    // exist — silent registration of broken hooks was the original symptom of
-    // issue #84.
-    const missingHookFiles = findMissingHookFiles(resolvedHooks);
-    if (missingHookFiles.length) {
-      const detail = missingHookFiles
-        .map((m) => `  - ${m.event}: ${m.command}\n      missing: ${m.missingPath}`)
-        .join("\n");
-      // #89: roll back any symlinks/shims createArtifactSymlinks placed before
-      // we hit this gate, so the install fails clean rather than leaving
-      // orphan entries under ~/.claude/{skills,bin,...} for the user to clean.
-      const evidence = await tx.rollback();
-      return {
-        success: false,
-        evidence,
-        error:
-          `Manifest declares hooks whose command references a file that was not installed:\n${detail}\n` +
-          `Add the file to provides.files (or fix the command path) and reinstall.`,
-      };
-    }
-    const tier = opts.sourceTier ?? manifest.tier ?? "custom";
-    const approved = await promptHookConsent(
-      manifest.name,
-      tier,
-      resolvedHooks,
-      opts.yes,
-    );
-    if (approved) {
-      const settingsPath = host.paths.settingsPath;
-      await registerHooks(manifest.name, resolvedHooks, settingsPath);
-      tx.recordHookRegistration(settingsPath, resolvedHooks.length);
-      if (!opts.yes) {
-        console.log("  \u2713 Hooks registered in settings.json");
-      }
-    } else {
-      if (!opts.yes) {
-        console.log("  \u2298 Hook registration declined");
-      }
-    }
-  }
-
-  // Run bun install if package.json exists in artifact dir
-  installNodeDependencies(artifactDir);
-
-  // Run postinstall script(s). F-6e: inject the artifact's stored secrets into
-  // the postinstall env only (per-agent env, never the brief).
   const artifactPostinstallEnv = await buildSecretEnvForInstall(manifest, {
     arc,
     backendChoice: opts.secretBackend,
   });
-  const postinstallResult = runPostinstallPhase(
-    artifactDir,
-    manifest,
-    opts.yes,
-    artifactPostinstallEnv,
-  );
-  if (!postinstallResult.success) {
-    // #97: postinstall failure leaves the same partial-state shape as the
-    // hook-validation gate (#89) plus registered hooks pointing at a package
-    // the DB has no record of (recordInstall happens AFTER postinstall).
-    // Tear down hook registrations and symlinks before returning so the
-    // user gets a clean failure rather than orphans they have to clean up
-    // by hand.
-    const evidence = await tx.rollback();
-    return { ...postinstallResult, evidence };
-  }
-
-  // Resolve the skill_dir for DB recording
-  const artifactSourceDir = resolveArtifactSourceDir(artifactType, artifactDir);
-
-  const now = new Date().toISOString();
-  recordInstall(
+  const artifactTransactionResult = await completeInstallTransaction({
+    host,
     db,
-    {
-      name: manifest.name,
-      version: manifest.version,
-      repo_url: repoUrl,
-      install_path: artifactDir,
-      skill_dir: existsSync(artifactSourceDir) ? artifactSourceDir : artifactDir,
-      status: "active",
-      artifact_type: artifactType,
-      tier: opts.sourceTier ?? manifest.tier ?? "custom",
-      customization_path: null,
-      install_source: opts.sourceName ?? `library:${libraryName}`,
-      library_name: libraryName,
-      installed_at: now,
-      updated_at: now,
-    },
+    repoUrl,
+    installPath: artifactDir,
     manifest,
-  );
-  tx.recordDbCommit(manifest.name);
+    authorization: { approved: true },
+    symlinks: symlinkResult.record,
+    quiet: opts.yes,
+    sourceName: opts.sourceName ?? `library:${libraryName}`,
+    sourceTier: opts.sourceTier ?? manifest.tier ?? "custom",
+    libraryName,
+    postinstallEnv: artifactPostinstallEnv,
+    onTransaction,
+  });
+  if (!artifactTransactionResult.success) return artifactTransactionResult;
 
   // F-6b (arc#228) — IDENTITY STEP (library-artifact path). dev-loop ships its
   // agents as library artifacts (design §6.1), so the per-artifact install must
@@ -1057,13 +844,7 @@ export async function installSingleArtifact(
   const artifactIdentityResult = await maybeProvisionAgentIdentity(manifest, { quiet: opts.yes });
   reportProvisioningResult(artifactIdentityResult);
 
-  return {
-    success: true,
-    name: manifest.name,
-    version: manifest.version,
-    manifest,
-    evidence: tx.evidence,
-  };
+  return artifactTransactionResult;
 }
 
 /**
@@ -1249,61 +1030,6 @@ function runPreinstallPhase(
 }
 
 /**
- * Run the postinstall phase: single-script `scripts.postinstall` first,
- * then the ordered `lifecycle.postinstall` array (arc#140). Same ordering
- * rationale as runPreinstallPhase.
- *
- * Called AFTER symlinks + hooks are placed; caller is responsible for
- * rollback on failure (see install.ts §6b).
- */
-function runPostinstallPhase(
-  installPath: string,
-  manifest: ArcManifest,
-  quiet?: boolean,
-  /**
-   * F-6e (arc#229): extra env injected into the postinstall child only —
-   * carries the agent's stored secrets. Scoped to the child invocation; arc's
-   * own process env is untouched.
-   */
-  env?: Record<string, string>,
-): InstallResult {
-  if (manifest.scripts?.postinstall) {
-    const result = runScript({
-      installPath,
-      scriptPath: manifest.scripts.postinstall,
-      hookName: "postinstall",
-      quiet,
-      env,
-    });
-    if (!result.success && !result.skipped) {
-      return {
-        success: false,
-        error: `Postinstall script failed (exit ${result.exitCode})`,
-      };
-    }
-  }
-
-  const lifecycle = manifest.lifecycle?.postinstall;
-  if (lifecycle && lifecycle.length > 0) {
-    const result = runLifecycleScripts({
-      installPath,
-      scriptPaths: lifecycle,
-      phase: "postinstall",
-      quiet,
-      env,
-    });
-    if (!result.success) {
-      return {
-        success: false,
-        error: `Postinstall lifecycle script failed: ${result.failedAt} (exit ${result.steps.at(-1)?.exitCode ?? "?"})`,
-      };
-    }
-  }
-
-  return { success: true };
-}
-
-/**
  * Parse a version suffix from a name-based install input.
  * e.g., "MySkill@1.2.0" → { name: "MySkill", version: "1.2.0" }
  * Returns null if no @ version suffix is present.
@@ -1358,60 +1084,4 @@ function checkoutVersionTag(
     success: false,
     error: `Version ${version} not found (tried tags ${vTag}, ${plainTag}).${available}`,
   };
-}
-
-/**
- * Consent gate for hook registration based on trust tier.
- *
- * - official/sponsored tier: auto-approve (silent for --yes)
- * - community/custom tier: show hooks and prompt for approval
- * - --yes flag: auto-approve regardless of tier
- */
-async function promptHookConsent(
-  packageName: string,
-  tier: string,
-  hooks: { event: string; command: string; matcher?: string }[],
-  autoApprove?: boolean,
-): Promise<boolean> {
-  // Auto-approve for --yes flag or trusted tiers
-  if (autoApprove) return true;
-  if (tier === "official") return true;
-
-  // Show hook details
-  console.log(`\n\u{1F4CB} ${packageName} wants to register hooks:`);
-  for (const hook of hooks) {
-    const matcherLabel = hook.matcher ? ` (${hook.matcher})` : "";
-    console.log(`  \u2022 ${hook.event}${matcherLabel} \u2192 ${hook.command}`);
-  }
-  console.log("");
-  console.log("Hooks run during Claude Code sessions.");
-
-  // Community/custom: ask for approval
-  if (tier === "community" || tier === "custom") {
-    process.stdout.write("Allow? [y/N] ");
-    const response = await readLine();
-    return response.trim().toLowerCase() === "y";
-  }
-
-  // Other trusted tiers: auto-approve
-  return true;
-}
-
-/**
- * Read a single line from stdin.
- * Returns empty string immediately if stdin is not a TTY (defense in depth).
- */
-function readLine(): Promise<string> {
-  if (!process.stdin.isTTY) {
-    return Promise.resolve("");
-  }
-  return new Promise((resolve) => {
-    const stdin = process.stdin;
-    stdin.setEncoding("utf-8");
-    stdin.resume();
-    stdin.once("data", (data: string) => {
-      stdin.pause();
-      resolve(data);
-    });
-  });
 }
