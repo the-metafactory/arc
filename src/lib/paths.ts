@@ -1,4 +1,4 @@
-import { join, dirname, delimiter as pathDelimiter } from "path";
+import { join, dirname } from "path";
 import { homedir } from "os";
 import { existsSync, renameSync } from "fs";
 import { mkdir } from "fs/promises";
@@ -54,39 +54,55 @@ function resolveConfigRoot(override?: string): string {
 }
 
 /**
- * Is `dir` present on a PATH-style string? Splits on the platform's PATH
- * delimiter — `;` on Windows, `:` on POSIX — which is injectable (defaults to
- * `path.delimiter`) so the Windows behavior is testable on a POSIX CI host.
- * The previous hard-coded `:` split mangled Windows `PATH` entries: it uses
- * `;`, and each entry's `C:\...` drive letter contains a `:`, so a `:`-split
- * shredded every path. Entries and `dir` are home-expanded and
- * trailing-separator-normalized so equivalent spellings compare equal.
+ * Comparison key for a PATH entry or candidate dir, after home expansion.
+ * POSIX paths compare byte-for-byte. Windows paths are case-insensitive and
+ * separator-agnostic, so the win32 key is case-folded, `/`-unified to `\`,
+ * and stripped of trailing separators — `C:\Users\K\.local\bin`,
+ * `c:\users\k\.local\bin\`, and `C:/Users/k/.local/bin` all collapse to the
+ * same key.
+ */
+function pathComparisonKey(path: string, home: string, platform: string): string {
+  const normalized = normalizeUserPath(path, home);
+  if (platform !== "win32") return normalized;
+  return normalized.toLowerCase().replaceAll("/", "\\").replace(/\\+$/, "");
+}
+
+/**
+ * Is `dir` present on a PATH-style string? The split delimiter (`;` vs `:`)
+ * and the comparison rules (Windows is case-insensitive and
+ * separator-agnostic; POSIX is byte-sensitive) are both facts of the
+ * platform, so the injectable is the platform itself — defaults to the host,
+ * overridable so the win32 behavior is unit-testable on a POSIX CI host
+ * (the same pattern as createCliShim in symlinks.ts). The previous
+ * hard-coded `:` split mangled Windows `PATH` entries: each entry's `C:\...`
+ * drive letter contains a `:`, so the split shredded every path.
  */
 export function isDirOnPath(
   dir: string,
   pathEnv: string = process.env.PATH ?? "",
-  delimiter: string = pathDelimiter,
+  platform: string = process.platform,
   home: string = homedir(),
 ): boolean {
-  const target = normalizeUserPath(dir, home);
+  const delimiter = platform === "win32" ? ";" : ":";
+  const target = pathComparisonKey(dir, home, platform);
   return pathEnv
     .split(delimiter)
     .filter(Boolean)
-    .some((entry) => normalizeUserPath(entry, home) === target);
+    .some((entry) => pathComparisonKey(entry, home, platform) === target);
 }
 
 export function resolveDefaultShimDir(opts?: {
   home?: string;
   pathEnv?: string;
   configuredBinDir?: string;
-  delimiter?: string;
+  platform?: string;
 }): string {
   const home = opts?.home ?? homedir();
   const configured = opts?.configuredBinDir?.trim();
   if (configured) return normalizeUserPath(configured, home);
 
   const pathEnv = opts?.pathEnv ?? process.env.PATH ?? "";
-  const delimiter = opts?.delimiter ?? pathDelimiter;
+  const platform = opts?.platform ?? process.platform;
 
   const preferred = [
     join(home, ".local", "bin"),
@@ -94,7 +110,7 @@ export function resolveDefaultShimDir(opts?: {
   ];
 
   for (const candidate of preferred) {
-    if (isDirOnPath(candidate, pathEnv, delimiter, home)) return candidate;
+    if (isDirOnPath(candidate, pathEnv, platform, home)) return candidate;
   }
 
   return join(home, ".local", "bin");
