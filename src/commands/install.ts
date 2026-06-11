@@ -58,6 +58,12 @@ import {
   maybeProvisionAgentIdentity,
   reportProvisioningResult,
 } from "../lib/identity-provision.js";
+// F-6a (cortex#858): cortex config composition. Lives in its own module
+// (cortex-config-provision.ts); wired in below as a SINGLE clearly-commented
+// hook at the cortex-config step ("step 6c") — AFTER the post-landing
+// transaction (which runs postinstall), non-adjacent to F-6b's identity hook
+// and F-6e's secrets hook. Concern: cortex config merge only.
+import { maybeMergeCortexConfig } from "../lib/cortex-config-provision.js";
 
 export interface InstallOptions {
   /** arc's own state paths (configRoot, dbPath, reposDir, …). Host-independent. */
@@ -120,6 +126,14 @@ export interface InstallOptions {
   skipSecrets?: boolean;
   fromEnv?: boolean;
   secretBackend?: SecretBackendChoice;
+  /**
+   * F-6a (cortex#858) — target stack id (`{principal}/{stack}`) for the cortex
+   * config merge step. Forwarded to `cortex config merge --stack`. Optional:
+   * cortex requires it only when the target config dir holds more than one
+   * `stacks/*.yaml`. Ignored unless the manifest declares `cortex_config` AND
+   * the target host is a cortex stack.
+   */
+  cortexStackId?: string;
 }
 
 export interface InstallResult {
@@ -463,6 +477,10 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
     arc,
     backendChoice: opts.secretBackend,
   });
+  // Capture the live transaction so the F-6a cortex-config step below can
+  // unwind the landed state (symlinks/hooks/launchd/DB row) if the merge fails
+  // — atomic, same as the library path's onTransaction capture.
+  let installTx: InstallTransaction | undefined;
   const transactionResult = await completeInstallTransaction({
     host,
     db,
@@ -477,6 +495,9 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
     sourceTier: opts.sourceTier ?? manifest.tier ?? "custom",
     libraryName: opts.libraryName ?? null,
     postinstallEnv,
+    onTransaction: (handle) => {
+      installTx = handle;
+    },
   });
   if (!transactionResult.success) return transactionResult;
 
@@ -490,6 +511,37 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
   // a non-interactive install never hides an unidentified-agent gap.
   const identityResult = await maybeProvisionAgentIdentity(manifest, { quiet: opts.yes });
   reportProvisioningResult(identityResult);
+
+  // ── F-6a (cortex#858) CORTEX-CONFIG STEP ("step 6c") ──────────────────────
+  // When the manifest declares `cortex_config` AND the target host is a cortex
+  // stack, merge the package's declared capabilities/policy into the stack's
+  // `stacks/<id>.yaml` via `cortex config merge`. Runs AFTER the post-landing
+  // transaction (so postinstall has run) and is fail-closed: a merge failure
+  // unwinds the landed state and aborts the install. The cortex verb is
+  // idempotent + writes a 0o600 backup, so a retry after fixing the cause is
+  // safe. No-op (success) for non-cortex hosts or a manifest without the field.
+  const cortexConfigResult = maybeMergeCortexConfig(manifest, {
+    host,
+    installPath,
+    stackId: opts.cortexStackId,
+    quiet: opts.yes,
+  });
+  if (!cortexConfigResult.success) {
+    // Fail-closed: unwind the landed state. The transaction's rollback unwinds
+    // symlinks/hooks/extensions/launchd; the DB row was committed by
+    // completeInstallTransaction as its LAST step (the existing rollback paths
+    // all fire BEFORE that commit), so this step — which runs AFTER it — must
+    // remove the row itself to leave nothing behind.
+    const evidence = installTx ? await installTx.rollback() : transactionResult.evidence;
+    removeSkill(db, manifest.name);
+    return {
+      success: false,
+      name: manifest.name,
+      version: manifest.version,
+      error: cortexConfigResult.error,
+      evidence,
+    };
+  }
 
   return transactionResult;
 }
@@ -820,6 +872,12 @@ export async function installSingleArtifact(
     arc,
     backendChoice: opts.secretBackend,
   });
+  // Wrap the caller's onTransaction so we ALSO capture the handle locally —
+  // the F-6a cortex-config step below must unwind THIS artifact's landed state
+  // if the merge fails (installSingleArtifact's contract: on a failure return,
+  // its own state is already rolled back, so the library caller does not record
+  // it as a rollback target).
+  let artifactTx: InstallTransaction | undefined;
   const artifactTransactionResult = await completeInstallTransaction({
     host,
     db,
@@ -833,7 +891,10 @@ export async function installSingleArtifact(
     sourceTier: opts.sourceTier ?? manifest.tier ?? "custom",
     libraryName,
     postinstallEnv: artifactPostinstallEnv,
-    onTransaction,
+    onTransaction: (handle) => {
+      artifactTx = handle;
+      onTransaction?.(handle);
+    },
   });
   if (!artifactTransactionResult.success) return artifactTransactionResult;
 
@@ -843,6 +904,33 @@ export async function installSingleArtifact(
   // standalone path above — and the same unconditional failure-visibility rule.
   const artifactIdentityResult = await maybeProvisionAgentIdentity(manifest, { quiet: opts.yes });
   reportProvisioningResult(artifactIdentityResult);
+
+  // F-6a (cortex#858) — CORTEX-CONFIG STEP (library-artifact path). dev-loop's
+  // agents are the primary carriers of `cortex_config` (design §6.1), so the
+  // per-artifact install merges it too. Same fail-closed semantics: on a merge
+  // failure roll THIS artifact's landed state back and return failure, so the
+  // library transaction's own unwind treats it as an already-rolled-back step.
+  const artifactCortexConfig = maybeMergeCortexConfig(manifest, {
+    host,
+    installPath: artifactDir,
+    stackId: opts.cortexStackId,
+    quiet: opts.yes,
+  });
+  if (!artifactCortexConfig.success) {
+    // Roll THIS artifact's landed state back (symlinks/hooks/launchd) AND remove
+    // its committed DB row — the transaction's own rollback stops short of the
+    // DB commit (its last step), and the library caller does not record a
+    // FAILED artifact as a rollback target. So installSingleArtifact owns the
+    // full unwind on a failure return, per its contract.
+    if (artifactTx) await artifactTx.rollback();
+    removeSkill(db, manifest.name);
+    return {
+      success: false,
+      name: manifest.name,
+      version: manifest.version,
+      error: artifactCortexConfig.error,
+    };
+  }
 
   return artifactTransactionResult;
 }
