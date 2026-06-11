@@ -73,6 +73,7 @@ async function readManifestFromDir(
       // Library-specific validation
       if (parsed.type === "library") {
         validateLibraryManifest(parsed, filename);
+        validateCortexConfig(parsed, filename);
         return parsed;
       }
 
@@ -83,6 +84,7 @@ async function readManifestFromDir(
         validateProcess(parsed, filename);
         validateTargets(parsed, filename);
         validateLifecycle(parsed, filename);
+        validateCortexConfig(parsed, filename);
         return parsed;
       }
 
@@ -123,6 +125,7 @@ async function readManifestFromDir(
       normalizeCapabilities(parsed, filename);
       validateTargets(parsed, filename);
       validateLifecycle(parsed, filename);
+      validateCortexConfig(parsed, filename);
 
       return parsed;
     } catch (err) {
@@ -302,6 +305,103 @@ export function validateLifecycle(manifest: ArcManifest, filename: string): void
         );
       }
     }
+  }
+}
+
+/** The only top-level keys a `cortex_config` fragment may carry inline (besides
+ *  the mutually-exclusive `path` pointer). Mirrors cortex's
+ *  `CapabilityMergeFragmentSchema.strict()` boundary so a package can't smuggle
+ *  a transport/identity change (`agents`, `principal`, `nats`, …) in through the
+ *  merge path. cortex re-validates authoritatively at merge time; this is the
+ *  structural pre-filter at arc's manifest edge. */
+const CORTEX_CONFIG_INLINE_KEYS = new Set(["capabilities", "policy"]);
+
+/**
+ * Validate `cortex_config:` on the manifest (F-6a / cortex#858).
+ *
+ * The field is OPTIONAL. When present it must be one of two mutually-exclusive
+ * forms:
+ *   - Path pointer: `{ path: "<relative-file>" }` — a relative path (no leading
+ *     `/`, no `..` segment, defense-in-depth against escaping the package root)
+ *     to a YAML fragment file shipped in the package.
+ *   - Inline fragment: at least one of `capabilities:` / `policy:`, and NO
+ *     other top-level key.
+ *
+ * arc does NOT parse the fragment's deep contents — cortex's
+ * `CapabilityMergeFragmentSchema` + `CortexConfigSchema` own that at merge time
+ * (Anti-Abstraction Gate: trust the downstream validator, don't reimplement it).
+ * arc's job here is to reject obviously-malformed manifests at read time so a
+ * typo surfaces on install rather than as an opaque cortex-side error, and to
+ * enforce the capability/policy-only boundary at the trust edge.
+ */
+export function validateCortexConfig(manifest: ArcManifest, filename: string): void {
+  const cc = manifest.cortex_config as unknown;
+  if (cc === undefined || cc === null) return;
+
+  if (!isRecord(cc)) {
+    throw new Error(
+      `Invalid ${filename}: 'cortex_config' must be an object with a 'path' pointer or inline 'capabilities'/'policy' (got ${Array.isArray(cc) ? "array" : typeof cc})`,
+    );
+  }
+
+  const keys = Object.keys(cc);
+  if (keys.length === 0) {
+    throw new Error(
+      `Invalid ${filename}: 'cortex_config' is empty — declare a 'path' to a fragment file, or inline 'capabilities'/'policy'. Omit the field entirely if there is nothing to merge.`,
+    );
+  }
+
+  const hasPath = "path" in cc;
+  const inlineKeys = keys.filter((k) => k !== "path");
+
+  // Path-pointer form: `path` + nothing else.
+  if (hasPath) {
+    if (inlineKeys.length > 0) {
+      throw new Error(
+        `Invalid ${filename}: 'cortex_config' is both a 'path' pointer and inline (${inlineKeys.join(", ")}) — choose one form, not both.`,
+      );
+    }
+    const p = cc.path;
+    if (typeof p !== "string" || p.length === 0) {
+      throw new Error(
+        `Invalid ${filename}: 'cortex_config.path' must be a non-empty relative path to a YAML fragment file.`,
+      );
+    }
+    if (p.startsWith("/")) {
+      throw new Error(
+        `Invalid ${filename}: 'cortex_config.path' '${p}' must be a relative path (no leading /).`,
+      );
+    }
+    if (p.split("/").includes("..")) {
+      throw new Error(
+        `Invalid ${filename}: 'cortex_config.path' '${p}' must not contain '..'.`,
+      );
+    }
+    return;
+  }
+
+  // Inline form: only capabilities/policy, at least one present.
+  const unknownKeys = inlineKeys.filter((k) => !CORTEX_CONFIG_INLINE_KEYS.has(k));
+  if (unknownKeys.length > 0) {
+    throw new Error(
+      `Invalid ${filename}: 'cortex_config' may only declare 'capabilities' and/or 'policy' (or a 'path' pointer); got unexpected key(s): ${unknownKeys.join(", ")}. ` +
+        `A package may not declare transport/identity config (agents, principal, nats, …) — that is the stack's, not the package's.`,
+    );
+  }
+  if (inlineKeys.length === 0) {
+    throw new Error(
+      `Invalid ${filename}: 'cortex_config' inline form must declare at least one of 'capabilities:' or 'policy:'.`,
+    );
+  }
+  if ("capabilities" in cc && !Array.isArray(cc.capabilities)) {
+    throw new Error(
+      `Invalid ${filename}: 'cortex_config.capabilities' must be an array of capability declarations.`,
+    );
+  }
+  if ("policy" in cc && !isRecord(cc.policy)) {
+    throw new Error(
+      `Invalid ${filename}: 'cortex_config.policy' must be an object with 'principals'/'roles' arrays.`,
+    );
   }
 }
 

@@ -495,6 +495,55 @@ export interface ArcManifest {
    * one place.
    */
   category?: string;
+  /**
+   * Cortex-side config fragment to merge into the target stack at install
+   * time (F-6a, cortex#858). When present AND the install target host is a
+   * cortex stack, arc invokes `cortex config merge --fragment <…> --config
+   * <stack-config-dir>` after the post-landing transaction, so the package's
+   * declared capabilities/policy land in the stack's `stacks/<id>.yaml`
+   * without the operator hand-editing it.
+   *
+   * This is the package's CORTEX capability/policy declaration — distinct from
+   * `capabilities`, which is arc's OWN host-side capability enforcement (what
+   * the package may read/write/network/shell on the local machine). A fragment
+   * carries ONLY `capabilities` and/or `policy`; arc rejects any other
+   * top-level key (`agents`, `principal`, `nats`, …) at manifest-read time so a
+   * package can't smuggle a transport/identity change in through the merge
+   * path. cortex's `CapabilityMergeFragmentSchema` is the authoritative
+   * validator — arc's check is a structural pre-filter at the manifest edge.
+   *
+   * Either an inline fragment object, or a `{ path: <relative-file> }` pointer
+   * to a YAML fragment file shipped inside the package.
+   */
+  cortex_config?: CortexConfigFragment;
+}
+
+/**
+ * A cortex config fragment declared in arc-manifest.yaml (F-6a / cortex#858).
+ *
+ * Two forms:
+ *   - Inline: `{ capabilities?: [...], policy?: {...} }` — the fragment body
+ *     written verbatim to a temp file and passed to `cortex config merge
+ *     --fragment`.
+ *   - Path pointer: `{ path: "cortex-config.yaml" }` — a relative path (no
+ *     leading `/`, no `..`) to a YAML fragment file shipped in the package;
+ *     arc passes that file straight to `--fragment`.
+ *
+ * The two forms are mutually exclusive: a fragment is EITHER inline OR a path,
+ * never both. cortex owns the deep semantics (id-keyed merge, idempotency,
+ * CortexConfigSchema validation); arc only marshals the fragment to disk and
+ * invokes the verb.
+ */
+export interface CortexConfigFragment {
+  /**
+   * Relative path to a YAML fragment file inside the package. Mutually
+   * exclusive with the inline `capabilities`/`policy` keys.
+   */
+  path?: string;
+  /** Inline cortex capability declarations (id-keyed). */
+  capabilities?: unknown[];
+  /** Inline cortex policy (principals + roles). */
+  policy?: { principals?: unknown[]; roles?: unknown[] } & Record<string, unknown>;
 }
 
 /**
