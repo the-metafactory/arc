@@ -325,6 +325,17 @@ export function marshalFragment(
   if (fragment.capabilities !== undefined) body.capabilities = fragment.capabilities;
   if (fragment.policy !== undefined) body.policy = fragment.policy;
 
+  // Defensive guard (self-review §1): the install path always runs through the
+  // manifest validator, which rejects an empty fragment — but this fn is also
+  // exported and callable directly. An empty inline body would otherwise write
+  // `{}`, which cortex rejects with an opaque exit 1. Fail with an arc-side
+  // message instead.
+  if (Object.keys(body).length === 0) {
+    throw new Error(
+      "cortex_config inline fragment is empty — declare 'capabilities' and/or 'policy', or use a 'path' pointer",
+    );
+  }
+
   const tmpDir = mkdtempSync(join(tmpdir(), "arc-cortex-fragment-"));
   const fragmentFile = join(tmpDir, "fragment.yaml");
   writeFileSync(fragmentFile, YAML.stringify(body, { indent: 2, lineWidth: 0 }), "utf-8");

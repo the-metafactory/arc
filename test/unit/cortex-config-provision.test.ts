@@ -141,6 +141,10 @@ describe("marshalFragment", () => {
   test("path pointer to a missing file throws", () => {
     expect(() => marshalFragment({ path: "nope.yaml" }, root)).toThrow(/does not exist/);
   });
+
+  test("an empty inline fragment throws (defensive — bypasses the manifest validator)", () => {
+    expect(() => marshalFragment({}, root)).toThrow(/is empty/);
+  });
 });
 
 describe("maybeMergeCortexConfig", () => {
