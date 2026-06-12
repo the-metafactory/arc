@@ -43,6 +43,14 @@ afterEach(async () => {
   await env.cleanup();
 });
 
+function commitAll(repoDir: string, message: string): void {
+  Bun.spawnSync(["git", "add", "."], { cwd: repoDir, stdout: "pipe", stderr: "pipe" });
+  Bun.spawnSync(
+    ["git", "-c", "user.name=Test", "-c", "user.email=test@test.com", "commit", "-m", message],
+    { cwd: repoDir, stdout: "pipe", stderr: "pipe" },
+  );
+}
+
 /** A yarrow-shaped bot pack: agent.yaml + persona.md + lifecycle scripts. */
 async function createBotPackRepo(opts: {
   parent: string;
@@ -98,11 +106,7 @@ lifecycle:
 `,
   );
   Bun.spawnSync(["git", "init"], { cwd: repoDir, stdout: "pipe", stderr: "pipe" });
-  Bun.spawnSync(["git", "add", "."], { cwd: repoDir, stdout: "pipe", stderr: "pipe" });
-  Bun.spawnSync(
-    ["git", "-c", "user.name=Test", "-c", "user.email=test@test.com", "commit", "-m", "init"],
-    { cwd: repoDir, stdout: "pipe", stderr: "pipe" },
-  );
+  commitAll(repoDir, "init");
   return { url: repoDir, dir: repoDir };
 }
 
@@ -175,7 +179,7 @@ describe("install: cortex bot pack (agent.yaml shape)", () => {
     expect(existsSync(join(cortexRoot, "personas", "sparse.md"))).toBe(false);
   });
 
-  test("path-traversal id is rejected — falls back to the manifest name, fragment stays inside agents.d", async () => {
+  test("path-traversal id is an install ERROR — nothing lands anywhere", async () => {
     const logPath = join(env.root, "postinstall4.log");
     const repo = await createBotPackRepo({
       parent: env.root,
@@ -183,29 +187,27 @@ describe("install: cortex bot pack (agent.yaml shape)", () => {
       fragmentId: "ignored",
       logPath,
     });
-    // An id that would escape agents.d/ must never be used as a stem.
+    // A PRESENT-but-unsafe id is an install ERROR — silently renaming the
+    // fragment under a fallback stem would install an identity whose id
+    // contradicts its filename (sage round 2). Nothing may land anywhere.
     await writeFile(
       join(repo.dir, "agent.yaml"),
       `id: "../../outside/evil"\ndisplayName: "Escape"\n`,
     );
-    Bun.spawnSync(["git", "add", "."], { cwd: repo.dir, stdout: "pipe", stderr: "pipe" });
-    Bun.spawnSync(
-      ["git", "-c", "user.name=Test", "-c", "user.email=test@test.com", "commit", "-m", "evil id"],
-      { cwd: repo.dir, stdout: "pipe", stderr: "pipe" },
-    );
+    commitAll(repo.dir, "evil id");
 
     const result = await install({
       arc: env.arc, host: env.host, db: env.db,
       repoUrl: repo.url, yes: true,
       hostOverrides: cortexOverrides(),
     });
-    expect(result.success).toBe(true);
-    expect(existsSync(join(cortexRoot, "agents.d", "evil.yaml"))).toBe(true);
+    expect(result.success).toBe(false);
+    expect(existsSync(join(cortexRoot, "agents.d", "evil.yaml"))).toBe(false);
     expect(existsSync(join(env.root, ".config", "outside"))).toBe(false);
     expect(existsSync(join(cortexRoot, "outside"))).toBe(false);
   });
 
-  test("malformed agent.yaml id falls back to the lowercased manifest name", async () => {
+  test("ABSENT agent.yaml id falls back to the lowercased manifest name", async () => {
     const logPath = join(env.root, "postinstall3.log");
     const repo = await createBotPackRepo({
       parent: env.root,
@@ -213,13 +215,10 @@ describe("install: cortex bot pack (agent.yaml shape)", () => {
       fragmentId: "ignored",
       logPath,
     });
-    // Overwrite with a fragment that has no usable id.
+    // Overwrite with a fragment that has no usable id (ABSENT id — the only
+    // case where the manifest-name fallback applies).
     await writeFile(join(repo.dir, "agent.yaml"), `displayName: "No Id Here"\n`);
-    Bun.spawnSync(["git", "add", "."], { cwd: repo.dir, stdout: "pipe", stderr: "pipe" });
-    Bun.spawnSync(
-      ["git", "-c", "user.name=Test", "-c", "user.email=test@test.com", "commit", "-m", "no id"],
-      { cwd: repo.dir, stdout: "pipe", stderr: "pipe" },
-    );
+    commitAll(repo.dir, "no id");
 
     const result = await install({
       arc: env.arc, host: env.host, db: env.db,
