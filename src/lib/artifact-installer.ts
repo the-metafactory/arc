@@ -494,11 +494,13 @@ export function toposortArtifacts(artifacts: ArtifactEntry[]): ArtifactEntry[] {
  * not a string, or the YAML is unreadable (cortex's own loader still
  * validates the fragment content after the drop).
  *
- * The §8.1 post-install side effects — `cortex agents reload`, then
- * `cortex creds issue <id>` for daemon brains — are the PACK's
- * `lifecycle.postinstall` scripts, which install() runs after this drop.
- * Drop → reload → creds: the ordering invariant holds without arc
- * hardcoding cortex CLI calls.
+ * Post-install side effects: arc guarantees ONLY that the artifact drop
+ * happens before `lifecycle.postinstall` scripts run, and that those
+ * scripts run in their declared order. The §8.1 sequence (drop fragment →
+ * `cortex agents reload` → `cortex creds issue <id>`) therefore holds IFF
+ * the pack ships those scripts in that order (as yarrow does) — it is a
+ * pack-authored convention arc sequences, not an arc-enforced cortex
+ * side effect. arc itself never invokes cortex CLI calls.
  */
 async function linkCortexBotPackSymlinks(opts: {
   fragmentPath: string;
