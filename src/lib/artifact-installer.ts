@@ -2,10 +2,13 @@ import { join, dirname } from "path";
 import { existsSync } from "fs";
 import { mkdir } from "fs/promises";
 import { homedir } from "os";
+import { readFileSync } from "fs";
+import YAML from "yaml";
 import type {
   ArtifactType,
   ArcManifest,
   ArcPaths,
+  CortexHostPaths,
   HostAdapter,
   LibraryArtifactEntry,
 } from "../types.js";
@@ -193,7 +196,38 @@ export async function createArtifactSymlinks(opts: {
     }
 
     case "agent": {
-      // Agents: symlink the .md file directly into agentsDir for auto-discovery.
+      const botPackFragment = join(installDir, "agent.yaml");
+      if (host.id === "cortex" && existsSync(botPackFragment)) {
+        // Bot pack (cortex docs/design-bot-packs.md §4 +
+        // design-arc-agent-bots.md §6.2): the pack root carries
+        // `agent.yaml` (identity fragment) and `persona.md`. They land as
+        //   agent.yaml  → {agentsDir}/<id>.yaml   (~/.config/cortex/agents.d/)
+        //   persona.md  → {personasDir}/<id>.md   (~/.config/cortex/personas/)
+        // <id> is the fragment's own `id:` field — cortex warns when the
+        // fragment filename stem disagrees with the id, so the file is named
+        // after the id, not the (display-cased) manifest name.
+        //
+        // Shape-gated on `agent.yaml` presence: pre-bot-pack agent repos
+        // (standalone bots whose fragment travels via provides.files, e.g.
+        // the sage shape) keep the legacy path below unchanged.
+        //
+        // The §8.1 post-install side effects — `cortex agents reload`, then
+        // `cortex creds issue <id>` for daemon brains — are the PACK's
+        // `lifecycle.postinstall` scripts, which install() runs after this
+        // drop. Drop → reload → creds: the ordering invariant holds without
+        // arc hardcoding cortex CLI calls.
+        const cortexPaths = host.paths as CortexHostPaths;
+        const agentId = readAgentFragmentId(botPackFragment) ?? manifest.name.toLowerCase();
+        await linkTracked(botPackFragment, join(cortexPaths.agentsDir, `${agentId}.yaml`));
+        const personaPath = join(installDir, "persona.md");
+        if (existsSync(personaPath)) {
+          await linkTracked(personaPath, join(cortexPaths.personasDir, `${agentId}.md`));
+        }
+        break;
+      }
+
+      // Other hosts (claude-code) and legacy agent repos: symlink the .md
+      // file directly into agentsDir for auto-discovery.
       const agentsDir = requireHostDir(host, "agent");
       const agentSourceDir = join(installDir, "agent");
       const sourceDir = existsSync(agentSourceDir) ? agentSourceDir : installDir;
@@ -455,4 +489,27 @@ export function toposortArtifacts(artifacts: ArtifactEntry[]): ArtifactEntry[] {
   }
 
   return ordered;
+}
+
+/**
+ * Read the `id:` field from a cortex agent identity fragment (`agent.yaml`).
+ * Returns `undefined` when the file is unreadable, not a YAML map, or has no
+ * string `id` — the caller falls back to the lowercased manifest name. The
+ * fragment is the authority on its id because cortex warns when the
+ * `agents.d/` filename stem disagrees with the fragment's `id:`.
+ */
+export function readAgentFragmentId(fragmentPath: string): string | undefined {
+  try {
+    const raw = YAML.parse(readFileSync(fragmentPath, "utf-8")) as unknown;
+    if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+    const id = (raw as Record<string, unknown>).id;
+    return typeof id === "string" && id.trim().length > 0 ? id.trim() : undefined;
+  } catch (err) {
+    // Fall back to the manifest-name stem; the fragment will still fail
+    // loudly in cortex's own loader if it is genuinely malformed.
+    console.warn(
+      `arc: could not read agent fragment id from ${fragmentPath}: ${errorMessage(err)}`,
+    );
+    return undefined;
+  }
 }
