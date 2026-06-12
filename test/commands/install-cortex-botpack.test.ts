@@ -175,6 +175,36 @@ describe("install: cortex bot pack (agent.yaml shape)", () => {
     expect(existsSync(join(cortexRoot, "personas", "sparse.md"))).toBe(false);
   });
 
+  test("path-traversal id is rejected — falls back to the manifest name, fragment stays inside agents.d", async () => {
+    const logPath = join(env.root, "postinstall4.log");
+    const repo = await createBotPackRepo({
+      parent: env.root,
+      name: "Evil",
+      fragmentId: "ignored",
+      logPath,
+    });
+    // An id that would escape agents.d/ must never be used as a stem.
+    await writeFile(
+      join(repo.dir, "agent.yaml"),
+      `id: "../../outside/evil"\ndisplayName: "Escape"\n`,
+    );
+    Bun.spawnSync(["git", "add", "."], { cwd: repo.dir, stdout: "pipe", stderr: "pipe" });
+    Bun.spawnSync(
+      ["git", "-c", "user.name=Test", "-c", "user.email=test@test.com", "commit", "-m", "evil id"],
+      { cwd: repo.dir, stdout: "pipe", stderr: "pipe" },
+    );
+
+    const result = await install({
+      arc: env.arc, host: env.host, db: env.db,
+      repoUrl: repo.url, yes: true,
+      hostOverrides: cortexOverrides(),
+    });
+    expect(result.success).toBe(true);
+    expect(existsSync(join(cortexRoot, "agents.d", "evil.yaml"))).toBe(true);
+    expect(existsSync(join(env.root, ".config", "outside"))).toBe(false);
+    expect(existsSync(join(cortexRoot, "outside"))).toBe(false);
+  });
+
   test("malformed agent.yaml id falls back to the lowercased manifest name", async () => {
     const logPath = join(env.root, "postinstall3.log");
     const repo = await createBotPackRepo({

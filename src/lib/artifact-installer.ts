@@ -217,7 +217,16 @@ export async function createArtifactSymlinks(opts: {
         // drop. Drop → reload → creds: the ordering invariant holds without
         // arc hardcoding cortex CLI calls.
         const cortexPaths = host.paths as CortexHostPaths;
-        const agentId = readAgentFragmentId(botPackFragment) ?? manifest.name.toLowerCase();
+        const agentId =
+          readAgentFragmentId(botPackFragment) ??
+          sanitizeAgentId(manifest.name.toLowerCase());
+        if (agentId === undefined) {
+          throw new Error(
+            `agent pack "${manifest.name}": neither the agent.yaml id nor the ` +
+              `manifest name is a safe filename stem (lowercase alphanumerics ` +
+              `plus . _ -, no path separators) — refusing to drop the fragment`,
+          );
+        }
         await linkTracked(botPackFragment, join(cortexPaths.agentsDir, `${agentId}.yaml`));
         const personaPath = join(installDir, "persona.md");
         if (existsSync(personaPath)) {
@@ -503,7 +512,7 @@ export function readAgentFragmentId(fragmentPath: string): string | undefined {
     const raw = YAML.parse(readFileSync(fragmentPath, "utf-8")) as unknown;
     if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return undefined;
     const id = (raw as Record<string, unknown>).id;
-    return typeof id === "string" && id.trim().length > 0 ? id.trim() : undefined;
+    return typeof id === "string" ? sanitizeAgentId(id.trim()) : undefined;
   } catch (err) {
     // Fall back to the manifest-name stem; the fragment will still fail
     // loudly in cortex's own loader if it is genuinely malformed.
@@ -512,4 +521,20 @@ export function readAgentFragmentId(fragmentPath: string): string | undefined {
     );
     return undefined;
   }
+}
+
+/**
+ * An agent id is used as a FILENAME STEM under agents.d/ and personas/ — it
+ * must not be able to escape those directories (sage arc#238 round 1
+ * blocker: an id containing `/` or `..` would symlink outside agents.d).
+ * Accepts cortex-conventional ids only: lowercase-insensitive alphanumerics
+ * plus `.`, `_`, `-`, starting alphanumeric, and no `..` sequence anywhere.
+ * Returns `undefined` for anything else so the caller can fall back or
+ * refuse loudly.
+ */
+export function sanitizeAgentId(id: string): string | undefined {
+  if (id.length === 0 || id.length > 128) return undefined;
+  if (!/^[a-z0-9][a-z0-9._-]*$/i.test(id)) return undefined;
+  if (id.includes("..")) return undefined;
+  return id;
 }
