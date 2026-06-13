@@ -188,9 +188,11 @@ function buildShimContent(
   // soma#315: export the caller's working directory before the `cd` into
   // the bin dir. The `cd` overwrites both the process cwd and $PWD, so a
   // wrapped CLI cannot otherwise recover where the user invoked it from.
-  // `${ARC_INVOCATION_CWD:-$PWD}` keeps an outer value when one arc CLI
-  // shells out to another.
-  return `#!/bin/bash\nexport ARC_INVOCATION_CWD="\${ARC_INVOCATION_CWD:-$PWD}"\ncd "${binPath}" && ${invoke} "$@"\n`;
+  // Capture via the `pwd` builtin rather than the inherited `$PWD` env
+  // var: `pwd` validates against the real current directory and recomputes
+  // if `$PWD` is stale or forged. `${ARC_INVOCATION_CWD:-…}` keeps an outer
+  // value when one arc CLI shells out to another.
+  return `#!/bin/bash\nexport ARC_INVOCATION_CWD="\${ARC_INVOCATION_CWD:-$(pwd)}"\ncd "${binPath}" && ${invoke} "$@"\n`;
 }
 
 /**

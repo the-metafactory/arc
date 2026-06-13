@@ -154,7 +154,7 @@ describe("createCliShim", () => {
     // (e.g. `soma export --out ./preview`) against the user's shell dir
     // instead of the repo root. `${VAR:-$PWD}` keeps an outer value when
     // one arc CLI shells out to another.
-    expect(content).toContain('export ARC_INVOCATION_CWD="${ARC_INVOCATION_CWD:-$PWD}"');
+    expect(content).toContain('export ARC_INVOCATION_CWD="${ARC_INVOCATION_CWD:-$(pwd)}"');
     expect(content.indexOf("ARC_INVOCATION_CWD")).toBeLessThan(content.indexOf('cd "'));
   });
 
