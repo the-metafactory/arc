@@ -148,6 +148,15 @@ describe("createCliShim", () => {
     expect(content.startsWith("#!/bin/bash")).toBe(true);
     expect(content).toContain(`cd "${join(binDir, "soma")}"`);
     expect(content).toContain('exec bun run src/cli.ts "$@"');
+
+    // soma#315: capture the caller's working directory before the `cd`
+    // into the bin dir, so wrapped CLIs can resolve relative path args
+    // (e.g. `soma export --out ./preview`) against the user's shell dir
+    // instead of the repo root. The value is captured with `pwd` command
+    // substitution; `${VAR:-$(pwd)}` keeps an outer value when one arc CLI
+    // shells out to another.
+    expect(content).toContain('export ARC_INVOCATION_CWD="${ARC_INVOCATION_CWD:-$(pwd)}"');
+    expect(content.indexOf("ARC_INVOCATION_CWD")).toBeLessThan(content.indexOf('cd "'));
   });
 
   test("Windows: writes a .cmd launcher, not a bash shim", async () => {
@@ -174,6 +183,12 @@ describe("createCliShim", () => {
     expect(content).toContain(`cd /d "${join(binDir, "soma")}"`);
     expect(content).toContain("bun run src/cli.ts %*");
     expect(content).not.toContain("#!/bin/bash");
+
+    // soma#315: capture the caller's cwd before `cd /d`, mirroring the
+    // POSIX shim. `if not defined` preserves an outer value across nested
+    // arc CLI invocations.
+    expect(content).toContain('if not defined ARC_INVOCATION_CWD set "ARC_INVOCATION_CWD=%CD%"');
+    expect(content.indexOf("ARC_INVOCATION_CWD")).toBeLessThan(content.indexOf("cd /d"));
   });
 
   test("non-bun command: invoked relative to the bin dir on both platforms", async () => {
