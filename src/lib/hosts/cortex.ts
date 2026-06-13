@@ -26,9 +26,12 @@ import type {
  * without `cortex.yaml` yet can run `cortex init` to materialize the file.
  *
  * See cortex `docs/design-arc-agent-bots.md` §6.2 for the full design
- * rationale and the post-install side effects (`cortex agents reload`,
- * `cortex creds issue`) that land in a follow-up once arc exposes per-adapter
- * install hooks.
+ * rationale. Bot packs (an `agent.yaml` at the pack root) are dropped by
+ * `artifact-installer.ts` as `agents.d/<id>.yaml` + `personas/<id>.md`; the
+ * §8.1 post-install side effects (`cortex agents reload`, then
+ * `cortex creds issue <id>`) ride the PACK's `lifecycle.postinstall` scripts,
+ * which install() runs after the drop — arc never hardcodes cortex CLI calls
+ * (cortex#1021 W-4).
  */
 
 export interface CortexHostOptions {

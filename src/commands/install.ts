@@ -1042,16 +1042,25 @@ async function installPerTarget(opts: {
       };
     }
 
-    // registry hosts (cortex, claude-code) take the existing symlink path
-    const r = await createArtifactSymlinks({
-      type: opts.manifest.type,
-      manifest: opts.manifest,
-      arc: opts.arc,
-      host: targetHost,
-      installDir: opts.installPath,
-      consumerDir: opts.consumerDir,
-      quiet: opts.quiet,
-    });
+    // registry hosts (cortex, claude-code) take the existing symlink path.
+    // A THROW from the artifact drop (e.g. a bot pack refusing an unsafe
+    // fragment id) must roll back the targets already installed and surface
+    // as a normal install error, not an uncaught exception.
+    let r: Awaited<ReturnType<typeof createArtifactSymlinks>>;
+    try {
+      r = await createArtifactSymlinks({
+        type: opts.manifest.type,
+        manifest: opts.manifest,
+        arc: opts.arc,
+        host: targetHost,
+        installDir: opts.installPath,
+        consumerDir: opts.consumerDir,
+        quiet: opts.quiet,
+      });
+    } catch (err) {
+      await rollbackAll();
+      return { error: `[${targetId}] ${errorMessage(err)}` };
+    }
     if (r.filesMissingSource.length) {
       const detail = r.filesMissingSource
         .map((f) => `  - ${f.source} -> ${f.target}`)
