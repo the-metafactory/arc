@@ -175,13 +175,22 @@ function buildShimContent(
     const invoke = isBunCommand
       ? `bun run ${info.scriptPath}`
       : `.\\${info.command}`;
-    return `@echo off\r\nsetlocal\r\ncd /d "${binPath}" || exit /b 1\r\n${invoke} %*\r\n`;
+    // soma#315: capture the caller's cwd before `cd /d` so wrapped CLIs
+    // can resolve relative path args against the user's shell dir, not
+    // the bin dir. `if not defined` preserves an outer value across
+    // nested arc CLI invocations.
+    return `@echo off\r\nsetlocal\r\nif not defined ARC_INVOCATION_CWD set "ARC_INVOCATION_CWD=%CD%"\r\ncd /d "${binPath}" || exit /b 1\r\n${invoke} %*\r\n`;
   }
 
   const invoke = isBunCommand
     ? `exec bun run ${info.scriptPath}`
     : `exec ./${info.command}`;
-  return `#!/bin/bash\ncd "${binPath}" && ${invoke} "$@"\n`;
+  // soma#315: export the caller's working directory before the `cd` into
+  // the bin dir. The `cd` overwrites both the process cwd and $PWD, so a
+  // wrapped CLI cannot otherwise recover where the user invoked it from.
+  // `${ARC_INVOCATION_CWD:-$PWD}` keeps an outer value when one arc CLI
+  // shells out to another.
+  return `#!/bin/bash\nexport ARC_INVOCATION_CWD="\${ARC_INVOCATION_CWD:-$PWD}"\ncd "${binPath}" && ${invoke} "$@"\n`;
 }
 
 /**
