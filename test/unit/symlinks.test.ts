@@ -152,9 +152,9 @@ describe("createCliShim", () => {
     // soma#315: capture the caller's working directory before the `cd`
     // into the bin dir, so wrapped CLIs can resolve relative path args
     // (e.g. `soma export --out ./preview`) against the user's shell dir
-    // instead of the repo root. Captured via the `pwd` builtin (not the
-    // inherited `$PWD`, which can be stale/forged); `${VAR:-$(pwd)}` keeps
-    // an outer value when one arc CLI shells out to another.
+    // instead of the repo root. Captured via `pwd` rather than echoing the
+    // inherited `$PWD`; `${VAR:-$(pwd)}` keeps an outer value when one arc
+    // CLI shells out to another.
     expect(content).toContain('export ARC_INVOCATION_CWD="${ARC_INVOCATION_CWD:-$(pwd)}"');
     expect(content.indexOf("ARC_INVOCATION_CWD")).toBeLessThan(content.indexOf('cd "'));
   });
