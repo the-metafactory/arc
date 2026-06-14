@@ -410,6 +410,102 @@ describe("formatCapabilities", () => {
   });
 });
 
+// Issue #240 / SF-003 — fail-secure on missing capabilities for require-types.
+// readManifest enforces capabilities-required at parse time (#87) for
+// skill/tool/prompt/pipeline/action, but assessRisk + formatCapabilities are
+// defense-in-depth: a manifest constructed in code or via a future validation-
+// skip path should not silently fail-trust. Exempt types stay exempt
+// (agent uses guardrails; component/rules/library have no executable surface).
+describe("assessRisk — fail-secure on missing capabilities (#240)", () => {
+  const noCaps = (type: ArcManifest["type"]): ArcManifest => ({
+    name: "Test",
+    version: "1.0.0",
+    type,
+    author: { name: "test", github: "test" },
+    // capabilities deliberately undefined
+  });
+
+  test("require-type skill without capabilities → high", () => {
+    expect(assessRisk(noCaps("skill"))).toBe("high");
+  });
+
+  test("require-type tool without capabilities → high", () => {
+    expect(assessRisk(noCaps("tool"))).toBe("high");
+  });
+
+  test("require-type prompt without capabilities → high", () => {
+    expect(assessRisk(noCaps("prompt"))).toBe("high");
+  });
+
+  test("require-type pipeline without capabilities → high", () => {
+    expect(assessRisk(noCaps("pipeline"))).toBe("high");
+  });
+
+  test("require-type action without capabilities → high", () => {
+    expect(assessRisk(noCaps("action"))).toBe("high");
+  });
+
+  test("exempt type agent without capabilities → low (uses guardrails)", () => {
+    expect(assessRisk(noCaps("agent"))).toBe("low");
+  });
+
+  test("exempt type component without capabilities → low (declarative)", () => {
+    expect(assessRisk(noCaps("component"))).toBe("low");
+  });
+
+  test("exempt type rules without capabilities → low (declarative)", () => {
+    expect(assessRisk(noCaps("rules"))).toBe("low");
+  });
+
+  test("exempt type library without capabilities → low (validated separately)", () => {
+    expect(assessRisk(noCaps("library"))).toBe("low");
+  });
+});
+
+describe("formatCapabilities — visible signal on missing capabilities (#240)", () => {
+  const noCaps = (type: ArcManifest["type"]): ArcManifest => ({
+    name: "Test",
+    version: "1.0.0",
+    type,
+    author: { name: "test", github: "test" },
+  });
+
+  test("require-type skill without capabilities → red-flag line", () => {
+    const lines = formatCapabilities(noCaps("skill"));
+    expect(lines.length).toBe(1);
+    expect(lines[0]).toContain("🔴 NO CAPABILITY DECLARATION");
+    expect(lines[0]).toContain("full env exposed");
+  });
+
+  test("require-type tool without capabilities → red-flag line", () => {
+    const lines = formatCapabilities(noCaps("tool"));
+    expect(lines.length).toBe(1);
+    expect(lines[0]).toContain("🔴 NO CAPABILITY DECLARATION");
+  });
+
+  test("require-type pipeline without capabilities → red-flag line", () => {
+    const lines = formatCapabilities(noCaps("pipeline"));
+    expect(lines.length).toBe(1);
+    expect(lines[0]).toContain("🔴 NO CAPABILITY DECLARATION");
+  });
+
+  test("exempt type agent without capabilities → silent (empty array)", () => {
+    expect(formatCapabilities(noCaps("agent"))).toEqual([]);
+  });
+
+  test("exempt type component without capabilities → silent (empty array)", () => {
+    expect(formatCapabilities(noCaps("component"))).toEqual([]);
+  });
+
+  test("exempt type rules without capabilities → silent (empty array)", () => {
+    expect(formatCapabilities(noCaps("rules"))).toEqual([]);
+  });
+
+  test("exempt type library without capabilities → silent (empty array)", () => {
+    expect(formatCapabilities(noCaps("library"))).toEqual([]);
+  });
+});
+
 // Regression tests for https://github.com/the-metafactory/arc/issues/79
 describe("normalizeNetworkEntry", () => {
   test("string shorthand becomes object with empty reason", () => {

@@ -633,12 +633,41 @@ export async function readLibraryArtifacts(
 }
 
 /**
+ * Artifact types that REQUIRE a capabilities declaration to install.
+ * Mirrors readManifest's parse-time enforcement (added in #87).
+ * Exempt:
+ *   - agent      — declares authority via `guardrails`, not `capabilities`
+ *   - component  — declarative content, no executable surface
+ *   - rules      — declarative content, no executable surface
+ *   - library    — validated separately by validateLibraryManifest
+ */
+const REQUIRES_CAPABILITIES: ReadonlySet<string> = new Set([
+  "skill",
+  "tool",
+  "prompt",
+  "pipeline",
+  "action",
+]);
+
+/**
  * Calculate risk level from capabilities.
- * - high: network + filesystem write, or secrets with network
+ * - high: network + filesystem write, or secrets with network, OR
+ *         a require-type manifest with no capabilities declared (defense-in-depth
+ *         against bypassing readManifest's parse-time validation)
  * - medium: network access, or secrets, or unrestricted bash
- * - low: filesystem only, or restricted bash
+ * - low: filesystem only, or restricted bash, or a legitimately exempt type
  */
 export function assessRisk(manifest: ArcManifest): RiskLevel {
+  // Defense-in-depth: readManifest rejects require-type manifests with no
+  // capabilities at parse time (#87), but assessRisk should not silently
+  // fail-trust if a manifest ever reaches it in that state (constructed in
+  // code, future validation skip, etc.). Exempt types fall through.
+  if (
+    !manifest.capabilities &&
+    REQUIRES_CAPABILITIES.has(manifest.type)
+  ) {
+    return "high";
+  }
   const caps = manifest.capabilities ?? {};
   if (!manifest.capabilities) return "low";
   const hasNetwork = (caps.network?.length ?? 0) > 0;
@@ -661,11 +690,24 @@ export function assessRisk(manifest: ArcManifest): RiskLevel {
 
 /**
  * Format capabilities for display with risk coloring.
+ *
+ * For require-type manifests with no capabilities, surfaces an explicit
+ * red-flag line so the operator sees the gap instead of an empty list
+ * visually identical to a real zero-capability declaration. Silent for
+ * legitimately exempt types (agent uses guardrails; component/rules/library
+ * have no executable surface).
  */
 export function formatCapabilities(manifest: ArcManifest): string[] {
   const lines: string[] = [];
-  const caps = manifest.capabilities ?? {};
-  if (!manifest.capabilities) return lines;
+  if (!manifest.capabilities) {
+    if (REQUIRES_CAPABILITIES.has(manifest.type)) {
+      lines.push(
+        "  🔴 NO CAPABILITY DECLARATION — install scripts can do anything (full env exposed)",
+      );
+    }
+    return lines;
+  }
+  const caps = manifest.capabilities;
 
   if (caps.filesystem?.read?.length) {
     for (const p of caps.filesystem.read) {
