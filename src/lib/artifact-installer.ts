@@ -17,11 +17,13 @@ import {
   createSymlink,
   createCliShim,
   extractAllCliInfo,
+  isValidSymlink,
   removeSymlink,
   removeCliShim,
 } from "./symlinks.js";
 import { generateRules } from "./rules.js";
 import { requireHostDir } from "./hosts/dispatch.js";
+import { resolveHost, type HostOverrides } from "./hosts/registry.js";
 
 /**
  * Maps an artifact type to its conventional source subdirectory within a cloned repo.
@@ -77,6 +79,336 @@ export interface ArtifactSymlinkRecord {
   shims: { dir: string; names: string[] };
 }
 
+/** Common option shape shared by the planner and the apply step. */
+export interface ArtifactSymlinkOpts {
+  type: ArtifactType | "rules" | "system";
+  manifest: ArcManifest;
+  arc: ArcPaths;
+  /** Target host adapter. Defaults to Claude-Code in the caller. */
+  host: HostAdapter;
+  installDir: string;
+  consumerDir?: string;
+  quiet?: boolean;
+}
+
+/** A single symlink the install will create: `source` linked at `target`. */
+export interface PlannedSymlink {
+  source: string;
+  target: string;
+}
+
+/**
+ * The pure, write-free PLAN of what createArtifactSymlinks would drop for a
+ * given artifact + host. Extracted (arc#248) so the install-time path
+ * computation lives in ONE place. Two callers consume it:
+ *   - createArtifactSymlinks (the APPLY step) turns the plan into real symlinks
+ *     + shims (and runs the `rules` template-generation side effect, which has
+ *     no symlink target and is invisible to the plan).
+ *   - artifactDropPresent (the VERIFY step) checks each planned target actually
+ *     exists on disk, so the DB-active skip-guard can be gated on
+ *     filesystem-truth instead of blindly trusting the DB row.
+ *
+ * Re-deriving (vs. persisting) mirrors `arc verify` (src/commands/verify.ts),
+ * which re-computes the expected skill symlink path rather than reading a
+ * symlinks column the DB does not have.
+ *
+ * NOTE: planning READS the disk (to pick a source dir, detect the cortex
+ * bot-pack agent.yaml shape, read the fragment id) but never WRITES. The reads
+ * are the same branch decisions the apply step makes, so the two stay in
+ * lock-step (the planner-parity test enforces target-set equality).
+ */
+export interface ArtifactSymlinkPlan {
+  /** Symlink targets: primary per-type links + provides.files links. */
+  symlinkTargets: PlannedSymlink[];
+  /** Logical CLI shim names that will be written into `arc.shimDir`. */
+  shimNames: string[];
+  /**
+   * provides.files entries whose source is MISSING in the package. When
+   * non-empty the apply step aborts before mutating the filesystem (#84/#89).
+   */
+  filesMissingSource: PlannedSymlink[];
+}
+
+/**
+ * Compute -- WITHOUT touching the filesystem -- every symlink + shim a
+ * createArtifactSymlinks call would create for `opts`. Single source of truth
+ * for the per-type install path logic; never writes.
+ */
+export function planArtifactSymlinks(opts: ArtifactSymlinkOpts): ArtifactSymlinkPlan {
+  const { type, manifest, arc, host, installDir } = opts;
+  const symlinkTargets: PlannedSymlink[] = [];
+  const shimNames: string[] = [];
+
+  // Pre-validation pass (#89): assert every provides.files source exists in
+  // the package. The apply step bails here with zero filesystem mutation.
+  const declaredFiles = manifest.provides?.files ?? [];
+  const filesMissingSource: PlannedSymlink[] = [];
+  for (const file of declaredFiles) {
+    const sourcePath = join(installDir, file.source);
+    if (!existsSync(sourcePath)) {
+      filesMissingSource.push({
+        source: sourcePath,
+        target: file.target.replace(/^~/, homedir()),
+      });
+    }
+  }
+  if (filesMissingSource.length) {
+    return { symlinkTargets: [], shimNames: [], filesMissingSource };
+  }
+
+  const shimNamesFor = (): string[] => extractAllCliInfo(manifest).map((e) => e.binName);
+
+  switch (type) {
+    case "action": {
+      symlinkTargets.push({ source: installDir, target: join(arc.actionsDir, manifest.name) });
+      break;
+    }
+
+    case "rules": {
+      // Rules packages produce no symlink target -- they generate templates
+      // into the consumer repo (done only in the apply step). Nothing to plan.
+      break;
+    }
+
+    case "pipeline": {
+      const pipelineSourceDir = join(installDir, "pipeline");
+      const sourceDir = existsSync(pipelineSourceDir) ? pipelineSourceDir : installDir;
+      symlinkTargets.push({ source: sourceDir, target: join(arc.pipelinesDir, manifest.name) });
+
+      const cliEntries = extractAllCliInfo(manifest);
+      for (const entry of cliEntries) {
+        symlinkTargets.push({ source: installDir, target: join(host.paths.binDir, entry.binName) });
+      }
+      if (cliEntries.length) {
+        shimNames.push(...shimNamesFor());
+      }
+      break;
+    }
+
+    case "component": {
+      // No per-type primary layout -- provides.files only (handled below).
+      break;
+    }
+
+    case "tool": {
+      const binDir = requireHostDir(host, "tool");
+      const cliEntries = extractAllCliInfo(manifest);
+      for (const entry of cliEntries) {
+        symlinkTargets.push({ source: installDir, target: join(binDir, entry.binName) });
+      }
+      if (!cliEntries.length) {
+        symlinkTargets.push({ source: installDir, target: join(binDir, manifest.name) });
+      }
+      shimNames.push(...shimNamesFor());
+      break;
+    }
+
+    case "agent": {
+      const botPackFragment = join(installDir, "agent.yaml");
+      // Bot-pack branch needs BOTH a cortex host target AND the agent.yaml
+      // shape at the pack root (cortex is today the only host with a
+      // fragment/persona contract). Otherwise fall through to the legacy .md.
+      if (host.id === "cortex" && existsSync(botPackFragment)) {
+        const cortexPaths = host.paths as CortexHostPaths;
+        const agentId = resolveBotPackAgentId(botPackFragment, manifest.name);
+        symlinkTargets.push({
+          source: botPackFragment,
+          target: join(cortexPaths.agentsDir, `${agentId}.yaml`),
+        });
+        const personaPath = join(installDir, "persona.md");
+        if (existsSync(personaPath)) {
+          symlinkTargets.push({
+            source: personaPath,
+            target: join(cortexPaths.personasDir, `${agentId}.md`),
+          });
+        }
+        break;
+      }
+
+      const agentsDir = requireHostDir(host, "agent");
+      const agentSourceDir = join(installDir, "agent");
+      const sourceDir = existsSync(agentSourceDir) ? agentSourceDir : installDir;
+      const mdFile = `${manifest.name}.md`;
+      const sourcePath = join(sourceDir, mdFile);
+      if (existsSync(sourcePath)) {
+        symlinkTargets.push({ source: sourcePath, target: join(agentsDir, mdFile) });
+      } else {
+        symlinkTargets.push({ source: sourceDir, target: join(agentsDir, manifest.name) });
+      }
+      break;
+    }
+
+    case "prompt": {
+      const promptsDir = requireHostDir(host, "prompt");
+      const promptSourceDir = join(installDir, "prompt");
+      const sourceDir = existsSync(promptSourceDir) ? promptSourceDir : installDir;
+      const mdFile = `${manifest.name}.md`;
+      const sourcePath = join(sourceDir, mdFile);
+      if (existsSync(sourcePath)) {
+        symlinkTargets.push({ source: sourcePath, target: join(promptsDir, mdFile) });
+      } else {
+        symlinkTargets.push({ source: sourceDir, target: join(promptsDir, manifest.name) });
+      }
+      break;
+    }
+
+    case "skill":
+    case "system": {
+      const skillsDir = requireHostDir(host, type);
+      const skillSourceDir = join(installDir, "skill");
+      const sourceDir = existsSync(skillSourceDir) ? skillSourceDir : installDir;
+      symlinkTargets.push({ source: sourceDir, target: join(skillsDir, manifest.name) });
+
+      const cliEntries = extractAllCliInfo(manifest);
+      if (cliEntries.length) {
+        const binDir = requireHostDir(host, "tool", "expose a bin directory for skill CLIs");
+        for (const entry of cliEntries) {
+          symlinkTargets.push({ source: installDir, target: join(binDir, entry.binName) });
+        }
+        shimNames.push(...shimNamesFor());
+      }
+      break;
+    }
+
+    default: {
+      throw new Error(
+        `Unsupported artifact type "${type as string}" in planArtifactSymlinks`,
+      );
+    }
+  }
+
+  // Type-agnostic provides.files pass -- every type honors provides.files (#84).
+  for (const file of declaredFiles) {
+    symlinkTargets.push({
+      source: join(installDir, file.source),
+      target: file.target.replace(/^~/, homedir()),
+    });
+  }
+
+  return { symlinkTargets, shimNames, filesMissingSource: [] };
+}
+
+/**
+ * Resolve the cortex bot-pack agent id (filename stem) from the fragment's
+ * `id:` field, falling back to the manifest name -- IDENTICAL logic to
+ * linkCortexBotPackSymlinks, shared so the planner and the apply step agree on
+ * where the fragment + persona land. Throws on a present-but-unsafe id (sage
+ * arc#238 round 2) so the planner surfaces the same error the apply step would,
+ * rather than silently planning a different target.
+ */
+function resolveBotPackAgentId(fragmentPath: string, manifestName: string): string {
+  const rawId = readRawAgentFragmentId(fragmentPath);
+  if (rawId !== undefined) {
+    const agentId = sanitizeAgentId(rawId);
+    if (agentId === undefined) {
+      throw new Error(
+        `agent pack "${manifestName}": agent.yaml declares an unsafe id "${rawId}" ` +
+          `-- an id is a filename stem under agents.d/ (alphanumeric start, ` +
+          `[a-z0-9._-], no "..", <=128 chars). Refusing to install.`,
+      );
+    }
+    return agentId;
+  }
+  const agentId = sanitizeAgentId(manifestName.toLowerCase());
+  if (agentId === undefined) {
+    throw new Error(
+      `agent pack "${manifestName}": agent.yaml has no usable id and the manifest ` +
+        `name is not a safe filename stem -- refusing to install.`,
+    );
+  }
+  return agentId;
+}
+
+/**
+ * Verify that the host-side DROP for an artifact actually exists on disk
+ * (arc#248). Re-derives the expected targets via planArtifactSymlinks, honoring
+ * `manifest.targets` exactly as installPerTarget does (resolve each declared
+ * HostId through resolveHost), else the single fallback host. Each primary
+ * symlink target is checked with isValidSymlink; each provides.files target
+ * with existsSync (it may be a symlink OR a copied file -- presence is what
+ * matters).
+ *
+ * Returns false if ANY expected target is missing -- the DB row claims the
+ * artifact is installed but the filesystem disagrees, so a skip-on-active guard
+ * must NOT honor the skip (it would be a silent no-op reinstall).
+ *
+ * SCOPE (v1): launchd plist presence for darwin-launchd / linux-systemd targets
+ * is NOT checked -- those targets are skipped here. The failure mode arc#248
+ * documents is the symlink/fragment drop diverging from the DB; the
+ * supervision-host side is a follow-up. The symlink/fragment drops on registry
+ * hosts (cortex, claude-code) are the load-bearing check.
+ *
+ * KNOWN v1 LIMITATION (consequence of the above): a manifest whose `targets`
+ * is ONLY supervision hosts (e.g. `targets: [darwin-launchd]`) resolves to an
+ * EMPTY host list here, so the verify loop runs zero checks and returns
+ * `true` UNCONDITIONALLY -- a wiped plist reads as "present". This is the
+ * narrow false-positive the supervision-host follow-up will close (check plist
+ * presence for those targets). Until then, a launchd-only artifact whose plist
+ * was wiped will still be skipped on reinstall. Registry-host targets (the
+ * arc#248 case) are unaffected.
+ */
+export async function artifactDropPresent(opts: {
+  type: ArtifactType | "rules" | "system";
+  manifest: ArcManifest;
+  arc: ArcPaths;
+  /** Fallback host when the manifest declares no `targets`. */
+  host: HostAdapter;
+  installDir: string;
+  hostOverrides?: HostOverrides;
+}): Promise<boolean> {
+  // `rules` packages drop no host symlink (templates land in the consumer repo
+  // and aren't tracked per-host), so there is nothing to verify -- treat as
+  // present so the skip-guard keeps its prior behavior for rules.
+  if (opts.type === "rules") return true;
+
+  const declaredFileTargets = new Set(
+    (opts.manifest.provides?.files ?? []).map((f) => f.target.replace(/^~/, homedir())),
+  );
+
+  // Resolve the set of hosts the drop lands on -- mirror installPerTarget.
+  const hosts: HostAdapter[] = [];
+  if (opts.manifest.targets && opts.manifest.targets.length > 0) {
+    for (const targetId of opts.manifest.targets) {
+      // launchd/systemd are out of scope for v1 (see doc comment); skip them.
+      if (targetId === "darwin-launchd" || targetId === "linux-systemd") continue;
+      hosts.push(resolveHost(targetId, opts.hostOverrides));
+    }
+  } else {
+    hosts.push(opts.host);
+  }
+
+  for (const targetHost of hosts) {
+    let plan: ArtifactSymlinkPlan;
+    try {
+      plan = planArtifactSymlinks({
+        type: opts.type,
+        manifest: opts.manifest,
+        arc: opts.arc,
+        host: targetHost,
+        installDir: opts.installDir,
+      });
+    } catch {
+      // A throw means the artifact CANNOT have been validly dropped (e.g. an
+      // unsafe bot-pack id) -- so a recorded "active" cannot reflect a real
+      // drop. Treat as not-present so the caller re-runs install, which
+      // surfaces the same error loudly instead of silently skipping.
+      return false;
+    }
+
+    for (const link of plan.symlinkTargets) {
+      if (declaredFileTargets.has(link.target)) {
+        // provides.files: plain file or symlink -- presence is what matters.
+        if (!existsSync(link.target)) return false;
+      } else {
+        // Primary per-type drop: must be a valid (non-dangling) symlink.
+        if (!(await isValidSymlink(link.target))) return false;
+      }
+    }
+  }
+
+  return true;
+}
+
 export async function createArtifactSymlinks(opts: {
   type: ArtifactType | "rules" | "system";
   manifest: ArcManifest;
@@ -94,218 +426,60 @@ export async function createArtifactSymlinks(opts: {
   const { type, manifest, arc, host, installDir, quiet } = opts;
   const record: ArtifactSymlinkRecord = { symlinks: [], shims: { dir: arc.shimDir, names: [] } };
 
-  // Helper that wraps createSymlink + tracks the target for rollback (#89).
-  const linkTracked = async (source: string, target: string) => {
-    await createSymlink(source, target);
-    record.symlinks.push(target);
-  };
-  const shimTracked = async () => {
-    const created = await createCliShim(arc.shimDir, host.paths.binDir, manifest);
-    record.shims.names.push(...created);
-  };
-
-  // Pre-validation pass (#89): assert every provides.files source exists in
-  // the package before we create ANY symlinks. The most common failure mode
-  // (manifest typo, repo drift) is now stopped with zero filesystem mutation,
-  // so install can return cleanly without producing orphan symlinks.
-  const declaredFiles = manifest.provides?.files ?? [];
-  const filesMissingSource: { source: string; target: string }[] = [];
-  for (const file of declaredFiles) {
-    const sourcePath = join(installDir, file.source);
-    if (!existsSync(sourcePath)) {
-      filesMissingSource.push({
-        source: sourcePath,
-        target: file.target.replace(/^~/, homedir()),
-      });
-    }
-  }
-  if (filesMissingSource.length) {
-    return { filesCreated: [], filesMissingSource, record };
+  // Path computation is delegated to planArtifactSymlinks (arc#248) -- the SAME
+  // plan the drop-presence verifier consumes -- so this step only APPLIES the
+  // plan to the filesystem (plus the `rules` template-generation side effect
+  // that has no symlink target).
+  const plan = planArtifactSymlinks(opts);
+  if (plan.filesMissingSource.length) {
+    return { filesCreated: [], filesMissingSource: plan.filesMissingSource, record };
   }
 
-  switch (type) {
-    case "action": {
-      // Actions: symlink action directory into actionsDir
-      const actionLinkPath = join(arc.actionsDir, manifest.name);
-      await linkTracked(installDir, actionLinkPath);
-      break;
-    }
-
-    case "rules": {
-      // Rules packages: run template generation in the consumer repo
-      const templates = manifest.provides?.templates ?? [];
-      if (templates.length) {
-        const consumerDir = opts.consumerDir ?? process.cwd();
-        const results = await generateRules(installDir, templates, consumerDir);
-        if (!quiet) {
-          for (const r of results) {
-            if (r.success && r.target) {
-              console.log(`  Generated ${r.target}`);
-            } else if (!r.success) {
-              console.log(`  \u26A0 ${r.target}: ${r.error}`);
-            }
+  // `rules` is the one type whose apply step has a side effect with no symlink
+  // target (template generation into the consumer repo).
+  if (type === "rules") {
+    const templates = manifest.provides?.templates ?? [];
+    if (templates.length) {
+      const consumerDir = opts.consumerDir ?? process.cwd();
+      const results = await generateRules(installDir, templates, consumerDir);
+      if (!quiet) {
+        for (const r of results) {
+          if (r.success && r.target) {
+            console.log(`  Generated ${r.target}`);
+          } else if (!r.success) {
+            console.log(`  \u26A0 ${r.target}: ${r.error}`);
           }
         }
       }
-      break;
-    }
-
-    case "pipeline": {
-      // Pipelines: symlink repo root (or pipeline/ subdirectory) to pipelinesDir.
-      // pipelinesDir is arc state (host-independent) — pipelines aren't host-installed.
-      const pipelineSourceDir = join(installDir, "pipeline");
-      const sourceDir = existsSync(pipelineSourceDir) ? pipelineSourceDir : installDir;
-      const pipelineLinkPath = join(arc.pipelinesDir, manifest.name);
-      await linkTracked(sourceDir, pipelineLinkPath);
-
-      // If the manifest declares CLI entries, the bin shims still go through
-      // the host (binDir is per-host).
-      const cliEntries = extractAllCliInfo(manifest);
-      for (const entry of cliEntries) {
-        const binLinkPath = join(host.paths.binDir, entry.binName);
-        await linkTracked(installDir, binLinkPath);
-      }
-      if (cliEntries.length) {
-        await shimTracked();
-      }
-      break;
-    }
-
-    case "component": {
-      // Components have no per-type primary layout — provides.files is honored
-      // by the type-agnostic pass below.
-      break;
-    }
-
-    case "tool": {
-      // Tools: symlink repo root to the host's binDir for each CLI entry.
-      const binDir = requireHostDir(host, "tool");
-      const cliEntries = extractAllCliInfo(manifest);
-      for (const entry of cliEntries) {
-        const binLinkPath = join(binDir, entry.binName);
-        await linkTracked(installDir, binLinkPath);
-      }
-      if (!cliEntries.length) {
-        // Fallback: symlink under manifest name if no CLI declared
-        await linkTracked(installDir, join(binDir, manifest.name));
-      }
-
-      // Create PATH-accessible shims for all CLI entries
-      await shimTracked();
-      break;
-    }
-
-    case "agent": {
-      const botPackFragment = join(installDir, "agent.yaml");
-      // Bot-pack branch needs BOTH conditions: a cortex host target AND the
-      // agent.yaml shape at the pack root. On a non-cortex host the same
-      // pack falls through to the legacy .md path (cortex is today the only
-      // host with a fragment/persona contract); a cortex target WITHOUT
-      // agent.yaml is the legacy standalone-bot shape (fragment via
-      // provides.files) and is untouched.
-      if (host.id === "cortex" && existsSync(botPackFragment)) {
-        await linkCortexBotPackSymlinks({
-          fragmentPath: botPackFragment,
-          installDir,
-          manifestName: manifest.name,
-          cortexPaths: host.paths as CortexHostPaths,
-          linkTracked,
-        });
-        break;
-      }
-
-      // Other hosts (claude-code) and legacy agent repos: symlink the .md
-      // file directly into agentsDir for auto-discovery.
-      const agentsDir = requireHostDir(host, "agent");
-      const agentSourceDir = join(installDir, "agent");
-      const sourceDir = existsSync(agentSourceDir) ? agentSourceDir : installDir;
-      const mdFile = `${manifest.name}.md`;
-      const sourcePath = join(sourceDir, mdFile);
-      const linkPath = join(agentsDir, mdFile);
-
-      if (existsSync(sourcePath)) {
-        await linkTracked(sourcePath, linkPath);
-      } else {
-        // Fallback: symlink directory if .md file not found by convention name
-        await linkTracked(sourceDir, join(agentsDir, manifest.name));
-      }
-      break;
-    }
-
-    case "prompt": {
-      // Prompts: symlink the .md file directly into promptsDir for auto-discovery.
-      const promptsDir = requireHostDir(host, "prompt");
-      const promptSourceDir = join(installDir, "prompt");
-      const sourceDir = existsSync(promptSourceDir) ? promptSourceDir : installDir;
-      const mdFile = `${manifest.name}.md`;
-      const sourcePath = join(sourceDir, mdFile);
-      const linkPath = join(promptsDir, mdFile);
-
-      if (existsSync(sourcePath)) {
-        await linkTracked(sourcePath, linkPath);
-      } else {
-        // Fallback: symlink directory if .md file not found by convention name
-        await linkTracked(sourceDir, join(promptsDir, manifest.name));
-      }
-      break;
-    }
-
-    case "skill":
-    case "system": {
-      // Skills: symlink skill/ subdirectory (or root) to the host's skillsDir.
-      const skillsDir = requireHostDir(host, type);
-      const skillSourceDir = join(installDir, "skill");
-      const skillLinkPath = join(skillsDir, manifest.name);
-
-      if (existsSync(skillSourceDir)) {
-        await linkTracked(skillSourceDir, skillLinkPath);
-      } else {
-        await linkTracked(installDir, skillLinkPath);
-      }
-
-      // CLI symlinks + shims only when the skill declares CLI entries.
-      // The binDir lookup must stay inside this guard so a future adapter
-      // that supports skills but exposes no bin directory still installs
-      // pure-content skills cleanly.
-      const cliEntries = extractAllCliInfo(manifest);
-      if (cliEntries.length) {
-        const binDir = requireHostDir(
-          host,
-          "tool",
-          "expose a bin directory for skill CLIs",
-        );
-        for (const entry of cliEntries) {
-          const binLinkPath = join(binDir, entry.binName);
-          await linkTracked(installDir, binLinkPath);
-        }
-        await shimTracked();
-      }
-      break;
-    }
-
-    default: {
-      // Library is unwound at install.ts:181 before reaching this dispatch;
-      // any other value is a programming bug, not a user-facing error.
-      throw new Error(
-        `Unsupported artifact type "${type as string}" in createArtifactSymlinks`,
-      );
     }
   }
 
-  // Type-agnostic provides.files pass.
-  // Every artifact type honors provides.files entries — used to ship auxiliary
-  // files (hook handlers, helpers, shared libs) alongside the primary layout.
-  // Previously only `component` honored this, which silently broke any
-  // multi-artifact package using a different primary type. See issue #84.
-  // The pre-validation pass above guarantees every source exists by the time
-  // we get here, so we can fearlessly create symlinks without partial-state risk.
+  // Apply the plan. provides.files targets may land outside the dirs
+  // ensureDirectories pre-created; createSymlink mkdir's the parent regardless,
+  // but we keep an explicit mkdir for the provides.files subset to preserve
+  // prior behavior and to populate `filesCreated`.
+  const declaredFileTargets = new Set(
+    (manifest.provides?.files ?? []).map((f) => f.target.replace(/^~/, homedir())),
+  );
   const filesCreated: { source: string; target: string }[] = [];
-  for (const file of declaredFiles) {
-    const sourcePath = join(installDir, file.source);
-    const targetPath = file.target.replace(/^~/, homedir());
-    await mkdir(dirname(targetPath), { recursive: true });
-    await linkTracked(sourcePath, targetPath);
-    filesCreated.push({ source: sourcePath, target: targetPath });
+  for (const link of plan.symlinkTargets) {
+    const isProvidesFile = declaredFileTargets.has(link.target);
+    if (isProvidesFile) {
+      await mkdir(dirname(link.target), { recursive: true });
+    }
+    await createSymlink(link.source, link.target);
+    record.symlinks.push(link.target);
+    if (isProvidesFile) {
+      filesCreated.push({ source: link.source, target: link.target });
+    }
+  }
+
+  // Shims: createCliShim derives the SAME names from the manifest the plan did,
+  // so create them once when the plan expects a shim set (mirrors the prior
+  // per-type shim creation).
+  if (plan.shimNames.length) {
+    const created = await createCliShim(arc.shimDir, host.paths.binDir, manifest);
+    record.shims.names.push(...created);
   }
 
   return { filesCreated, filesMissingSource: [], record };
@@ -477,69 +651,6 @@ export function toposortArtifacts(artifacts: ArtifactEntry[]): ArtifactEntry[] {
   }
 
   return ordered;
-}
-
-/**
- * Cortex bot-pack drop (cortex docs/design-bot-packs.md §4 +
- * design-arc-agent-bots.md §6.2):
- *
- *   agent.yaml  → {agentsDir}/<id>.yaml   (~/.config/cortex/agents.d/)
- *   persona.md  → {personasDir}/<id>.md   (~/.config/cortex/personas/)
- *
- * <id> comes from the fragment's own `id:` field (cortex warns when the
- * filename stem disagrees with the id). A PRESENT-but-unsafe id is an
- * install ERROR (sage arc#238 round 2) — silently renaming the file under a
- * fallback stem would install a fragment whose id contradicts its filename
- * authority. The manifest-name fallback applies only when the id is absent,
- * not a string, or the YAML is unreadable (cortex's own loader still
- * validates the fragment content after the drop).
- *
- * Post-install side effects: arc guarantees ONLY that the artifact drop
- * happens before `lifecycle.postinstall` scripts run, and that those
- * scripts run in their declared order. The §8.1 sequence (drop fragment →
- * `cortex agents reload` → `cortex creds issue <id>`) therefore holds IFF
- * the pack ships those scripts in that order (as yarrow does) — it is a
- * pack-authored convention arc sequences, not an arc-enforced cortex
- * side effect. arc itself never invokes cortex CLI calls.
- */
-async function linkCortexBotPackSymlinks(opts: {
-  fragmentPath: string;
-  installDir: string;
-  manifestName: string;
-  cortexPaths: CortexHostPaths;
-  linkTracked: (source: string, target: string) => Promise<void>;
-}): Promise<void> {
-  const rawId = readRawAgentFragmentId(opts.fragmentPath);
-  let agentId: string | undefined;
-  if (rawId !== undefined) {
-    agentId = sanitizeAgentId(rawId);
-    if (agentId === undefined) {
-      throw new Error(
-        `agent pack "${opts.manifestName}": agent.yaml declares an unsafe id ` +
-          `"${rawId}" — an id is a filename stem under agents.d/ (alphanumeric ` +
-          `start, [a-z0-9._-], no "..", ≤128 chars). Refusing to install.`,
-      );
-    }
-  } else {
-    agentId = sanitizeAgentId(opts.manifestName.toLowerCase());
-    if (agentId === undefined) {
-      throw new Error(
-        `agent pack "${opts.manifestName}": agent.yaml has no usable id and ` +
-          `the manifest name is not a safe filename stem — refusing to install.`,
-      );
-    }
-  }
-  await opts.linkTracked(
-    opts.fragmentPath,
-    join(opts.cortexPaths.agentsDir, `${agentId}.yaml`),
-  );
-  const personaPath = join(opts.installDir, "persona.md");
-  if (existsSync(personaPath)) {
-    await opts.linkTracked(
-      personaPath,
-      join(opts.cortexPaths.personasDir, `${agentId}.md`),
-    );
-  }
 }
 
 /**

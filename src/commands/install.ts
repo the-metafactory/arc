@@ -15,6 +15,7 @@ import { getSkill, removeSkill } from "../lib/db.js";
 import { runScript, runLifecycleScripts } from "../lib/scripts.js";
 import {
   type ArtifactSymlinkRecord,
+  artifactDropPresent,
   createArtifactSymlinks,
   rollbackArtifactSymlinks,
   toposortArtifacts,
@@ -351,12 +352,55 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
         continue;
       }
 
-      const existing = db
-        .prepare("SELECT name, status FROM skills WHERE name = ?")
-        .get(dep.name) as { name: string; status: string } | null;
-
+      // arc#248: honor the `active` skip only when the dependency's host DROP
+      // is actually present on disk. The DB can claim a dep is installed while
+      // its symlinks/fragments are gone (a prior run recorded the row but the
+      // drop never landed, or the host dir was wiped) — skipping then is a
+      // silent no-op. Re-derive the expected targets from the dep's recorded
+      // install path + its manifest (the SAME path the install would write);
+      // fall through to (re-)install when the drop is missing.
+      const existing = getSkill(db, dep.name);
       if (existing?.status === "active") {
-        continue; // Already installed
+        // Determine whether the dep's host drop is actually present, and — when
+        // it is NOT — WHY, so the operator notice is accurate (a missing/
+        // unreadable repo clone is a different failure than a wiped host drop).
+        let dropPresent = false;
+        let reason = "host drop missing";
+        if (!existsSync(existing.install_path)) {
+          reason = "repo clone missing";
+        } else {
+          const depManifest = await readManifest(existing.install_path);
+          if (!depManifest) {
+            reason = "manifest unreadable";
+          } else {
+            dropPresent = await artifactDropPresent({
+              type: depManifest.type,
+              manifest: depManifest,
+              arc,
+              host,
+              installDir: existing.install_path,
+              hostOverrides: opts.hostOverrides,
+            });
+          }
+        }
+        if (dropPresent) {
+          continue; // Already installed and the drop is present.
+        }
+        // DB says active but the drop (or its repo clone / manifest) cannot be
+        // confirmed — re-install rather than skip. Surfaced unconditionally so
+        // the operator sees the accurate reason a supposedly-installed dep is
+        // being re-installed.
+        process.stderr.write(
+          `  re-installing dependency ${dep.name}: DB row active but ${reason}\n`,
+        );
+        // Drop the stale row so the recursive install's recordInstall INSERT
+        // doesn't trip the skills.name UNIQUE constraint / the standalone
+        // "already installed" guard. Discarding the row here is intentional and
+        // non-transactional: the precondition is an ALREADY-broken install
+        // (the recorded drop is gone / unverifiable), so the row was already
+        // lying; and the recursive install() below fails loudly if the re-drop
+        // fails, so we never silently leave a WORSE state than we found.
+        removeSkill(db, dep.name);
       }
 
       if (!opts.yes) {
@@ -685,28 +729,65 @@ async function installLibrary(
   for (let i = startIndex; i < orderedArtifacts.length; i++) {
     const { entry, manifest: artifactManifest } = orderedArtifacts[i];
 
+    const artifactInstallPath = join(installPath, entry.path);
+
     // Already installed (from a previous run, a sibling library, or this
     // session's resume): a skip counts as success and is NEVER rolled back —
     // it predates this transaction.
+    //
+    // arc#248: an `active` DB row is only honored when the host-side DROP it
+    // claims is ACTUALLY present on disk. DB-truth and filesystem-truth can
+    // diverge (a prior run recorded the row but the drop never landed, or the
+    // host dir was wiped) — and when they do, a blind skip is a silent no-op
+    // reinstall ("Installed N artifact(s)" while the target dir stays empty).
+    // Re-derive the expected targets (honoring manifest.targets + host
+    // overrides, the SAME path the install would write) and fall through to a
+    // (re-)install when the drop is missing. Idempotent symlink creation makes
+    // the re-drop safe.
     const existing = getSkill(db, artifactManifest.name);
     if (existing?.status === "active") {
-      if (!opts.yes) {
-        console.log(`  ⏩ ${artifactManifest.name} already installed, skipping`);
-      }
-      tx.recordArtifactSkipped(
-        artifactManifest.name,
-        artifactManifest.version,
-        artifactManifest.type,
-      );
-      results.push({
-        success: true,
-        name: artifactManifest.name,
-        version: artifactManifest.version,
+      const dropPresent = await artifactDropPresent({
+        type: artifactManifest.type,
+        manifest: artifactManifest,
+        arc: opts.arc,
+        host: opts.host,
+        installDir: artifactInstallPath,
+        hostOverrides: opts.hostOverrides,
       });
-      continue;
+      if (dropPresent) {
+        if (!opts.yes) {
+          console.log(`  ⏩ ${artifactManifest.name} already installed, skipping`);
+        }
+        tx.recordArtifactSkipped(
+          artifactManifest.name,
+          artifactManifest.version,
+          artifactManifest.type,
+        );
+        results.push({
+          success: true,
+          name: artifactManifest.name,
+          version: artifactManifest.version,
+        });
+        continue;
+      }
+      // DB says active but the drop is missing — re-drop rather than skip.
+      // Always surfaced (even under --yes) so the operator sees why a
+      // supposedly-installed member is being re-installed.
+      process.stderr.write(
+        `  re-dropping ${artifactManifest.name}: DB row active but host drop missing\n`,
+      );
+      // Drop the stale row so the re-install's recordInstall INSERT doesn't hit
+      // the skills.name UNIQUE constraint. The member is then (re-)installed by
+      // the normal path below and recorded as a landed artifact of THIS
+      // transaction (so a later mid-sequence failure rolls it back cleanly).
+      //
+      // Discarding the row here is intentional and non-transactional: the
+      // precondition is an ALREADY-broken drop (artifactDropPresent returned
+      // false), so the row was already lying about the filesystem; and the
+      // re-drop below fails loudly (recorded as an artifact failure → library
+      // rollback) if it cannot land, so we never silently leave a WORSE state.
+      removeSkill(db, artifactManifest.name);
     }
-
-    const artifactInstallPath = join(installPath, entry.path);
 
     // Capture the live sub-transaction so a LATER failure can roll this one
     // back. installSingleArtifact rolls back its OWN partial state on internal
