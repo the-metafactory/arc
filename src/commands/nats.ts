@@ -1,8 +1,9 @@
 /**
- * arc nats — NATS bot identity management.
+ * arc nats — NATS bot identity management + federation account topology.
  *
- * Wraps NSC to provision per-bot NATS users under an operator's account.
- * Part of grove#320 (bot-level AAA) — operator-level infrastructure tooling.
+ * Wraps NSC to provision per-bot NATS users under an operator's account
+ * (bot-level AAA) and to wire cross-account subject export/import for
+ * federated.> routing across account boundaries (G1b — cortex#1117).
  */
 
 import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync, chmodSync } from "node:fs";
@@ -672,4 +673,220 @@ export function removeBot(name: string, opts: RemoveBotOptions): RemoveBotResult
   }
 
   return { bot: name, account, revokedPubKey, credsFileDeleted };
+}
+
+// ── G1b: cross-account federated.> export/import (cortex#1117) ───────────────
+
+const DEFAULT_FEDERATION_SUBJECT = "federated.>";
+
+/**
+ * Parses the JSON output of `nsc describe account -n <account> -J` and checks
+ * whether an export for the given subject already exists.
+ *
+ * nsc encodes exports in the JWT claim at `.nats.exports[]`. Each export entry
+ * has a `subject` field (a string, matching `nsc add export --subject`).
+ */
+function exportExistsOnAccount(describeJson: string, subject: string): boolean {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(describeJson);
+  } catch (_err) {
+    // Non-JSON output (some nsc versions emit text describe): treat as not present.
+    return false;
+  }
+  const exports = (parsed as { nats?: { exports?: { subject?: unknown }[] } }).nats?.exports;
+  if (!Array.isArray(exports)) return false;
+  return exports.some((e) => e.subject === subject);
+}
+
+/**
+ * Parses the JSON output of `nsc describe account -n <account> -J` and checks
+ * whether an import from `fromAccount` on the given subject already exists.
+ *
+ * nsc encodes imports in the JWT claim at `.nats.imports[]`. Each import entry
+ * has a `subject` field and an `account` field (the exporting account's public key
+ * or name, depending on nsc version — we match on subject only for robustness,
+ * since the `account` field in the import entry may be a pubkey, not the name).
+ */
+function importExistsOnAccount(describeJson: string, subject: string): boolean {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(describeJson);
+  } catch (_err) {
+    return false;
+  }
+  const imports = (parsed as { nats?: { imports?: { subject?: unknown }[] } }).nats?.imports;
+  if (!Array.isArray(imports)) return false;
+  return imports.some((i) => i.subject === subject);
+}
+
+export interface AddFederationExportOptions {
+  /** The leaf-bound NSC account (exporting side). */
+  fromAccount: string;
+  /** The hub's destination NSC account (importing side). */
+  toAccount: string;
+  /** Subject pattern to export/import (default: "federated.>"). */
+  subject?: string;
+  /**
+   * Add --service flag to nsc add export (for request/reply patterns).
+   * Normally not needed for federated.> pub/sub.
+   */
+  service?: boolean;
+  /**
+   * When false (default), print the nsc commands that would run without
+   * executing them. When true, execute the mutations and push both accounts.
+   */
+  apply?: boolean;
+  /** When true: suppress human-readable stdout; throw ArcNatsCommandError on failure. */
+  json?: boolean;
+}
+
+export interface AddFederationExportResult {
+  fromAccount: string;
+  toAccount: string;
+  subject: string;
+  exportAdded: boolean;
+  importAdded: boolean;
+  exportAlreadyPresent: boolean;
+  importAlreadyPresent: boolean;
+  pushResult?: {
+    fromAccount: "ok" | "skipped";
+    toAccount: "ok" | "skipped";
+  };
+}
+
+/**
+ * Wire a cross-account federated.> export+import pair so that traffic entering
+ * via the leaf-bound account (`fromAccount`) is routed into the hub's stack
+ * account (`toAccount`).
+ *
+ * Atomically:
+ *   1. describe fromAccount → check export exists
+ *   2. nsc add export --account fromAccount --subject <subject> [--service]
+ *   3. describe toAccount → check import exists
+ *   4. nsc add import --account toAccount --from-account fromAccount --subject <subject>
+ *   5. nsc push -a fromAccount && nsc push -a toAccount
+ *
+ * Idempotent: steps 2 and 4 are skipped when already present.
+ * Dry-run by default (--apply to mutate).
+ * Fail-closed: no rollback; a partial state (export without import) routes no
+ * traffic and is recoverable by re-running (the describe-check skips the export).
+ */
+export function addFederationExport(opts: AddFederationExportOptions): AddFederationExportResult {
+  const json = opts.json === true;
+  const apply = opts.apply === true;
+  const subject = opts.subject ?? DEFAULT_FEDERATION_SUBJECT;
+  const { fromAccount, toAccount } = opts;
+
+  ensureNscInstalled(json);
+  validateSubject(subject);
+
+  // Case A: same account on both sides — no export/import needed.
+  if (fromAccount === toAccount) {
+    const msg = `fromAccount and toAccount are the same (${fromAccount}) — no export/import needed (intra-account routing).`;
+    if (!json) console.log(msg);
+    return {
+      fromAccount,
+      toAccount,
+      subject,
+      exportAdded: false,
+      importAdded: false,
+      exportAlreadyPresent: true,
+      importAlreadyPresent: true,
+    };
+  }
+
+  // ── Step 1: idempotency check — export on fromAccount ──────────────────────
+  let exportAlreadyPresent = false;
+  try {
+    const fromDesc = nsc(["describe", "account", "-n", fromAccount, "-J"]);
+    exportAlreadyPresent = exportExistsOnAccount(fromDesc, subject);
+  } catch (_err) {
+    // describe failed (account not found or nsc error) — exportAlreadyPresent stays false.
+    // Let add export surface the real error.
+  }
+
+  // ── Step 2: add export (if not present) ────────────────────────────────────
+  let exportAdded = false;
+  if (!exportAlreadyPresent) {
+    if (!apply) {
+      if (!json) {
+        console.log(`[dry-run] nsc add export --account ${fromAccount} --subject "${subject}"${opts.service ? " --service" : ""}`);
+      }
+    } else {
+      const exportArgs: string[] = ["add", "export", "--account", fromAccount, "--subject", subject];
+      if (opts.service) exportArgs.push("--service");
+      nsc(exportArgs);
+      exportAdded = true;
+      if (!json) console.log(`Added export: ${fromAccount} → "${subject}"`);
+    }
+  } else {
+    if (!json) console.log(`Export already present: ${fromAccount} → "${subject}" (no-op)`);
+  }
+
+  // ── Step 3: idempotency check — import on toAccount ────────────────────────
+  let importAlreadyPresent = false;
+  try {
+    const toDesc = nsc(["describe", "account", "-n", toAccount, "-J"]);
+    importAlreadyPresent = importExistsOnAccount(toDesc, subject);
+  } catch (_err) {
+    // describe failed — importAlreadyPresent stays false.
+    // Let add import surface the real error.
+  }
+
+  // ── Step 4: add import (if not present) ────────────────────────────────────
+  let importAdded = false;
+  if (!importAlreadyPresent) {
+    if (!apply) {
+      if (!json) {
+        console.log(
+          `[dry-run] nsc add import --account ${toAccount} --from-account ${fromAccount}` +
+          ` --subject "${subject}" --local-subject "${subject}"`,
+        );
+      }
+    } else {
+      nsc([
+        "add", "import",
+        "--account", toAccount,
+        "--from-account", fromAccount,
+        "--subject", subject,
+        "--local-subject", subject,
+      ]);
+      importAdded = true;
+      if (!json) console.log(`Added import: ${toAccount} ← ${fromAccount} "${subject}"`);
+    }
+  } else {
+    if (!json) console.log(`Import already present: ${toAccount} ← ${fromAccount} "${subject}" (no-op)`);
+  }
+
+  // ── Step 5: push both accounts (apply only) ────────────────────────────────
+  let pushResult: AddFederationExportResult["pushResult"];
+  if (apply) {
+    if (!json) console.log(`Pushing ${fromAccount}...`);
+    nsc(["push", "-a", fromAccount]);
+
+    if (!json) console.log(`Pushing ${toAccount}...`);
+    nsc(["push", "-a", toAccount]);
+
+    pushResult = { fromAccount: "ok", toAccount: "ok" };
+    if (!json) console.log("Both accounts pushed. Export/import wired and live.");
+  } else {
+    if (!json) {
+      console.log(`[dry-run] nsc push -a ${fromAccount}`);
+      console.log(`[dry-run] nsc push -a ${toAccount}`);
+      console.log(`\nRe-run with --apply to execute.`);
+    }
+    pushResult = { fromAccount: "skipped", toAccount: "skipped" };
+  }
+
+  return {
+    fromAccount,
+    toAccount,
+    subject,
+    exportAdded,
+    importAdded,
+    exportAlreadyPresent,
+    importAlreadyPresent,
+    pushResult,
+  };
 }

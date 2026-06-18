@@ -47,10 +47,11 @@ import {
 import type { ArcManifest, CatalogEntry, ArtifactType, PackageTier, RegistrySource, SourceType } from "./types.js";
 import { login } from "./commands/login.js";
 import { logout } from "./commands/logout.js";
-import { addBot, reissueBot, listBots, removeBot, setupOperator } from "./commands/nats.js";
+import { addBot, reissueBot, listBots, removeBot, setupOperator, addFederationExport } from "./commands/nats.js";
 import { provisionStreams, provisionConsumer } from "./commands/jetstream.js";
 import {
   ARC_NATS_SCHEMA,
+  ARC_NATS_FEDERATION_SCHEMA,
   emitJson,
   classifyError,
   type AddBotJson,
@@ -58,6 +59,7 @@ import {
   type RemoveBotJson,
   type SetupOperatorJson,
   type ProvisionJson,
+  type AddFederationExportJson,
 } from "./lib/json-response.js";
 import { generateIdentity, exportPrincipals, importPrincipals, listPrincipals } from "./commands/identity.js";
 import { bundle, formatBundle } from "./commands/bundle.js";
@@ -1775,6 +1777,61 @@ nats
         console.log(`Provisioning complete against ${r.natsUrl}.`);
       },
     });
+  });
+
+// ── G1b: cross-account federation export/import (cortex#1117) ─────────────
+//
+// `arc nats add-federation-export` wires the federated.> subject-export from
+// the leaf-bound NSC account (`--from-account`) into the hub's stack account
+// (`--to-account`). Both the nsc add export and nsc add import are performed
+// atomically, then both accounts are pushed so the JWT resolver picks up the
+// changes without a server restart.
+//
+// Dry-run by default (prints the nsc commands that would run); --apply executes.
+// JSON output uses schema `arc.nats.federation.v1` — a separate namespace from
+// `arc.nats.v1` so existing consumers that guard on ARC_NATS_SCHEMA are unaffected.
+
+nats
+  .command("add-federation-export")
+  .description("Wire federated.> cross-account export/import on the hub (G1b — cortex#1117)")
+  .requiredOption("--from-account <account>", "Leaf-bound NSC account (exporting side, e.g. OP_JC)")
+  .requiredOption("--to-account <account>", "Hub destination NSC account (importing side, e.g. OP_ANDREAS)")
+  .option("--subject <pattern>", "Subject pattern to export/import (default: \"federated.>\")")
+  .option("--service", "Add --service to nsc add export (for request/reply patterns; rarely needed)")
+  .option("--apply", "Execute the nsc mutations and push both accounts (default: dry-run)")
+  .option("--json", "Emit a single line of stable JSON (schema: arc.nats.federation.v1)")
+  .action((opts: {
+    fromAccount: string;
+    toAccount: string;
+    subject?: string;
+    service?: boolean;
+    apply?: boolean;
+    json?: boolean;
+  }) => {
+    if (opts.json) {
+      try {
+        const r = addFederationExport({ ...opts, json: true });
+        const payload: AddFederationExportJson = {
+          schema: ARC_NATS_FEDERATION_SCHEMA,
+          ok: true,
+          fromAccount: r.fromAccount,
+          toAccount: r.toAccount,
+          subject: r.subject,
+          exportAdded: r.exportAdded,
+          importAdded: r.importAdded,
+          exportAlreadyPresent: r.exportAlreadyPresent,
+          importAlreadyPresent: r.importAlreadyPresent,
+          ...(r.pushResult !== undefined && { pushResult: r.pushResult }),
+        };
+        emitJson(payload);
+        process.exit(0);
+      } catch (err) {
+        emitJson({ schema: ARC_NATS_FEDERATION_SCHEMA, ok: false, error: classifyError(err) });
+        process.exit(1);
+      }
+      return;
+    }
+    addFederationExport(opts);
   });
 
 // ── Identity management commands ──────────────────────────

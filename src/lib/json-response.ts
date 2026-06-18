@@ -11,9 +11,17 @@
  * - On failure: `{ schema, ok: false, error: { code, message } }`
  *
  * Exit code is `0` for `ok: true`, non-zero for `ok: false`.
+ *
+ * Schema version: `arc.nats.federation.v1`
+ * Used by `arc nats add-federation-export` — a separate schema namespace
+ * keeps federation commands cleanly separated from user-management commands
+ * and avoids confusing arc.nats.v1 consumers that guard on ARC_NATS_SCHEMA.
  */
 
 export const ARC_NATS_SCHEMA = "arc.nats.v1" as const;
+
+/** Schema string for federation-related commands (add-federation-export). */
+export const ARC_NATS_FEDERATION_SCHEMA = "arc.nats.federation.v1" as const;
 
 /**
  * Closed set of error codes emitted by `arc nats --json`. Cortex (and any
@@ -62,8 +70,19 @@ export interface JsonOkBase {
   ok: true;
 }
 
+export interface JsonFederationOkBase {
+  schema: typeof ARC_NATS_FEDERATION_SCHEMA;
+  ok: true;
+}
+
 export interface JsonError {
   schema: typeof ARC_NATS_SCHEMA;
+  ok: false;
+  error: ArcNatsError;
+}
+
+export interface JsonFederationError {
+  schema: typeof ARC_NATS_FEDERATION_SCHEMA;
   ok: false;
   error: ArcNatsError;
 }
@@ -118,6 +137,32 @@ export interface SetupOperatorJson extends JsonOkBase {
 }
 
 /**
+ * `arc nats add-federation-export` result (schema: arc.nats.federation.v1).
+ *
+ * `exportAlreadyPresent` / `importAlreadyPresent` distinguish first-run
+ * mutations from idempotent no-ops so the orchestrator can log what changed.
+ *
+ * `pushResult` surfaces per-account push outcomes. Both accounts are always
+ * pushed even if the export/import already existed (nsc push is idempotent).
+ */
+export interface AddFederationExportJson extends JsonFederationOkBase {
+  fromAccount: string;
+  toAccount: string;
+  subject: string;
+  /** True iff a new export was added to fromAccount (false = already present). */
+  exportAdded: boolean;
+  /** True iff a new import was added to toAccount (false = already present). */
+  importAdded: boolean;
+  exportAlreadyPresent: boolean;
+  importAlreadyPresent: boolean;
+  /** Push outcome per account. Only present when --apply is set. */
+  pushResult?: {
+    fromAccount: "ok" | "skipped";
+    toAccount: "ok" | "skipped";
+  };
+}
+
+/**
  * `arc nats provision-streams` / `arc nats provision-consumer` result.
  *
  * `created` distinguishes first-install from re-run idempotent no-op.
@@ -146,7 +191,15 @@ export interface ProvisionJson extends JsonOkBase {
  * compile error, not a silent contract violation.
  */
 export function emitJson(
-  payload: AddBotJson | ReissueBotJson | RemoveBotJson | SetupOperatorJson | ProvisionJson | JsonError,
+  payload:
+    | AddBotJson
+    | ReissueBotJson
+    | RemoveBotJson
+    | SetupOperatorJson
+    | ProvisionJson
+    | AddFederationExportJson
+    | JsonError
+    | JsonFederationError,
 ): void {
   process.stdout.write(JSON.stringify(payload) + "\n");
 }
