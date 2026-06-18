@@ -129,6 +129,25 @@ describe("resolveCortexConfigRoot", () => {
     ).toThrow(/both --config-dir and --stack/i);
   });
 
+  test("rejects an empty / whitespace-only --config-dir (no CWD-relative scatter)", () => {
+    // Echo review r3434847629: an unset shell var → `--config-dir ""` must NOT
+    // degrade to configRoot:"" (→ cortexPaths agentsDir:"agents.d", CWD-relative).
+    expect(() => resolveCortexConfigRoot({ configDir: "", home })).toThrow(
+      /--config-dir/i,
+    );
+    expect(() => resolveCortexConfigRoot({ configDir: "   ", home })).toThrow(
+      /--config-dir/i,
+    );
+  });
+
+  test("normalizes a relative --config-dir to an absolute path", () => {
+    const r = resolveCortexConfigRoot({ configDir: "./some/stack", home });
+    // Must be absolute (resolve() against CWD), never a bare relative segment.
+    expect(r.configRoot).toBe(join(process.cwd(), "some", "stack"));
+    expect(r.configRoot!.startsWith("/")).toBe(true);
+    expect(r.source).toBe("config-dir");
+  });
+
   test("rejects an empty --stack name", () => {
     expect(() => resolveCortexConfigRoot({ stack: "   ", home })).toThrow(
       /stack name/i,

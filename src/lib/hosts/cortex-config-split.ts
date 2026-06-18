@@ -1,4 +1,4 @@
-import { join, dirname } from "path";
+import { join, dirname, resolve } from "path";
 import { existsSync, statSync } from "fs";
 import { homedir } from "os";
 
@@ -169,6 +169,16 @@ export function resolveCortexConfigRoot(
   }
 
   if (opts.configDir != null) {
+    // Reject empty / whitespace-only input — the same trust-path guard as
+    // --stack. An unset shell var (`--config-dir "$CORTEX_DIR"` with the var
+    // empty) must NOT silently degrade to `""` → `agents.d` landing
+    // CWD-relative; that would scatter agent identity/persona under $PWD
+    // (Echo review r3434847629). Fail loud instead.
+    if (opts.configDir.trim() === "") {
+      throw new Error(
+        "Invalid --config-dir: must be a non-empty path to a cortex stack config dir (or its pointer file).",
+      );
+    }
     const expanded = expandHome(opts.configDir, home);
     // Pointer-file convention: if the path is an existing FILE, the config dir
     // is its dirname (cortex `--config` points at the sentinel/pointer file).
@@ -177,7 +187,12 @@ export function resolveCortexConfigRoot(
     if (existsSync(expanded) && statSync(expanded).isFile()) {
       configRoot = dirname(expanded);
     }
-    return { configRoot, source: "config-dir" };
+    // Force absolute: a relative --config-dir (e.g. `./stack`) must resolve to
+    // an explicit, auditable absolute path (relative to CWD) rather than be
+    // handed to cortexPaths as a bare relative segment that lands CWD-relative
+    // wherever the daemon later runs. resolve() is a no-op on an already-
+    // absolute path, so ~-expanded and absolute inputs are unaffected.
+    return { configRoot: resolve(configRoot), source: "config-dir" };
   }
 
   return { configRoot: undefined, source: "default" };
