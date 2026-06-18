@@ -155,7 +155,13 @@ export interface AddFederationExportJson extends JsonFederationOkBase {
   importAdded: boolean;
   exportAlreadyPresent: boolean;
   importAlreadyPresent: boolean;
-  /** Push outcome per account. Only present when --apply is set. */
+  /**
+   * Push outcome per account.
+   * - `{ fromAccount: "ok", toAccount: "ok" }` when --apply executed pushes.
+   * - `{ fromAccount: "skipped", toAccount: "skipped" }` in dry-run (apply=false).
+   * - `undefined` only when the command short-circuits with no nsc calls
+   *   (e.g. fromAccount === toAccount — Case A same-account no-op).
+   */
   pushResult?: {
     fromAccount: "ok" | "skipped";
     toAccount: "ok" | "skipped";

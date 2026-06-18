@@ -20,6 +20,10 @@ import {
 const DEFAULT_CREDS_DIR = join(homedir(), ".config", "nats");
 const NAMING_RE = /^[a-z](?:[a-z0-9]|-(?=[a-z0-9]))*$/;
 const NATS_SUBJECT_RE = /^[a-zA-Z0-9.*>_-]+$/;
+// NSC account names are UPPER_SNAKE by convention. Guard rejects empty strings
+// and flag-injection values (e.g. "--all", "--force") that nsc would silently
+// accept as option names, potentially touching the entire operator store.
+const ACCOUNT_NAME_RE = /^[A-Z][A-Z0-9_]+$/;
 
 // NSC config can live in several locations depending on version/platform
 const NSC_CONFIG_CANDIDATES = [
@@ -165,6 +169,27 @@ function validateSubject(subject: string): void {
     throw new ArcNatsCommandError(
       "VALIDATION_ERROR",
       `Invalid NATS subject: "${subject}" — only alphanumeric, dots, wildcards, hyphens, underscores allowed`,
+    );
+  }
+}
+
+/**
+ * Validates an NSC account name before passing it to any nsc invocation.
+ *
+ * NSC account names are UPPER_SNAKE by convention (e.g. "OP_HUB", "MYFACTORY").
+ * Rejecting empty strings and flag-injection patterns (e.g. "--all", "--force")
+ * prevents nsc push -a "" from pushing the entire operator store, and prevents
+ * option-flag injection into nsc add export / add import / push -a calls.
+ *
+ * If arc ever needs to support lowercase or hyphenated account names, update
+ * ACCOUNT_NAME_RE to match — but the empty + flag-injection guard MUST stay.
+ */
+function validateAccountName(name: string): void {
+  if (!name || !ACCOUNT_NAME_RE.test(name)) {
+    throw new ArcNatsCommandError(
+      "VALIDATION_ERROR",
+      `Invalid account name: "${name}" — must match [A-Z][A-Z0-9_]+ (UPPER_SNAKE). ` +
+      `Empty or flag-style values (e.g. "--all") are not accepted.`,
     );
   }
 }
@@ -700,24 +725,68 @@ function exportExistsOnAccount(describeJson: string, subject: string): boolean {
 }
 
 /**
+ * Extracts the account public key (NKey, starts with "A") from an
+ * `nsc describe account -n <account> -J` output.
+ *
+ * Returns the pubkey string if found, or null if the output is unparseable or
+ * the key is absent (older nsc, non-JSON describe output, etc.).
+ */
+function extractAccountPubkey(describeJson: string): string | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(describeJson);
+  } catch (_err) {
+    return null;
+  }
+  const sub = (parsed as { sub?: unknown }).sub;
+  if (typeof sub === "string" && sub.startsWith("A")) return sub;
+  return null;
+}
+
+/**
  * Parses the JSON output of `nsc describe account -n <account> -J` and checks
  * whether an import from `fromAccount` on the given subject already exists.
  *
  * nsc encodes imports in the JWT claim at `.nats.imports[]`. Each import entry
- * has a `subject` field and an `account` field (the exporting account's public key
- * or name, depending on nsc version — we match on subject only for robustness,
- * since the `account` field in the import entry may be a pubkey, not the name).
+ * has a `subject` field and an `account` field (the exporting account's NKey
+ * pubkey, an "A"-prefixed 56-char string).
+ *
+ * M2 fix: match on BOTH subject AND source-account identity, not subject alone.
+ * Subject-only matching is incorrect in the multi-peer hub topology: if to-account
+ * already imports "federated.>" from peer A, a call with from-account=peer B would
+ * silently skip adding the import from peer B, leaving peer B's traffic unrouted.
+ *
+ * `fromAccountPubkey` is the resolved pubkey of the exporting account (from
+ * `nsc describe account -n <fromAccount> -J`). If null (pubkey could not be
+ * resolved — e.g. older nsc), we fall back to subject-only matching and emit a
+ * warning; this is safe-ish (worst-case an unnecessary re-add), but correct for
+ * the common case where pubkeys are available.
  */
-function importExistsOnAccount(describeJson: string, subject: string): boolean {
+function importExistsOnAccount(
+  describeJson: string,
+  subject: string,
+  fromAccountPubkey: string | null,
+): boolean {
   let parsed: unknown;
   try {
     parsed = JSON.parse(describeJson);
   } catch (_err) {
     return false;
   }
-  const imports = (parsed as { nats?: { imports?: { subject?: unknown }[] } }).nats?.imports;
+  const imports = (parsed as { nats?: { imports?: { subject?: unknown; account?: unknown }[] } }).nats?.imports;
   if (!Array.isArray(imports)) return false;
-  return imports.some((i) => i.subject === subject);
+
+  if (fromAccountPubkey === null) {
+    // Pubkey unavailable — fall back to subject-only match with a warning.
+    process.stderr.write(
+      "[arc nats] WARNING: could not resolve fromAccount pubkey; falling back to subject-only import check. " +
+      "Multi-peer hub topologies may skip necessary imports — upgrade nsc for reliable matching.\n",
+    );
+    return imports.some((i) => i.subject === subject);
+  }
+
+  // Match on BOTH subject AND source-account pubkey.
+  return imports.some((i) => i.subject === subject && i.account === fromAccountPubkey);
 }
 
 export interface AddFederationExportOptions {
@@ -779,6 +848,13 @@ export function addFederationExport(opts: AddFederationExportOptions): AddFedera
   const { fromAccount, toAccount } = opts;
 
   ensureNscInstalled(json);
+
+  // M1: validate account names BEFORE any nsc invocation to prevent flag
+  // injection (e.g. "--all") and empty-string pushes that touch the whole
+  // operator store. Both accounts are validated regardless of dry-run mode.
+  validateAccountName(fromAccount);
+  validateAccountName(toAccount);
+
   validateSubject(subject);
 
   // Case A: same account on both sides — no export/import needed.
@@ -796,14 +872,22 @@ export function addFederationExport(opts: AddFederationExportOptions): AddFedera
     };
   }
 
-  // ── Step 1: idempotency check — export on fromAccount ──────────────────────
+  // ── Step 1: describe fromAccount — export idempotency + pubkey for M2 ───────
+  // A single describe call serves double duty: (a) check whether the export
+  // already exists, and (b) extract the account pubkey needed for the M2
+  // source-account match in the import check (Step 3). This avoids a second
+  // describe roundtrip for the pubkey.
   let exportAlreadyPresent = false;
+  let fromAccountPubkey: string | null = null;
   try {
     const fromDesc = nsc(["describe", "account", "-n", fromAccount, "-J"]);
     exportAlreadyPresent = exportExistsOnAccount(fromDesc, subject);
+    // M2: capture the pubkey for the import check below.
+    fromAccountPubkey = extractAccountPubkey(fromDesc);
   } catch (_err) {
-    // describe failed (account not found or nsc error) — exportAlreadyPresent stays false.
-    // Let add export surface the real error.
+    // describe failed (account not found or nsc error) — exportAlreadyPresent
+    // stays false; let add export surface the real error.
+    // fromAccountPubkey stays null — importExistsOnAccount will warn + fall back.
   }
 
   // ── Step 2: add export (if not present) ────────────────────────────────────
@@ -825,10 +909,14 @@ export function addFederationExport(opts: AddFederationExportOptions): AddFedera
   }
 
   // ── Step 3: idempotency check — import on toAccount ────────────────────────
+  // M2: match on BOTH subject AND source-account pubkey to correctly handle
+  // multi-peer hub topologies where toAccount may already import the same
+  // subject from a DIFFERENT peer. Subject-only matching would silently skip
+  // adding the import from THIS fromAccount, leaving its traffic unrouted.
   let importAlreadyPresent = false;
   try {
     const toDesc = nsc(["describe", "account", "-n", toAccount, "-J"]);
-    importAlreadyPresent = importExistsOnAccount(toDesc, subject);
+    importAlreadyPresent = importExistsOnAccount(toDesc, subject, fromAccountPubkey);
   } catch (_err) {
     // describe failed — importAlreadyPresent stays false.
     // Let add import surface the real error.

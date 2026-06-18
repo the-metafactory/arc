@@ -9,11 +9,13 @@
  *   - --apply: calls add export, add import, push both accounts in order
  *   - Idempotent re-run: both already present → no mutations, push still runs
  *   - Same account (Case A): no-op result, no nsc mutations
- *   - Malformed account / invalid subject: VALIDATION_ERROR thrown
+ *   - Account name validation (M1): empty, flag-injection, valid UPPER_SNAKE
+ *   - Subject validation: VALIDATION_ERROR for invalid subjects
  *   - NSC_NOT_INSTALLED: typed error when nsc is missing
  *   - JSON envelope shape: schema, ok, field names, pushResult presence
  *   - Partial failure (import fails after export succeeds): error propagates,
  *     result is re-runnable (export skipped on re-run via idempotency check)
+ *   - Multi-peer hub (M2): to-account already imports from peer A; peer B import is added
  */
 
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
@@ -33,14 +35,25 @@ const TO_ACCOUNT = "OP_HUB";
 const DEFAULT_SUBJECT = "federated.>";
 const CUSTOM_SUBJECT = "federated.mynet.>";
 
+// Fake account pubkeys for multi-peer tests (M2). Real NKeys start with "A".
+const FROM_ACCOUNT_PUBKEY = "AFROM0000000000000000000000000000000000000000000000000000";
+const PEER_A_PUBKEY       = "APEERA00000000000000000000000000000000000000000000000000";
+const PEER_B_PUBKEY       = "APEERB00000000000000000000000000000000000000000000000000";
+
 function ok(stdout = ""): NscResult { return { exitCode: 0, stdout, stderr: "" }; }
 function fail(stderr = "boom"): NscResult { return { exitCode: 1, stdout: "", stderr }; }
 
 /**
  * Build a fake `nsc describe account -n <account> -J` response.
- * The nsc JWT contains exports/imports under `.nats`.
+ *
+ * `sub` is the account's NKey public key ("A"-prefixed). The M2 fix uses
+ * `extractAccountPubkey(describeJson)` → `json.sub` to resolve the exporting
+ * account's pubkey, then matches imports on both `subject` AND `account`
+ * (the pubkey of the exporting account). Tests that cover multi-peer idempotency
+ * must supply matching `account` fields in their import entries.
  */
 function describeAccountJson(opts: {
+  sub?: string;
   exports?: { subject: string }[];
   imports?: { subject: string; account?: string }[];
 } = {}): string {
@@ -48,7 +61,7 @@ function describeAccountJson(opts: {
     jti: "fake",
     iat: 0,
     iss: "OOPERATOR",
-    sub: "AACCOUNT",
+    sub: opts.sub ?? FROM_ACCOUNT_PUBKEY,
     nats: {
       type: "account",
       exports: opts.exports ?? [],
@@ -108,8 +121,8 @@ describe("addFederationExport — same-account (Case A)", () => {
   test("no-op result uses the correct subject default", () => {
     __setNscRunnerForTests(buildRunner({}));
     const result = addFederationExport({
-      fromAccount: "X",
-      toAccount: "X",
+      fromAccount: "XA",
+      toAccount: "XA",
       json: true,
     });
     expect(result.subject).toBe(DEFAULT_SUBJECT);
@@ -118,8 +131,8 @@ describe("addFederationExport — same-account (Case A)", () => {
   test("no-op result respects a custom subject", () => {
     __setNscRunnerForTests(buildRunner({}));
     const result = addFederationExport({
-      fromAccount: "X",
-      toAccount: "X",
+      fromAccount: "XA",
+      toAccount: "XA",
       subject: CUSTOM_SUBJECT,
       json: true,
     });
@@ -302,9 +315,11 @@ describe("addFederationExport — --apply path", () => {
 describe("addFederationExport — idempotency (both already present)", () => {
   test("skips add export and add import when both already exist; still pushes", () => {
     const calls: string[] = [];
+    // M2: import entry must include `account` (the fromAccount pubkey) so the
+    // source-account match detects the import as already present.
     const descWithBoth = describeAccountJson({
       exports: [{ subject: DEFAULT_SUBJECT }],
-      imports: [{ subject: DEFAULT_SUBJECT }],
+      imports: [{ subject: DEFAULT_SUBJECT, account: FROM_ACCOUNT_PUBKEY }],
     });
 
     const runner = buildRunner({
@@ -631,5 +646,164 @@ describe("addFederationExport — describe output resilience", () => {
     expect(result.exportAlreadyPresent).toBe(false);
     expect(result.exportAdded).toBe(true);
     expect(addExportCalled).toBe(true);
+  });
+});
+
+// ── M1: Account name validation ───────────────────────────────────────────────
+
+describe("addFederationExport — account name validation (M1)", () => {
+  test("throws VALIDATION_ERROR for an empty fromAccount", () => {
+    __setNscRunnerForTests(buildRunner({}));
+
+    let err: unknown;
+    try {
+      addFederationExport({ fromAccount: "", toAccount: TO_ACCOUNT, json: true });
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(ArcNatsCommandError);
+    expect((err as ArcNatsCommandError).code).toBe("VALIDATION_ERROR");
+  });
+
+  test("throws VALIDATION_ERROR for a flag-injection fromAccount (--all)", () => {
+    __setNscRunnerForTests(buildRunner({}));
+
+    let err: unknown;
+    try {
+      addFederationExport({ fromAccount: "--all", toAccount: TO_ACCOUNT, json: true });
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(ArcNatsCommandError);
+    expect((err as ArcNatsCommandError).code).toBe("VALIDATION_ERROR");
+  });
+
+  test("throws VALIDATION_ERROR for a flag-injection toAccount (--force)", () => {
+    __setNscRunnerForTests(buildRunner({}));
+
+    let err: unknown;
+    try {
+      addFederationExport({ fromAccount: FROM_ACCOUNT, toAccount: "--force", json: true });
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(ArcNatsCommandError);
+    expect((err as ArcNatsCommandError).code).toBe("VALIDATION_ERROR");
+  });
+
+  test("throws VALIDATION_ERROR for a lowercase account name", () => {
+    __setNscRunnerForTests(buildRunner({}));
+
+    let err: unknown;
+    try {
+      addFederationExport({ fromAccount: "op_peer", toAccount: TO_ACCOUNT, json: true });
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(ArcNatsCommandError);
+    expect((err as ArcNatsCommandError).code).toBe("VALIDATION_ERROR");
+  });
+
+  test("accepts valid UPPER_SNAKE account names without throwing", () => {
+    // Valid names must not throw — runner is set to fail loudly if nsc is called
+    // (which it won't be in dry-run mode after validation passes).
+    __setNscRunnerForTests(buildRunner({
+      "describe account": () => ok(describeAccountJson()),
+    }));
+
+    // Should not throw
+    const result = addFederationExport({
+      fromAccount: "OP_PEER",
+      toAccount: "OP_HUB",
+      apply: false,
+      json: true,
+    });
+    expect(result.fromAccount).toBe("OP_PEER");
+    expect(result.toAccount).toBe("OP_HUB");
+  });
+});
+
+// ── M2: Multi-peer hub — import matched on subject + source account ───────────
+
+describe("addFederationExport — multi-peer hub import matching (M2)", () => {
+  test("adds import when toAccount already imports same subject from a DIFFERENT peer", () => {
+    // Scenario: hub account (TO_ACCOUNT / OP_HUB) already has an import for
+    // "federated.>" from peer A (PEER_A_PUBKEY). We are now calling with
+    // from-account = peer B (PEER_B_PUBKEY). With subject-only matching the
+    // import would be silently skipped; with M2 source-account matching it
+    // must be added.
+    const calls: string[] = [];
+
+    const runner = buildRunner({
+      "describe account": (args) => {
+        const accountArg = args[args.indexOf("-n") + 1] ?? "";
+        calls.push(`describe ${accountArg}`);
+
+        if (accountArg === "OP_PEER_B") {
+          // fromAccount describe → expose peer B's pubkey
+          return ok(describeAccountJson({
+            sub: PEER_B_PUBKEY,
+            exports: [],
+          }));
+        }
+        // toAccount (OP_HUB) describe → already has import from peer A, not B
+        return ok(describeAccountJson({
+          sub: "AHUB0000000000000000000000000000000000000000000000000000",
+          imports: [{ subject: DEFAULT_SUBJECT, account: PEER_A_PUBKEY }],
+        }));
+      },
+      "add export": (args) => { calls.push(`add export ${args[args.indexOf("--account") + 1]}`); return ok(); },
+      "add import": (args) => { calls.push(`add import ${args[args.indexOf("--account") + 1]}`); return ok(); },
+      "push": (args) => { calls.push(`push ${args[args.indexOf("-a") + 1]}`); return ok(); },
+    });
+    __setNscRunnerForTests(runner);
+
+    const result = addFederationExport({
+      fromAccount: "OP_PEER_B",
+      toAccount: "OP_HUB",
+      apply: true,
+      json: true,
+    });
+
+    // Import from peer B must be ADDED (peer A's import does NOT satisfy this)
+    expect(result.importAlreadyPresent).toBe(false);
+    expect(result.importAdded).toBe(true);
+
+    // Both export (peer B had none) and import were added
+    expect(result.exportAdded).toBe(true);
+    expect(calls.some(c => c.includes("add import"))).toBe(true);
+    expect(result.pushResult).toEqual({ fromAccount: "ok", toAccount: "ok" });
+  });
+
+  test("does NOT add import when toAccount already imports same subject from the SAME peer", () => {
+    // Scenario: idempotent re-run for peer B — import from peer B already present.
+    __setNscRunnerForTests(buildRunner({
+      "describe account": (args) => {
+        const accountArg = args[args.indexOf("-n") + 1] ?? "";
+        if (accountArg === "OP_PEER_B") {
+          return ok(describeAccountJson({
+            sub: PEER_B_PUBKEY,
+            exports: [{ subject: DEFAULT_SUBJECT }],
+          }));
+        }
+        return ok(describeAccountJson({
+          sub: "AHUB0000000000000000000000000000000000000000000000000000",
+          imports: [{ subject: DEFAULT_SUBJECT, account: PEER_B_PUBKEY }],
+        }));
+      },
+      "push": () => ok(),
+    }));
+
+    const result = addFederationExport({
+      fromAccount: "OP_PEER_B",
+      toAccount: "OP_HUB",
+      apply: true,
+      json: true,
+    });
+
+    expect(result.importAlreadyPresent).toBe(true);
+    expect(result.importAdded).toBe(false);
+    expect(result.exportAlreadyPresent).toBe(true);
+    expect(result.exportAdded).toBe(false);
   });
 });
