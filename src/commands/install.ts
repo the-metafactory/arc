@@ -134,6 +134,21 @@ export interface InstallOptions {
    * the target host is a cortex stack.
    */
   cortexStackId?: string;
+  /**
+   * S1 (arc#244 / cortex#1133) — config-split stack targeting.
+   *
+   * Extra env vars merged into the postinstall lifecycle env (the pack's
+   * reload + creds scripts) so they target the resolved stack config dir rather
+   * than the legacy `~/.config/cortex` root. Populated by the CLI from
+   * `--config-dir` / `--stack` (see `buildCortexInstallSteering`) and carries
+   * `CORTEX_CONFIG` (the stack config dir). Absent → scripts see only
+   * `process.env` + secrets, i.e. today's behavior.
+   *
+   * Where the agent fragment + persona LAND is decided separately by
+   * `hostOverrides.cortex.configRoot` (threaded into `createCortexHost`); this
+   * env only tells the postinstall scripts which stack to reload/issue against.
+   */
+  cortexConfigEnv?: Record<string, string>;
 }
 
 export interface InstallResult {
@@ -473,10 +488,17 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
     }
   }
   // 5b. Complete the post-landing Install Transaction.
-  const postinstallEnv = await buildSecretEnvForInstall(manifest, {
-    arc,
-    backendChoice: opts.secretBackend,
-  });
+  // S1 (arc#244): config-split steering env (CORTEX_CONFIG) is merged in so a
+  // pack's reload/creds postinstall scripts target the resolved stack dir.
+  // Secrets win on key collision (a pack wouldn't name a secret CORTEX_CONFIG,
+  // but secrets are the more privileged source, so they take precedence).
+  const postinstallEnv = {
+    ...(opts.cortexConfigEnv ?? {}),
+    ...(await buildSecretEnvForInstall(manifest, {
+      arc,
+      backendChoice: opts.secretBackend,
+    })),
+  };
   // Capture the live transaction so the F-6a cortex-config step below can
   // unwind the landed state (symlinks/hooks/launchd/DB row) if the merge fails
   // — atomic, same as the library path's onTransaction capture.
@@ -868,10 +890,16 @@ export async function installSingleArtifact(
         `Manifest declares provides.files entries whose source does not exist in the package:\n${detail}`,
     };
   }
-  const artifactPostinstallEnv = await buildSecretEnvForInstall(manifest, {
-    arc,
-    backendChoice: opts.secretBackend,
-  });
+  // S1 (arc#244): library-artifact path — same config-split steering as the
+  // standalone path. dev-loop ships its agents as library artifacts, so each
+  // member's reload/creds postinstall must target the resolved stack too.
+  const artifactPostinstallEnv = {
+    ...(opts.cortexConfigEnv ?? {}),
+    ...(await buildSecretEnvForInstall(manifest, {
+      arc,
+      backendChoice: opts.secretBackend,
+    })),
+  };
   // Wrap the caller's onTransaction so we ALSO capture the handle locally —
   // the F-6a cortex-config step below must unwind THIS artifact's landed state
   // if the merge fails (installSingleArtifact's contract: on a failure return,
