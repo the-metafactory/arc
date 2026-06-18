@@ -337,6 +337,15 @@ function resolveBotPackAgentId(fragmentPath: string, manifestName: string): stri
  * documents is the symlink/fragment drop diverging from the DB; the
  * supervision-host side is a follow-up. The symlink/fragment drops on registry
  * hosts (cortex, claude-code) are the load-bearing check.
+ *
+ * KNOWN v1 LIMITATION (consequence of the above): a manifest whose `targets`
+ * is ONLY supervision hosts (e.g. `targets: [darwin-launchd]`) resolves to an
+ * EMPTY host list here, so the verify loop runs zero checks and returns
+ * `true` UNCONDITIONALLY -- a wiped plist reads as "present". This is the
+ * narrow false-positive the supervision-host follow-up will close (check plist
+ * presence for those targets). Until then, a launchd-only artifact whose plist
+ * was wiped will still be skipped on reinstall. Registry-host targets (the
+ * arc#248 case) are unaffected.
  */
 export async function artifactDropPresent(opts: {
   type: ArtifactType | "rules" | "system";

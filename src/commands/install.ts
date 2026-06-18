@@ -361,10 +361,18 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
       // fall through to (re-)install when the drop is missing.
       const existing = getSkill(db, dep.name);
       if (existing?.status === "active") {
+        // Determine whether the dep's host drop is actually present, and — when
+        // it is NOT — WHY, so the operator notice is accurate (a missing/
+        // unreadable repo clone is a different failure than a wiped host drop).
         let dropPresent = false;
-        if (existsSync(existing.install_path)) {
+        let reason = "host drop missing";
+        if (!existsSync(existing.install_path)) {
+          reason = "repo clone missing";
+        } else {
           const depManifest = await readManifest(existing.install_path);
-          if (depManifest) {
+          if (!depManifest) {
+            reason = "manifest unreadable";
+          } else {
             dropPresent = await artifactDropPresent({
               type: depManifest.type,
               manifest: depManifest,
@@ -378,15 +386,20 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
         if (dropPresent) {
           continue; // Already installed and the drop is present.
         }
-        // DB says active but the drop (or its repo clone / manifest) is missing
-        // — re-install rather than skip. Surfaced unconditionally so the
-        // operator sees why a supposedly-installed dep is being re-installed.
+        // DB says active but the drop (or its repo clone / manifest) cannot be
+        // confirmed — re-install rather than skip. Surfaced unconditionally so
+        // the operator sees the accurate reason a supposedly-installed dep is
+        // being re-installed.
         process.stderr.write(
-          `  re-dropping dependency ${dep.name}: DB row active but host drop missing\n`,
+          `  re-installing dependency ${dep.name}: DB row active but ${reason}\n`,
         );
         // Drop the stale row so the recursive install's recordInstall INSERT
         // doesn't trip the skills.name UNIQUE constraint / the standalone
-        // "already installed" guard.
+        // "already installed" guard. Discarding the row here is intentional and
+        // non-transactional: the precondition is an ALREADY-broken install
+        // (the recorded drop is gone / unverifiable), so the row was already
+        // lying; and the recursive install() below fails loudly if the re-drop
+        // fails, so we never silently leave a WORSE state than we found.
         removeSkill(db, dep.name);
       }
 
@@ -767,6 +780,12 @@ async function installLibrary(
       // the skills.name UNIQUE constraint. The member is then (re-)installed by
       // the normal path below and recorded as a landed artifact of THIS
       // transaction (so a later mid-sequence failure rolls it back cleanly).
+      //
+      // Discarding the row here is intentional and non-transactional: the
+      // precondition is an ALREADY-broken drop (artifactDropPresent returned
+      // false), so the row was already lying about the filesystem; and the
+      // re-drop below fails loudly (recorded as an artifact failure → library
+      // rollback) if it cannot land, so we never silently leave a WORSE state.
       removeSkill(db, artifactManifest.name);
     }
 
