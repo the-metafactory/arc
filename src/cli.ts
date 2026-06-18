@@ -5,6 +5,7 @@ import { createArcPaths, ensureDirectories, getDefaultHost, isDirOnPath } from "
 import { openDatabase, getSkill } from "./lib/db.js";
 import { extractAllCliInfo, SymlinkConflictError } from "./lib/symlinks.js";
 import { install, parseNameVersion } from "./commands/install.js";
+import { buildCortexInstallSteering } from "./lib/hosts/cortex-config-split.js";
 import {
   secretsList,
   secretsCheck,
@@ -174,7 +175,9 @@ program
   .option("--skip-secrets", "Install without provisioning declared secrets (daemon fails at first use with a clear message)")
   .option("--from-env", "Resolve declared secrets from the current environment instead of prompting")
   .option("--secret-backend <choice>", "Secret storage backend: auto (default) | keychain | file. 'auto' uses the chmod-600 file backend on shared/CI hosts to avoid the macOS Keychain argv-exposure window")
-  .action(async (nameOrUrl: string, opts: { yes?: boolean; pin?: string; binDir?: string; strictSigning?: boolean; skipSecrets?: boolean; fromEnv?: boolean; secretBackend?: string }) => {
+  .option("--config-dir <path>", "Target a config-split cortex stack by its config dir (or its pointer file). Roots cortex agents.d/ + personas/ at the stack subdir. (arc#244)")
+  .option("--stack <name>", "Target a config-split cortex stack by name (resolves to ~/.config/cortex/<name>). (arc#244)")
+  .action(async (nameOrUrl: string, opts: { yes?: boolean; pin?: string; binDir?: string; strictSigning?: boolean; skipSecrets?: boolean; fromEnv?: boolean; secretBackend?: string; configDir?: string; stack?: string }) => {
     // Non-TTY guard: fail loud rather than silently half-installing
     if (!opts.yes && !process.stdin.isTTY) {
       console.error("Error: arc install requires an interactive terminal for capability confirmation.");
@@ -186,6 +189,22 @@ program
     // heuristic; `keychain` forces the macOS Keychain (accepting its argv
     // exposure); `file` forces the chmod-600 file backend.
     const secretBackend = parseSecretBackendChoice(opts.secretBackend);
+
+    // S1 (arc#244 / cortex#1133): resolve config-split stack targeting from
+    // --config-dir / --stack into install steering. No flag → undefined
+    // hostOverrides + empty env → byte-identical legacy `~/.config/cortex`
+    // behavior. A flag → cortex host roots agents.d/ + personas/ at the stack
+    // subdir, and reload/creds postinstall scripts see CORTEX_CONFIG.
+    let cortexSteering: ReturnType<typeof buildCortexInstallSteering>;
+    try {
+      cortexSteering = buildCortexInstallSteering({
+        configDir: opts.configDir,
+        stack: opts.stack,
+      });
+    } catch (err) {
+      console.error(`\n❌ ${err instanceof Error ? err.message : String(err)}`);
+      process.exit(1);
+    }
 
     const paths = createInstallPaths(opts);
     const host = getDefaultHost();
@@ -398,6 +417,8 @@ program
         skipSecrets: opts.skipSecrets,
         fromEnv: opts.fromEnv,
         secretBackend,
+        hostOverrides: cortexSteering.hostOverrides,
+        cortexConfigEnv: cortexSteering.cortexConfigEnv,
       });
       if (result.success) {
         // arc#160: don't claim "(verified)" on the final line when only the
@@ -414,7 +435,7 @@ program
       }
     } else if (isUrl) {
       // Direct git install
-      const result = await install({ arc: paths, host, db, repoUrl: nameOrUrl, yes: opts.yes, artifactName, pinnedVersion, skipSecrets: opts.skipSecrets, fromEnv: opts.fromEnv, secretBackend });
+      const result = await install({ arc: paths, host, db, repoUrl: nameOrUrl, yes: opts.yes, artifactName, pinnedVersion, skipSecrets: opts.skipSecrets, fromEnv: opts.fromEnv, secretBackend, hostOverrides: cortexSteering.hostOverrides, cortexConfigEnv: cortexSteering.cortexConfigEnv });
       if (result.success) {
         if (result.artifacts?.length) {
           console.log(`\n✅ Installed ${result.artifacts.filter(a => a.success).length} artifact(s) from ${result.name}`);
@@ -454,6 +475,8 @@ program
         skipSecrets: opts.skipSecrets,
         fromEnv: opts.fromEnv,
         secretBackend,
+        hostOverrides: cortexSteering.hostOverrides,
+        cortexConfigEnv: cortexSteering.cortexConfigEnv,
       });
       if (result.success) {
         if (result.artifacts?.length) {
