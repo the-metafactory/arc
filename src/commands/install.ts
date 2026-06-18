@@ -871,24 +871,57 @@ export async function installSingleArtifact(
     return preinstallResult;
   }
 
-  const symlinkResult = await createArtifactSymlinks({
-    type: manifest.type,
-    manifest,
-    arc,
-    host,
-    installDir: artifactDir,
-    consumerDir: opts.consumerDir,
-    quiet: opts.yes,
-  });
-  if (symlinkResult.filesMissingSource.length) {
-    const detail = symlinkResult.filesMissingSource
-      .map((f) => `  - ${f.source} -> ${f.target}`)
-      .join("\n");
-    return {
-      success: false,
-      error:
-        `Manifest declares provides.files entries whose source does not exist in the package:\n${detail}`,
-    };
+  // Create symlinks based on artifact type. THIS MIRRORS the standalone
+  // install() flow's two-path dispatch (arc#244 / cortex#1133):
+  //   - manifest.targets present → installPerTarget: iterate declared targets,
+  //     resolving each HostId through resolveHost(targetId, hostOverrides). For
+  //     a `type: agent` member targeting cortex this takes the cortex BOT-PACK
+  //     DROP (agent.yaml → {configRoot}/agents.d/<id>.yaml + persona.md →
+  //     {configRoot}/personas/<id>.md) honoring hostOverrides.cortex.configRoot
+  //     — so `arc install <library>` of bot-packs actually lands the agents on
+  //     the stack subdir. Before this, the library fan-out called
+  //     createArtifactSymlinks with `opts.host` (the claude-code default) and
+  //     IGNORED manifest.targets, so members were DB-tracked but never dropped
+  //     (cortex#129).
+  //   - manifest.targets absent → existing single-host flow against `host`
+  //     (plain skills/tools/prompts — byte-identical to before).
+  let symlinkResult: { record: ArtifactSymlinkRecord; filesMissingSource: { source: string; target: string }[] };
+  let artifactLaunchdRecords: LaunchdInstallRecord[] = [];
+  if (manifest.targets && manifest.targets.length > 0) {
+    const multi = await installPerTarget({
+      targets: manifest.targets,
+      manifest,
+      arc,
+      installPath: artifactDir,
+      consumerDir: opts.consumerDir,
+      quiet: opts.yes,
+      hostOverrides: opts.hostOverrides,
+    });
+    if ("error" in multi) {
+      return { success: false, error: multi.error };
+    }
+    symlinkResult = { record: multi.symlinks, filesMissingSource: [] };
+    artifactLaunchdRecords = multi.launchd;
+  } else {
+    symlinkResult = await createArtifactSymlinks({
+      type: manifest.type,
+      manifest,
+      arc,
+      host,
+      installDir: artifactDir,
+      consumerDir: opts.consumerDir,
+      quiet: opts.yes,
+    });
+    if (symlinkResult.filesMissingSource.length) {
+      const detail = symlinkResult.filesMissingSource
+        .map((f) => `  - ${f.source} -> ${f.target}`)
+        .join("\n");
+      return {
+        success: false,
+        error:
+          `Manifest declares provides.files entries whose source does not exist in the package:\n${detail}`,
+      };
+    }
   }
   // S1 (arc#244): library-artifact path — same config-split steering as the
   // standalone path. dev-loop ships its agents as library artifacts, so each
@@ -914,6 +947,7 @@ export async function installSingleArtifact(
     manifest,
     authorization: { approved: true },
     symlinks: symlinkResult.record,
+    launchdRecords: artifactLaunchdRecords,
     quiet: opts.yes,
     sourceName: opts.sourceName ?? `library:${libraryName}`,
     sourceTier: opts.sourceTier ?? manifest.tier ?? "custom",
