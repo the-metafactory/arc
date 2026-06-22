@@ -15,6 +15,39 @@ export const LEGACY_MANIFEST_FILENAME = "pai-manifest.yaml";
 export const MANIFEST_FILENAMES = [MANIFEST_FILENAME, LEGACY_MANIFEST_FILENAME] as const;
 
 /**
+ * Single source of truth for which artifact types REQUIRE a `capabilities:`
+ * block to install. readManifest enforces this at parse time (#87); assessRisk
+ * and formatCapabilities mirror it as defense-in-depth for manifests that
+ * reach those paths without going through readManifest (constructed in code,
+ * future validation-skip paths, etc.).
+ *
+ * The complementary exempt set (agent / component / rules / library / process)
+ * is exempted by ecosystem policy in readManifest below, NOT by a proven
+ * property of those types. The carve-outs:
+ *   - agent    — declares authority via `guardrails` instead of `capabilities`
+ *                (arc#100 §12); the host enforces guardrails through its own
+ *                primitives (allowedDirs, disallowedTools, bashAllowlist).
+ *   - library  — validated separately by validateLibraryManifest; per-artifact
+ *                manifests inside the library carry their own capabilities.
+ *   - process  — declares dependencies per-node, not via the top-level block
+ *                (dev-loop F-6d, meta-factory#550).
+ *   - component / rules — capabilities-optional per the readManifest check
+ *                below. The current convention is that these are content
+ *                artifacts without their own install/runtime entry point,
+ *                but arc does NOT enforce that property — a component or
+ *                rules package CAN ship arbitrary files. If that convention
+ *                changes or proves insufficient, move them into this set and
+ *                update readManifest's exempt list to match.
+ */
+export const REQUIRES_CAPABILITIES: ReadonlySet<string> = new Set([
+  "skill",
+  "tool",
+  "prompt",
+  "pipeline",
+  "action",
+]);
+
+/**
  * Read and parse an arc-manifest.yaml (or legacy pai-manifest.yaml) from a directory.
  * Prefers arc-manifest.yaml; falls back to pai-manifest.yaml.
  *
@@ -88,21 +121,18 @@ async function readManifestFromDir(
         return parsed;
       }
 
-      // capabilities optional for component, rules, and agent types, required for others.
-      // Persona-driven agents (arc#100 §12 / arc#102) declare authority via
-      // `guardrails` instead of `capabilities` — the host enforces guardrails
-      // through its own primitives (allowedDirs, disallowedTools, bashAllowlist),
-      // so the per-package capabilities block does not apply.
-      if (
-        !parsed.capabilities &&
-        parsed.type !== "component" &&
-        parsed.type !== "rules" &&
-        parsed.type !== "agent"
-      ) {
+      // capabilities required for types in REQUIRES_CAPABILITIES (single
+      // source of truth at module top), optional for the complementary
+      // exempt set (agent / component / rules / library / process). See the
+      // REQUIRES_CAPABILITIES docstring for the rationale per exempt type.
+      // library and process are already handled above; the remaining types
+      // routed here are skill, tool, prompt, pipeline, action (required) and
+      // agent, component, rules (exempt).
+      if (!parsed.capabilities && REQUIRES_CAPABILITIES.has(parsed.type)) {
         throw new Error(
           [
             `Invalid ${filename}: missing required field 'capabilities'`,
-            `Required for type: skill, tool, prompt, pipeline, system (optional only for: component, rules, agent, process).`,
+            `Required for type: skill, tool, prompt, pipeline, action (optional only for: component, rules, agent, library, process).`,
             ``,
             `Minimal example:`,
             ``,
@@ -634,11 +664,28 @@ export async function readLibraryArtifacts(
 
 /**
  * Calculate risk level from capabilities.
- * - high: network + filesystem write, or secrets with network
+ * - high: network + filesystem write, or secrets with network, OR
+ *         a require-type manifest with no capabilities declared (defense-in-depth
+ *         against bypassing readManifest's parse-time validation; see the
+ *         REQUIRES_CAPABILITIES docstring at module top for the exempt-set
+ *         rationale, which is a policy carve-out, not a proven property).
  * - medium: network access, or secrets, or unrestricted bash
- * - low: filesystem only, or restricted bash
+ * - low: filesystem only, or restricted bash, or an exempt type (per
+ *        ecosystem policy in REQUIRES_CAPABILITIES — does not assert the
+ *        package is harmless, only that capabilities are not the gating
+ *        signal for this type).
  */
 export function assessRisk(manifest: ArcManifest): RiskLevel {
+  // Defense-in-depth: readManifest rejects require-type manifests with no
+  // capabilities at parse time (#87), but assessRisk should not silently
+  // fail-trust if a manifest ever reaches it in that state (constructed in
+  // code, future validation skip, etc.). Exempt types fall through.
+  if (
+    !manifest.capabilities &&
+    REQUIRES_CAPABILITIES.has(manifest.type)
+  ) {
+    return "high";
+  }
   const caps = manifest.capabilities ?? {};
   if (!manifest.capabilities) return "low";
   const hasNetwork = (caps.network?.length ?? 0) > 0;
@@ -661,11 +708,25 @@ export function assessRisk(manifest: ArcManifest): RiskLevel {
 
 /**
  * Format capabilities for display with risk coloring.
+ *
+ * For require-type manifests with no capabilities, surfaces an explicit
+ * red-flag line so the operator sees the gap instead of an empty list
+ * visually identical to a real zero-capability declaration. Silent for
+ * exempt types — that silence reflects ecosystem policy (the type does not
+ * gate trust through capabilities), not a claim that the package is harmless.
+ * See REQUIRES_CAPABILITIES at module top for the per-type rationale.
  */
 export function formatCapabilities(manifest: ArcManifest): string[] {
   const lines: string[] = [];
-  const caps = manifest.capabilities ?? {};
-  if (!manifest.capabilities) return lines;
+  if (!manifest.capabilities) {
+    if (REQUIRES_CAPABILITIES.has(manifest.type)) {
+      lines.push(
+        "  🔴 NO CAPABILITY DECLARATION — package's reach is undeclared; operator cannot verify what it will read, write, or execute",
+      );
+    }
+    return lines;
+  }
+  const caps = manifest.capabilities;
 
   if (caps.filesystem?.read?.length) {
     for (const p of caps.filesystem.read) {
