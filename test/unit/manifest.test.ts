@@ -162,10 +162,12 @@ author:
     // Lists the exempt types so a publisher can decide if they qualify.
     expect(msg).toContain("component");
     expect(msg).toContain("rules");
-    // Required-type list must NOT advertise "action" — it's not a member of
-    // the ArcManifest.type union, and recommending it would send users into
-    // a different validation failure later.
-    expect(msg).not.toContain("action");
+    // Required-type list reflects REQUIRES_CAPABILITIES (src/lib/manifest.ts
+    // module-top constant) — skill, tool, prompt, pipeline, action. The prior
+    // assertion that "action" must not appear was protecting a stale error
+    // message that listed a non-existent "system" type; "action" is in the
+    // ArcManifest.type union (src/types.ts) and in REQUIRES_CAPABILITIES.
+    expect(msg).toContain("action");
     // Includes a copyable canonical block.
     expect(msg).toContain("filesystem:");
     expect(msg).toContain("network:");
@@ -411,99 +413,73 @@ describe("formatCapabilities", () => {
 });
 
 // Issue #240 / SF-003 — fail-secure on missing capabilities for require-types.
-// readManifest enforces capabilities-required at parse time (#87) for
-// skill/tool/prompt/pipeline/action, but assessRisk + formatCapabilities are
-// defense-in-depth: a manifest constructed in code or via a future validation-
-// skip path should not silently fail-trust. Exempt types stay exempt
-// (agent uses guardrails; component/rules/library have no executable surface).
+// readManifest enforces capabilities-required at parse time (#87) for the
+// REQUIRES_CAPABILITIES set (skill/tool/prompt/pipeline/action). assessRisk
+// + formatCapabilities are defense-in-depth: a manifest constructed in code
+// or via a future validation-skip path should not silently fail-trust.
+// Exempt types (agent/component/rules/library/process) stay exempt as a
+// matter of ecosystem policy in readManifest, not a proven property — see
+// the REQUIRES_CAPABILITIES docstring at the top of src/lib/manifest.ts.
+const noCaps = (type: string): ArcManifest => ({
+  name: "Test",
+  version: "1.0.0",
+  type: type as ArcManifest["type"],
+  author: { name: "test", github: "test" },
+  // capabilities deliberately undefined
+});
+
+// Typed as `string[]` because the ArcManifest.type union in src/types.ts
+// excludes "action" (present in ArtifactType, the broader union — pre-existing
+// ecosystem divergence, out of scope for SF-003). Each entry is cast inside
+// noCaps() at the call site.
+const REQUIRE_TYPES: string[] = [
+  "skill",
+  "tool",
+  "prompt",
+  "pipeline",
+  "action",
+];
+
+const EXEMPT_TYPES: string[] = [
+  "agent",
+  "component",
+  "rules",
+  "library",
+];
+
 describe("assessRisk — fail-secure on missing capabilities (#240)", () => {
-  const noCaps = (type: ArcManifest["type"]): ArcManifest => ({
-    name: "Test",
-    version: "1.0.0",
-    type,
-    author: { name: "test", github: "test" },
-    // capabilities deliberately undefined
-  });
+  test.each(REQUIRE_TYPES)(
+    "require-type %s without capabilities → high",
+    (type) => {
+      expect(assessRisk(noCaps(type))).toBe("high");
+    },
+  );
 
-  test("require-type skill without capabilities → high", () => {
-    expect(assessRisk(noCaps("skill"))).toBe("high");
-  });
-
-  test("require-type tool without capabilities → high", () => {
-    expect(assessRisk(noCaps("tool"))).toBe("high");
-  });
-
-  test("require-type prompt without capabilities → high", () => {
-    expect(assessRisk(noCaps("prompt"))).toBe("high");
-  });
-
-  test("require-type pipeline without capabilities → high", () => {
-    expect(assessRisk(noCaps("pipeline"))).toBe("high");
-  });
-
-  test("require-type action without capabilities → high", () => {
-    expect(assessRisk(noCaps("action"))).toBe("high");
-  });
-
-  test("exempt type agent without capabilities → low (uses guardrails)", () => {
-    expect(assessRisk(noCaps("agent"))).toBe("low");
-  });
-
-  test("exempt type component without capabilities → low (declarative)", () => {
-    expect(assessRisk(noCaps("component"))).toBe("low");
-  });
-
-  test("exempt type rules without capabilities → low (declarative)", () => {
-    expect(assessRisk(noCaps("rules"))).toBe("low");
-  });
-
-  test("exempt type library without capabilities → low (validated separately)", () => {
-    expect(assessRisk(noCaps("library"))).toBe("low");
-  });
+  test.each(EXEMPT_TYPES)(
+    "exempt type %s without capabilities → low",
+    (type) => {
+      expect(assessRisk(noCaps(type))).toBe("low");
+    },
+  );
 });
 
 describe("formatCapabilities — visible signal on missing capabilities (#240)", () => {
-  const noCaps = (type: ArcManifest["type"]): ArcManifest => ({
-    name: "Test",
-    version: "1.0.0",
-    type,
-    author: { name: "test", github: "test" },
-  });
+  test.each(REQUIRE_TYPES)(
+    "require-type %s without capabilities → red-flag line",
+    (type) => {
+      const lines = formatCapabilities(noCaps(type));
+      expect(lines.length).toBe(1);
+      expect(lines[0]).toContain("🔴 NO CAPABILITY DECLARATION");
+      expect(lines[0]).toContain("reach is undeclared");
+    },
+  );
 
-  test("require-type skill without capabilities → red-flag line", () => {
-    const lines = formatCapabilities(noCaps("skill"));
-    expect(lines.length).toBe(1);
-    expect(lines[0]).toContain("🔴 NO CAPABILITY DECLARATION");
-    expect(lines[0]).toContain("full env exposed");
-  });
-
-  test("require-type tool without capabilities → red-flag line", () => {
-    const lines = formatCapabilities(noCaps("tool"));
-    expect(lines.length).toBe(1);
-    expect(lines[0]).toContain("🔴 NO CAPABILITY DECLARATION");
-  });
-
-  test("require-type pipeline without capabilities → red-flag line", () => {
-    const lines = formatCapabilities(noCaps("pipeline"));
-    expect(lines.length).toBe(1);
-    expect(lines[0]).toContain("🔴 NO CAPABILITY DECLARATION");
-  });
-
-  test("exempt type agent without capabilities → silent (empty array)", () => {
-    expect(formatCapabilities(noCaps("agent"))).toEqual([]);
-  });
-
-  test("exempt type component without capabilities → silent (empty array)", () => {
-    expect(formatCapabilities(noCaps("component"))).toEqual([]);
-  });
-
-  test("exempt type rules without capabilities → silent (empty array)", () => {
-    expect(formatCapabilities(noCaps("rules"))).toEqual([]);
-  });
-
-  test("exempt type library without capabilities → silent (empty array)", () => {
-    expect(formatCapabilities(noCaps("library"))).toEqual([]);
-  });
+  test.each(EXEMPT_TYPES)(
+    "exempt type %s without capabilities → silent (empty array)",
+    (type) => {
+      expect(formatCapabilities(noCaps(type))).toEqual([]);
+    },
+  );
 });
 
 // Regression tests for https://github.com/the-metafactory/arc/issues/79
