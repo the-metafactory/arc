@@ -24,6 +24,16 @@ export const ARC_NATS_SCHEMA = "arc.nats.v1" as const;
 export const ARC_NATS_FEDERATION_SCHEMA = "arc.nats.federation.v1" as const;
 
 /**
+ * Schema string for operator-topology commands (init-operator, add-account).
+ *
+ * A separate schema namespace (arc#252) keeps the sovereign-operator primitives
+ * cleanly separated from the user-management (`arc.nats.v1`) and federation
+ * (`arc.nats.federation.v1`) surfaces, so consumers that guard on a specific
+ * `schema` are unaffected when these commands evolve.
+ */
+export const ARC_NATS_OPERATOR_SCHEMA = "arc.nats.operator.v1" as const;
+
+/**
  * Closed set of error codes emitted by `arc nats --json`. Cortex (and any
  * other consumer) can branch on these without parsing human-readable text.
  *
@@ -75,6 +85,11 @@ export interface JsonFederationOkBase {
   ok: true;
 }
 
+export interface JsonOperatorOkBase {
+  schema: typeof ARC_NATS_OPERATOR_SCHEMA;
+  ok: true;
+}
+
 export interface JsonError {
   schema: typeof ARC_NATS_SCHEMA;
   ok: false;
@@ -83,6 +98,12 @@ export interface JsonError {
 
 export interface JsonFederationError {
   schema: typeof ARC_NATS_FEDERATION_SCHEMA;
+  ok: false;
+  error: ArcNatsError;
+}
+
+export interface JsonOperatorError {
+  schema: typeof ARC_NATS_OPERATOR_SCHEMA;
   ok: false;
   error: ArcNatsError;
 }
@@ -190,6 +211,46 @@ export interface ProvisionJson extends JsonOkBase {
 }
 
 /**
+ * `arc nats init-operator` result (schema: arc.nats.operator.v1).
+ *
+ * `created` distinguishes a first-time create from an idempotent no-op:
+ *   - `created: true`  → `nsc add operator` ran (fresh create, or `--force` recreate).
+ *   - `created: false` → the operator already existed and was left untouched.
+ *
+ * `seedPath` is the nsc keystore path of the operator identity seed (mode 0o600,
+ * managed by nsc). `null` when the seed file could not be located on disk
+ * (e.g. a non-default keystore layout) — the operator was still created.
+ */
+export interface InitOperatorJson extends JsonOperatorOkBase {
+  operator: string;
+  /** O-prefixed operator NKey public key. */
+  pubKey: string;
+  /** True iff `nsc add operator` ran this invocation. */
+  created: boolean;
+  /** True iff the operator already existed before this invocation. */
+  alreadyExisted: boolean;
+  /** Keystore path of the operator seed (mode 0o600), or null if not located. */
+  seedPath: string | null;
+}
+
+/**
+ * `arc nats add-account` result (schema: arc.nats.operator.v1).
+ *
+ * Idempotent: `created` is `false` on a re-run for an account that already
+ * exists. Used for BOTH the federation account and a per-stack agents account
+ * (ADR-0012 isolation), so it is callable repeatedly with different names.
+ */
+export interface AddAccountJson extends JsonOperatorOkBase {
+  account: string;
+  /** A-prefixed account NKey public key. */
+  pubKey: string;
+  /** True iff `nsc add account` ran this invocation. */
+  created: boolean;
+  /** True iff the account already existed before this invocation. */
+  alreadyExisted: boolean;
+}
+
+/**
  * Emit a single line of JSON to stdout and return. Caller is responsible for
  * setting the process exit code (0 for ok, 1 for !ok).
  *
@@ -204,8 +265,11 @@ export function emitJson(
     | SetupOperatorJson
     | ProvisionJson
     | AddFederationExportJson
+    | InitOperatorJson
+    | AddAccountJson
     | JsonError
-    | JsonFederationError,
+    | JsonFederationError
+    | JsonOperatorError,
 ): void {
   process.stdout.write(JSON.stringify(payload) + "\n");
 }

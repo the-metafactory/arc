@@ -48,11 +48,12 @@ import {
 import type { ArcManifest, CatalogEntry, ArtifactType, PackageTier, RegistrySource, SourceType } from "./types.js";
 import { login } from "./commands/login.js";
 import { logout } from "./commands/logout.js";
-import { addBot, reissueBot, listBots, removeBot, setupOperator, addFederationExport } from "./commands/nats.js";
+import { addBot, reissueBot, listBots, removeBot, setupOperator, addFederationExport, initOperator, addAccount } from "./commands/nats.js";
 import { provisionStreams, provisionConsumer } from "./commands/jetstream.js";
 import {
   ARC_NATS_SCHEMA,
   ARC_NATS_FEDERATION_SCHEMA,
+  ARC_NATS_OPERATOR_SCHEMA,
   emitJson,
   classifyError,
   type AddBotJson,
@@ -61,6 +62,8 @@ import {
   type SetupOperatorJson,
   type ProvisionJson,
   type AddFederationExportJson,
+  type InitOperatorJson,
+  type AddAccountJson,
 } from "./lib/json-response.js";
 import { generateIdentity, exportPrincipals, importPrincipals, listPrincipals } from "./commands/identity.js";
 import { bundle, formatBundle } from "./commands/bundle.js";
@@ -1855,6 +1858,71 @@ nats
       return;
     }
     addFederationExport(opts);
+  });
+
+// ── arc#252: sovereign-operator topology (init-operator + add-account) ────────
+//
+// The two primitives `cortex network provision <stack>` wraps (alongside add-bot
+// + add-federation-export) so a principal can stand up their OWN nsc operator and
+// mint their own accounts — no raw nsc. Each is idempotent and supports --json
+// (schema arc.nats.operator.v1, a separate namespace from arc.nats.v1 /
+// arc.nats.federation.v1 so existing consumers are unaffected).
+
+nats
+  .command("init-operator")
+  .description("Create the principal's nsc operator if absent (idempotent; arc#252)")
+  .option("--name <operator>", "Operator name to create (default: current nsc operator)")
+  .option("--force", "Recreate even if it exists — DESTRUCTIVE: regenerates the operator identity key")
+  .option("--json", "Emit a single line of stable JSON (schema: arc.nats.operator.v1)")
+  .action((opts: { name?: string; force?: boolean; json?: boolean }) => {
+    if (opts.json) {
+      try {
+        const r = initOperator({ ...opts, json: true });
+        const payload: InitOperatorJson = {
+          schema: ARC_NATS_OPERATOR_SCHEMA,
+          ok: true,
+          operator: r.operator,
+          pubKey: r.pubKey,
+          created: r.created,
+          alreadyExisted: r.alreadyExisted,
+          seedPath: r.seedPath,
+        };
+        emitJson(payload);
+        process.exit(0);
+      } catch (err) {
+        emitJson({ schema: ARC_NATS_OPERATOR_SCHEMA, ok: false, error: classifyError(err) });
+        process.exit(1);
+      }
+      return;
+    }
+    initOperator(opts);
+  });
+
+nats
+  .command("add-account <name>")
+  .description("Create an account under the current nsc operator if absent (idempotent; arc#252)")
+  .option("--json", "Emit a single line of stable JSON (schema: arc.nats.operator.v1)")
+  .action((name: string, opts: { json?: boolean }) => {
+    if (opts.json) {
+      try {
+        const r = addAccount(name, { json: true });
+        const payload: AddAccountJson = {
+          schema: ARC_NATS_OPERATOR_SCHEMA,
+          ok: true,
+          account: r.account,
+          pubKey: r.pubKey,
+          created: r.created,
+          alreadyExisted: r.alreadyExisted,
+        };
+        emitJson(payload);
+        process.exit(0);
+      } catch (err) {
+        emitJson({ schema: ARC_NATS_OPERATOR_SCHEMA, ok: false, error: classifyError(err) });
+        process.exit(1);
+      }
+      return;
+    }
+    addAccount(name, opts);
   });
 
 // ── Identity management commands ──────────────────────────

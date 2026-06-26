@@ -978,3 +978,249 @@ export function addFederationExport(opts: AddFederationExportOptions): AddFedera
     pushResult,
   };
 }
+
+// ── arc#252: sovereign-operator topology (init-operator + add-account) ────────
+//
+// The two primitives `cortex network provision <stack>` (cortex#1139, Model-B
+// sovereign federation) wraps alongside add-bot + add-federation-export to give
+// a principal a one-command "stand up my stack to federate" flow. Each principal
+// runs their OWN nsc operator and mints their own accounts (cortex ADR-0013);
+// arc owns the nsc boundary, cortex orchestrates but never runs nsc itself.
+
+// Operator names in the ecosystem are like "OP_ANDREAS". Permit a slightly wider
+// charset than account names (which are strict UPPER_SNAKE) but still reject the
+// empty string and flag-injection values (e.g. "--all", "--force") that nsc would
+// otherwise treat as option names.
+const OPERATOR_NAME_RE = /^[A-Za-z][A-Za-z0-9_-]*$/;
+
+function validateOperatorName(name: string): void {
+  if (!name || !OPERATOR_NAME_RE.test(name)) {
+    throw new ArcNatsCommandError(
+      "VALIDATION_ERROR",
+      `Invalid operator name: "${name}" — must match [A-Za-z][A-Za-z0-9_-]* and ` +
+      `not be empty or flag-style (e.g. "--all").`,
+    );
+  }
+}
+
+/**
+ * Resolve the current nsc operator from `nsc env` (table written to stderr).
+ * Returns the operator name, or null when no operator is set / env is unreadable.
+ */
+function detectCurrentOperator(): string | null {
+  let output: string;
+  try {
+    output = nscWithStderr(["env"]);
+  } catch {
+    // env unreadable (no nsc store yet) — caller falls back to requiring --name.
+    return null;
+  }
+  const match = /Current Operator\s+\|[^|]*\|\s+(\S+)/.exec(output);
+  return match ? match[1] : null;
+}
+
+/**
+ * Look up the public key of an operator or account via `nsc describe <kind> -F sub`.
+ *
+ * Returns the parsed NKey pubkey if the entity exists, or `null` if `nsc describe`
+ * fails (the entity does not exist, or nsc errored). Callers on the create path
+ * treat `null` as "absent" and let the subsequent `nsc add` surface any real error.
+ *
+ * `-F sub` emits a JSON string literal (e.g. `"OD4D…"`); we JSON-parse it and fall
+ * back to trimming the surrounding quotes if the output is not valid JSON.
+ */
+function tryGetPubKey(kind: "operator" | "account", name: string): string | null {
+  let raw: string;
+  try {
+    raw = nsc(["describe", kind, "-n", name, "-F", "sub"]);
+  } catch {
+    // describe non-zero → entity absent. The catch is the existence signal.
+    return null;
+  }
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed === "string") return parsed.trim();
+  } catch {
+    // Non-JSON output (older nsc): fall through to quote-trim below.
+  }
+  return raw.replace(/^"|"$/g, "").trim();
+}
+
+/**
+ * Resolve the nsc keystore base directory, mirroring `nsc env` precedence:
+ *   $NKEYS_PATH → $XDG_DATA_HOME/nats/nsc/keys → ~/.local/share/nats/nsc/keys.
+ */
+function nscKeystoreBase(): string {
+  const explicit = process.env.NKEYS_PATH;
+  if (explicit && explicit.length > 0) return explicit;
+  const xdg = process.env.XDG_DATA_HOME;
+  if (xdg && xdg.length > 0) return join(xdg, "nats", "nsc", "keys");
+  return join(homedir(), ".local", "share", "nats", "nsc", "keys");
+}
+
+/**
+ * Compute the nsc keystore path of an operator seed for a given operator pubkey.
+ * Keystore layout: `<base>/keys/O/<two chars after the 'O' prefix>/<pubkey>.nk`.
+ */
+function operatorSeedPath(pubKey: string): string {
+  const shard = pubKey.slice(1, 3);
+  return join(nscKeystoreBase(), "keys", "O", shard, `${pubKey}.nk`);
+}
+
+/**
+ * Defensively re-assert mode 0o600 on the operator keystore seed.
+ *
+ * nsc already writes keystore seeds owner-only, but we re-assert it (mirrors the
+ * identity-provision.ts seed-perm hardening) and report the path. Returns the
+ * seed path if the file was found (and tightened), else null.
+ */
+function ensureOperatorSeedPermissions(pubKey: string): string | null {
+  if (!pubKey) return null;
+  const seedPath = operatorSeedPath(pubKey);
+  if (!existsSync(seedPath)) return null;
+  chmodSync(seedPath, 0o600);
+  return seedPath;
+}
+
+export interface InitOperatorOptions {
+  /** Operator name to create. When omitted, the current nsc operator is used. */
+  name?: string;
+  /** Recreate the operator even if it already exists (destructive — regenerates the identity key). */
+  force?: boolean;
+  /** When true: suppress human-readable stdout; throw ArcNatsCommandError on failure. */
+  json?: boolean;
+}
+
+export interface InitOperatorResult {
+  operator: string;
+  pubKey: string;
+  created: boolean;
+  alreadyExisted: boolean;
+  seedPath: string | null;
+}
+
+/**
+ * Create the principal's nsc operator if absent (arc#252).
+ *
+ * Idempotent: a no-op when the operator already exists (default never clobbers).
+ * `--force` recreates an existing operator via `nsc add operator --force` (this
+ * regenerates the operator identity key and orphans everything signed under the
+ * old one — an explicit, destructive opt-in). The operator seed is managed by
+ * nsc in its keystore at mode 0o600; we re-assert that and surface its path.
+ */
+export function initOperator(opts: InitOperatorOptions): InitOperatorResult {
+  const json = opts.json === true;
+  const force = opts.force === true;
+  ensureNscInstalled(json);
+
+  // Resolve the operator name: an explicit --name (validated), else the current
+  // operator from `nsc env`. With neither, there is nothing to create idempotently.
+  let name: string;
+  if (opts.name && opts.name.length > 0) {
+    validateOperatorName(opts.name);
+    name = opts.name;
+  } else {
+    const current = detectCurrentOperator();
+    if (!current) {
+      throw new ArcNatsCommandError(
+        "VALIDATION_ERROR",
+        "no operator name given and no current nsc operator to infer from — pass --name <operator>.",
+      );
+    }
+    validateOperatorName(current);
+    name = current;
+  }
+
+  const existingPubKey = tryGetPubKey("operator", name);
+  const alreadyExisted = existingPubKey !== null;
+
+  let created = false;
+  let pubKey = existingPubKey ?? "";
+
+  if (!alreadyExisted || force) {
+    const args = ["add", "operator", "-n", name];
+    if (force) args.push("--force");
+    nsc(args);
+    created = true;
+    const newPubKey = tryGetPubKey("operator", name);
+    if (newPubKey === null) {
+      throw new ArcNatsCommandError(
+        "NSC_COMMAND_FAILED",
+        `operator "${name}" was created but its public key could not be resolved via nsc describe.`,
+      );
+    }
+    pubKey = newPubKey;
+  }
+
+  // Re-assert 0o600 on the keystore seed (nsc already writes it owner-only).
+  const seedPath = ensureOperatorSeedPermissions(pubKey);
+
+  if (!json) {
+    if (created) {
+      console.log(`${alreadyExisted ? "Recreated" : "Created"} nsc operator: ${name}`);
+    } else {
+      console.log(`nsc operator already exists: ${name} (no-op)`);
+    }
+    console.log(`  pubkey: ${pubKey}`);
+    if (seedPath) console.log(`  seed: ${seedPath} (mode 600)`);
+  }
+
+  return { operator: name, pubKey, created, alreadyExisted, seedPath };
+}
+
+export interface AddAccountOptions {
+  /** When true: suppress human-readable stdout; throw ArcNatsCommandError on failure. */
+  json?: boolean;
+}
+
+export interface AddAccountResult {
+  account: string;
+  pubKey: string;
+  created: boolean;
+  alreadyExisted: boolean;
+}
+
+/**
+ * Create an account `<name>` under the current nsc operator if absent (arc#252).
+ *
+ * Idempotent: a no-op when the account already exists, so it is safe to call
+ * repeatedly with different names — cortex uses it for BOTH the federation
+ * account and a per-stack agents account (ADR-0012 isolation, one agents account
+ * per stack). Operates on the current operator context (set by `init-operator`
+ * or `nsc env`), mirroring the existing add-bot "current context" assumption.
+ */
+export function addAccount(name: string, opts: AddAccountOptions): AddAccountResult {
+  const json = opts.json === true;
+  ensureNscInstalled(json);
+
+  // Reuse the strict UPPER_SNAKE account-name guard — also rejects empty strings
+  // and flag-injection values before any nsc invocation.
+  validateAccountName(name);
+
+  const existingPubKey = tryGetPubKey("account", name);
+  const alreadyExisted = existingPubKey !== null;
+
+  let created = false;
+  let pubKey = existingPubKey ?? "";
+
+  if (!alreadyExisted) {
+    nsc(["add", "account", "-n", name]);
+    created = true;
+    const newPubKey = tryGetPubKey("account", name);
+    if (newPubKey === null) {
+      throw new ArcNatsCommandError(
+        "NSC_COMMAND_FAILED",
+        `account "${name}" was created but its public key could not be resolved via nsc describe.`,
+      );
+    }
+    pubKey = newPubKey;
+  }
+
+  if (!json) {
+    if (created) console.log(`Created nsc account: ${name}`);
+    else console.log(`nsc account already exists: ${name} (no-op)`);
+    console.log(`  pubkey: ${pubKey}`);
+  }
+
+  return { account: name, pubKey, created, alreadyExisted };
+}

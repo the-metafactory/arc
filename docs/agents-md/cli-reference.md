@@ -79,3 +79,22 @@ arc init <name> --type agent  # Scaffold agent
 arc init <name> --type prompt # Scaffold prompt
 arc init <name> --type pipeline # Scaffold pipeline
 ```
+
+### NATS / NSC
+
+```bash
+arc nats init-operator --name <op>      # Create the principal's nsc operator if absent (idempotent)
+arc nats init-operator --name <op> --force # Recreate an existing operator (DESTRUCTIVE: regenerates identity key)
+arc nats add-account <NAME>             # Create an account under the current operator if absent (idempotent)
+arc nats add-bot <name>                 # Issue a per-bot NATS user with credentials
+arc nats reissue-bot <name>             # Revoke and re-issue a bot user's credentials
+arc nats remove-bot <name>              # Revoke a bot user (optionally delete creds)
+arc nats list-bots                      # List bot users under the current account
+arc nats setup-operator <account> --bots <list> # Provision multiple bots in one shot
+arc nats add-federation-export --from-account <A> --to-account <B> # Wire federated.> cross-account export/import
+```
+
+All `arc nats` subcommands accept `--json` for a stable machine-readable envelope.
+`init-operator` + `add-account` emit schema `arc.nats.operator.v1`; user-management
+commands emit `arc.nats.v1`; `add-federation-export` emits `arc.nats.federation.v1`.
+See [`docs/integrations/cortex-creds.md`](../integrations/cortex-creds.md) for the contract.
