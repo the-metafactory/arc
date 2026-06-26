@@ -153,6 +153,70 @@ Consumers MUST handle the documented codes by name; for unknown codes, fall back
 - Exit code is `0` only if `summary.failed === 0`. Mixed outcomes exit `1` so a naive `if !arc nats setup-operator ...` shell check still catches partial failure.
 - Each successful entry carries `credsPath` and `pubKey`; failed entries carry `error.code` + `error.message` from the same taxonomy as above.
 
+### Operator-topology commands (schema `arc.nats.operator.v1`)
+
+`arc nats init-operator` + `arc nats add-account` (arc#252) are the
+sovereign-operator primitives `cortex network provision <stack>` (cortex#1139,
+Model-B sovereign federation) wraps alongside `add-bot` + `add-federation-export`.
+Each principal runs their OWN nsc operator and mints their own accounts (cortex
+ADR-0013); arc owns the nsc boundary, cortex orchestrates but never runs nsc.
+
+They emit a **separate** schema namespace — `arc.nats.operator.v1` — so consumers
+that guard on `arc.nats.v1` are unaffected. Same exit-code + error-envelope rules
+as above; error codes are drawn from the same taxonomy (`NSC_NOT_INSTALLED`,
+`NSC_COMMAND_FAILED`, `VALIDATION_ERROR`).
+
+#### `arc nats init-operator --json`
+
+**Flags:** `--name <operator>` (default: current nsc operator), `--force`, `--json`
+
+Idempotent: a no-op when the operator already exists (`created: false`). `--force`
+recreates an existing operator (`nsc add operator --force`) — **destructive**: it
+regenerates the operator identity key and orphans everything signed under the old
+one. The operator seed is managed by nsc in its keystore at mode `0o600`.
+
+**Success:**
+
+```json
+{
+  "schema": "arc.nats.operator.v1",
+  "ok": true,
+  "operator": "OP_ANDREAS",
+  "pubKey": "OAKONKIYJN3VVHOTJD3LZDEZOE3PRDCPFJZBXHWF2WJT6LHDYPXFGLUL",
+  "created": true,
+  "alreadyExisted": false,
+  "seedPath": "/Users/.../.local/share/nats/nsc/keys/keys/O/AK/OAKON....nk"
+}
+```
+
+- `created` — `true` iff `nsc add operator` ran this invocation (fresh create or `--force` recreate).
+- `alreadyExisted` — `true` iff the operator existed before this invocation.
+- `seedPath` — keystore path of the operator seed (mode `0o600`), or `null` if the file could not be located (non-default keystore layout). The operator is still created either way.
+
+#### `arc nats add-account <name> --json`
+
+**Flags:** `--json`. Account names are strict UPPER_SNAKE (`[A-Z][A-Z0-9_]+`).
+
+Operates on the **current operator** context (set by `init-operator` or `nsc env`).
+Idempotent, so it is safe to call repeatedly with different names — cortex uses it
+for BOTH the federation account and a per-stack agents account (ADR-0012 isolation).
+
+**Success:**
+
+```json
+{
+  "schema": "arc.nats.operator.v1",
+  "ok": true,
+  "account": "FEDERATION",
+  "pubKey": "AAPH4GU2MPJ2LH44ZWMN3UL7J73JDZJNYRV26G7AL2NKY76FRWHV6D36",
+  "created": true,
+  "alreadyExisted": false
+}
+```
+
+- `created` — `true` iff `nsc add account` ran this invocation.
+- `alreadyExisted` — `true` iff the account existed before this invocation.
+
 ## Path resolution
 
 By default `arc nats add-bot` writes the `.creds` file to:
