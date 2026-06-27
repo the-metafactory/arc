@@ -33,6 +33,7 @@ import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import {
   initOperator,
   addAccount,
+  exportAccount,
   __setNscRunnerForTests,
   __setNscInstallCheckForTests,
   type NscResult,
@@ -444,5 +445,66 @@ describe("addAccount — nsc plumbing", () => {
     }
     expect(err).toBeInstanceOf(ArcNatsCommandError);
     expect((err as ArcNatsCommandError).code).toBe("NSC_COMMAND_FAILED");
+  });
+});
+
+// ── export-account: read account JWT + seed path (cortex#1257 make-live) ───────
+
+describe("exportAccount — read-only JWT + seed export", () => {
+  const FAKE_JWT = "eyJ0eXAiOiJKV1QiLCJhbGciOiJlZDI1NTE5LW5rZXkifQ.eyJzdWIiOiJBQUZBS0UifQ.sig";
+
+  test("returns the account pubkey + raw JWT (no nsc mutation)", () => {
+    const calls: string[] = [];
+    __setNscRunnerForTests(buildRunner({
+      "describe account": (args) => {
+        calls.push(args.join(" "));
+        // tryGetPubKey uses `-F sub`; the JWT export uses `--raw`.
+        if (args.includes("--raw")) return ok(`${FAKE_JWT}\n`);
+        return subField(ACCT_PUBKEY);
+      },
+    }));
+
+    const result = exportAccount(ACCT_AGENTS, { json: true });
+
+    expect(result.account).toBe(ACCT_AGENTS);
+    expect(result.pubKey).toBe(ACCT_PUBKEY);
+    expect(result.jwt).toBe(FAKE_JWT);
+    // Read-only: only `describe` was ever invoked — never `add` / `edit` / `delete`.
+    expect(calls.every((c) => c.startsWith("describe"))).toBe(true);
+  });
+
+  test("ACCOUNT_NOT_FOUND when the account does not exist", () => {
+    __setNscRunnerForTests(buildRunner({
+      "describe account": () => fail("account not found"),
+    }));
+
+    let err: unknown;
+    try {
+      exportAccount("ANDREAS_NOPE", { json: true });
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(ArcNatsCommandError);
+    expect((err as ArcNatsCommandError).code).toBe("ACCOUNT_NOT_FOUND");
+  });
+
+  test("NSC_COMMAND_FAILED when describe --raw returns a non-JWT", () => {
+    __setNscRunnerForTests(buildRunner({
+      "describe account": (args) => (args.includes("--raw") ? ok("not-a-jwt") : subField(ACCT_PUBKEY)),
+    }));
+
+    let err: unknown;
+    try {
+      exportAccount(ACCT_AGENTS, { json: true });
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(ArcNatsCommandError);
+    expect((err as ArcNatsCommandError).code).toBe("NSC_COMMAND_FAILED");
+  });
+
+  test("account-name validation rejects flag-injection", () => {
+    __setNscRunnerForTests(buildRunner({}));
+    expect(() => exportAccount("--all", { json: true })).toThrow(ArcNatsCommandError);
   });
 });

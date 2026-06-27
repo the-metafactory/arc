@@ -1304,3 +1304,73 @@ export function addAccount(name: string, opts: AddAccountOptions): AddAccountRes
 
   return { account: name, pubKey, created, alreadyExisted };
 }
+
+/**
+ * Compute the nsc keystore path of an ACCOUNT identity seed for a given account
+ * pubkey. Same keystore layout as {@link operatorSeedPath} but sharded under
+ * `A/` (accounts) instead of `O/` (operators):
+ * `<base>/keys/A/<two chars after the 'A' prefix>/<pubkey>.nk`.
+ */
+function accountSeedPath(pubKey: string): string {
+  const shard = pubKey.slice(1, 3);
+  return join(nscKeystoreBase(), "keys", "A", shard, `${pubKey}.nk`);
+}
+
+export interface ExportAccountOptions {
+  /** When true: suppress human-readable stdout; throw ArcNatsCommandError on failure. */
+  json?: boolean;
+}
+
+export interface ExportAccountResult {
+  account: string;
+  pubKey: string;
+  jwt: string;
+  seedPath: string | null;
+}
+
+/**
+ * Export an existing account's JWT + identity seed path (cortex#1257 / make-live).
+ *
+ * READ-ONLY: a pure `nsc describe account <name> --raw` (JWT) + keystore-path
+ * derivation. Mutates nothing. `cortex network make-live` shells this to obtain
+ * the account JWT it appends to the nats-server `resolver_preload` (MEMORY
+ * resolver) — keeping cortex off the nsc boundary (ADR-0013 invariant).
+ *
+ * Fails with ACCOUNT_NOT_FOUND when the account does not exist under the current
+ * operator (so make-live surfaces "run `cortex network provision` first").
+ */
+export function exportAccount(name: string, opts: ExportAccountOptions): ExportAccountResult {
+  const json = opts.json === true;
+  ensureNscInstalled(json);
+  validateAccountName(name);
+
+  const pubKey = tryGetPubKey("account", name);
+  if (pubKey === null) {
+    throw new ArcNatsCommandError(
+      "ACCOUNT_NOT_FOUND",
+      `account "${name}" not found under the current nsc operator. ` +
+      `Run \`cortex network provision <stack> --apply\` to mint it first.`,
+    );
+  }
+
+  // The raw account JWT (`eyJ…`) — exactly what `resolver_preload` needs.
+  const jwt = nsc(["describe", "account", "-n", name, "--raw"]).trim();
+  if (!jwt.startsWith("eyJ")) {
+    throw new ArcNatsCommandError(
+      "NSC_COMMAND_FAILED",
+      `nsc describe account -n ${name} --raw did not return a JWT (got: ${jwt.slice(0, 40)}…).`,
+    );
+  }
+
+  const candidateSeed = accountSeedPath(pubKey);
+  const seedPath = existsSync(candidateSeed) ? candidateSeed : null;
+
+  if (!json) {
+    console.log(`Account: ${name}`);
+    console.log(`  pubkey: ${pubKey}`);
+    console.log(`  jwt: ${jwt.slice(0, 24)}… (${jwt.length} chars)`);
+    if (seedPath) console.log(`  seed: ${seedPath} (mode 600)`);
+  }
+
+  return { account: name, pubKey, jwt, seedPath };
+}

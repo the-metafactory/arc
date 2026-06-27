@@ -48,7 +48,7 @@ import {
 import type { ArcManifest, CatalogEntry, ArtifactType, PackageTier, RegistrySource, SourceType } from "./types.js";
 import { login } from "./commands/login.js";
 import { logout } from "./commands/logout.js";
-import { addBot, reissueBot, listBots, removeBot, setupOperator, addFederationExport, initOperator, addAccount } from "./commands/nats.js";
+import { addBot, reissueBot, listBots, removeBot, setupOperator, addFederationExport, initOperator, addAccount, exportAccount } from "./commands/nats.js";
 import { provisionStreams, provisionConsumer } from "./commands/jetstream.js";
 import {
   ARC_NATS_SCHEMA,
@@ -64,6 +64,7 @@ import {
   type AddFederationExportJson,
   type InitOperatorJson,
   type AddAccountJson,
+  type ExportAccountJson,
 } from "./lib/json-response.js";
 import { generateIdentity, exportPrincipals, importPrincipals, listPrincipals } from "./commands/identity.js";
 import { bundle, formatBundle } from "./commands/bundle.js";
@@ -1923,6 +1924,33 @@ nats
       return;
     }
     addAccount(name, opts);
+  });
+
+nats
+  .command("export-account <name>")
+  .description("Export an account's JWT + identity seed path (read-only; cortex#1257 make-live)")
+  .option("--json", "Emit a single line of stable JSON (schema: arc.nats.operator.v1)")
+  .action((name: string, opts: { json?: boolean }) => {
+    if (opts.json) {
+      try {
+        const r = exportAccount(name, { json: true });
+        const payload: ExportAccountJson = {
+          schema: ARC_NATS_OPERATOR_SCHEMA,
+          ok: true,
+          account: r.account,
+          pubKey: r.pubKey,
+          jwt: r.jwt,
+          seedPath: r.seedPath,
+        };
+        emitJson(payload);
+        process.exit(0);
+      } catch (err) {
+        emitJson({ schema: ARC_NATS_OPERATOR_SCHEMA, ok: false, error: classifyError(err) });
+        process.exit(1);
+      }
+      return;
+    }
+    exportAccount(name, opts);
   });
 
 // ── Identity management commands ──────────────────────────

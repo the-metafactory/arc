@@ -251,6 +251,28 @@ export interface AddAccountJson extends JsonOperatorOkBase {
 }
 
 /**
+ * `arc nats export-account` result (schema: arc.nats.operator.v1).
+ *
+ * Read-only companion to `add-account` (cortex#1257 / make-live). Surfaces the
+ * material `cortex network make-live` needs to land a stack's daemon onto its own
+ * account WITHOUT cortex ever running nsc:
+ *   - `jwt`     — the account JWT, dropped into the nats-server `resolver_preload`
+ *                 (MEMORY resolver) so the server learns the account.
+ *   - `seedPath`— the keystore path of the account's identity seed (SA-prefixed,
+ *                 mode 0o600), for the deferred TrustResolver signing-key rewrite.
+ *                 `null` when the seed file is not on disk (non-default keystore).
+ */
+export interface ExportAccountJson extends JsonOperatorOkBase {
+  account: string;
+  /** A-prefixed account NKey public key. */
+  pubKey: string;
+  /** The account JWT (`eyJ…`) — preload into `resolver_preload`. */
+  jwt: string;
+  /** Keystore path of the account identity seed (mode 0o600), or null if absent. */
+  seedPath: string | null;
+}
+
+/**
  * Emit a single line of JSON to stdout and return. Caller is responsible for
  * setting the process exit code (0 for ok, 1 for !ok).
  *
@@ -267,6 +289,7 @@ export function emitJson(
     | AddFederationExportJson
     | InitOperatorJson
     | AddAccountJson
+    | ExportAccountJson
     | JsonError
     | JsonFederationError
     | JsonOperatorError,
