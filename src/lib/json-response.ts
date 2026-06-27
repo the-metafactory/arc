@@ -45,6 +45,8 @@ export type ArcNatsErrorCode =
   | "NSC_COMMAND_FAILED"    // `nsc <subcommand>` exited non-zero (generic shell-out failure)
   | "USER_NOT_FOUND"        // bot user does not exist under the account
   | "ACCOUNT_NOT_FOUND"     // operator account cannot be detected/resolved
+  | "OPERATOR_NOT_FOUND"    // nsc operator cannot be detected/resolved (export-operator)
+  | "SYSTEM_ACCOUNT_NOT_FOUND" // the operator's SYS account does not exist (export-system)
   | "ALREADY_EXISTS"        // user / creds file already exists (no --force)
   | "PUSH_FAILED"           // server-side revoke push (`nsc push`) failed
   | "REVOKE_FAILED"         // `nsc revocations add-user` failed
@@ -273,6 +275,49 @@ export interface ExportAccountJson extends JsonOperatorOkBase {
 }
 
 /**
+ * `arc nats export-operator` result (schema: arc.nats.operator.v1).
+ *
+ * Read-only sibling of `export-account` (cortex#1265 / server-config bridge).
+ * Surfaces the operator JWT `cortex network provision` populates into
+ * `stack.nats_infra.operator_jwt` so `cortex network join` (and make-live
+ * bootstrap) can render the operator-mode `.conf` WITHOUT cortex ever running
+ * nsc:
+ *   - `jwt`     — the operator JWT, emitted as the `operator:` block.
+ *   - `seedPath`— the keystore path of the operator identity seed (O-prefixed,
+ *                 mode 0o600). `null` when the seed file is not on disk.
+ */
+export interface ExportOperatorJson extends JsonOperatorOkBase {
+  operator: string;
+  /** O-prefixed operator NKey public key. */
+  pubKey: string;
+  /** The operator JWT (`eyJ…`) — emitted as the `operator:` block. */
+  jwt: string;
+  /** Keystore path of the operator seed (mode 0o600), or null if absent. */
+  seedPath: string | null;
+}
+
+/**
+ * `arc nats export-system` result (schema: arc.nats.operator.v1).
+ *
+ * Read-only sibling of `export-account` (cortex#1265 / server-config bridge).
+ * Surfaces the operator's SYS account pubkey + JWT `cortex network provision`
+ * populates into `stack.nats_infra.{system_account, system_account_jwt}` so the
+ * rendered operator-mode `.conf` can set `system_account` + preload its JWT —
+ * still WITHOUT cortex running nsc. The SYS account is OPTIONAL (an operator-mode
+ * bus runs without one), so callers treat SYSTEM_ACCOUNT_NOT_FOUND as a skip.
+ */
+export interface ExportSystemJson extends JsonOperatorOkBase {
+  /** The system-account name (default "SYS"). */
+  account: string;
+  /** A-prefixed account NKey public key. */
+  pubKey: string;
+  /** The SYS account JWT (`eyJ…`) — preload alongside `system_account`. */
+  jwt: string;
+  /** Keystore path of the account identity seed (mode 0o600), or null if absent. */
+  seedPath: string | null;
+}
+
+/**
  * Emit a single line of JSON to stdout and return. Caller is responsible for
  * setting the process exit code (0 for ok, 1 for !ok).
  *
@@ -290,6 +335,8 @@ export function emitJson(
     | InitOperatorJson
     | AddAccountJson
     | ExportAccountJson
+    | ExportOperatorJson
+    | ExportSystemJson
     | JsonError
     | JsonFederationError
     | JsonOperatorError,

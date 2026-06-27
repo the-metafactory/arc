@@ -34,6 +34,8 @@ import {
   initOperator,
   addAccount,
   exportAccount,
+  exportOperator,
+  exportSystem,
   __setNscRunnerForTests,
   __setNscInstallCheckForTests,
   type NscResult,
@@ -506,5 +508,146 @@ describe("exportAccount — read-only JWT + seed export", () => {
   test("account-name validation rejects flag-injection", () => {
     __setNscRunnerForTests(buildRunner({}));
     expect(() => exportAccount("--all", { json: true })).toThrow(ArcNatsCommandError);
+  });
+});
+
+// ── export-operator: read operator JWT + seed path (cortex#1265 server-config) ──
+
+describe("exportOperator — read-only operator JWT + seed export", () => {
+  const FAKE_OP_JWT = "eyJ0eXAiOiJKV1QiLCJhbGciOiJlZDI1NTE5LW5rZXkifQ.eyJzdWIiOiJPQUZBS0UifQ.sig";
+
+  test("returns the operator pubkey + raw JWT (no nsc mutation)", () => {
+    const calls: string[] = [];
+    __setNscRunnerForTests(buildRunner({
+      "describe operator": (args) => {
+        calls.push(args.join(" "));
+        // tryGetPubKey uses `-F sub`; the JWT export uses `--raw`.
+        if (args.includes("--raw")) return ok(`${FAKE_OP_JWT}\n`);
+        return subField(OP_PUBKEY);
+      },
+    }));
+
+    const result = exportOperator({ name: OP_NAME, json: true });
+
+    expect(result.operator).toBe(OP_NAME);
+    expect(result.pubKey).toBe(OP_PUBKEY);
+    expect(result.jwt).toBe(FAKE_OP_JWT);
+    // Read-only: only `describe` was ever invoked — never `add` / `edit` / `delete`.
+    expect(calls.every((c) => c.startsWith("describe"))).toBe(true);
+  });
+
+  test("resolves the operator name from `nsc env` when --name is omitted", () => {
+    __setNscRunnerForTests(buildRunner({
+      "env": () => envOutput(OP_NAME),
+      "describe operator": (args) => (args.includes("--raw") ? ok(`${FAKE_OP_JWT}\n`) : subField(OP_PUBKEY)),
+    }));
+
+    const result = exportOperator({ json: true });
+    expect(result.operator).toBe(OP_NAME);
+    expect(result.jwt).toBe(FAKE_OP_JWT);
+  });
+
+  test("VALIDATION_ERROR when --name omitted and there is no current operator", () => {
+    __setNscRunnerForTests(buildRunner({ "env": () => envOutput(null) }));
+    let err: unknown;
+    try {
+      exportOperator({ json: true });
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(ArcNatsCommandError);
+    expect((err as ArcNatsCommandError).code).toBe("VALIDATION_ERROR");
+  });
+
+  test("OPERATOR_NOT_FOUND when the operator does not exist", () => {
+    __setNscRunnerForTests(buildRunner({
+      "describe operator": () => fail("operator not found"),
+    }));
+    let err: unknown;
+    try {
+      exportOperator({ name: OP_NAME, json: true });
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(ArcNatsCommandError);
+    expect((err as ArcNatsCommandError).code).toBe("OPERATOR_NOT_FOUND");
+  });
+
+  test("NSC_COMMAND_FAILED when describe --raw returns a non-JWT", () => {
+    __setNscRunnerForTests(buildRunner({
+      "describe operator": (args) => (args.includes("--raw") ? ok("not-a-jwt") : subField(OP_PUBKEY)),
+    }));
+    let err: unknown;
+    try {
+      exportOperator({ name: OP_NAME, json: true });
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(ArcNatsCommandError);
+    expect((err as ArcNatsCommandError).code).toBe("NSC_COMMAND_FAILED");
+  });
+
+  test("operator-name validation rejects flag-injection", () => {
+    __setNscRunnerForTests(buildRunner({}));
+    expect(() => exportOperator({ name: "--all", json: true })).toThrow(ArcNatsCommandError);
+  });
+});
+
+// ── export-system: read SYS account JWT + seed path (cortex#1265) ───────────────
+
+describe("exportSystem — read-only SYS account JWT + seed export", () => {
+  const FAKE_SYS_JWT = "eyJ0eXAiOiJKV1QiLCJhbGciOiJlZDI1NTE5LW5rZXkifQ.eyJzdWIiOiJBU1lTIn0.sig";
+  const SYS_PUBKEY = "AS" + "Y".repeat(54);
+
+  test("defaults to the SYS account and returns its pubkey + raw JWT", () => {
+    const describedNames: string[] = [];
+    __setNscRunnerForTests(buildRunner({
+      "describe account": (args) => {
+        describedNames.push(args[args.indexOf("-n") + 1] ?? "");
+        if (args.includes("--raw")) return ok(`${FAKE_SYS_JWT}\n`);
+        return subField(SYS_PUBKEY);
+      },
+    }));
+
+    const result = exportSystem({ json: true });
+
+    expect(result.account).toBe("SYS");
+    expect(result.pubKey).toBe(SYS_PUBKEY);
+    expect(result.jwt).toBe(FAKE_SYS_JWT);
+    // It described the SYS account, never anything else.
+    expect(describedNames.every((n) => n === "SYS")).toBe(true);
+  });
+
+  test("honours an explicit --name override", () => {
+    const describedNames: string[] = [];
+    __setNscRunnerForTests(buildRunner({
+      "describe account": (args) => {
+        describedNames.push(args[args.indexOf("-n") + 1] ?? "");
+        if (args.includes("--raw")) return ok(`${FAKE_SYS_JWT}\n`);
+        return subField(SYS_PUBKEY);
+      },
+    }));
+
+    exportSystem({ name: "SYSTEM", json: true });
+    expect(describedNames.every((n) => n === "SYSTEM")).toBe(true);
+  });
+
+  test("SYSTEM_ACCOUNT_NOT_FOUND when the SYS account does not exist (skip-signal)", () => {
+    __setNscRunnerForTests(buildRunner({
+      "describe account": () => fail("account not found"),
+    }));
+    let err: unknown;
+    try {
+      exportSystem({ json: true });
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(ArcNatsCommandError);
+    expect((err as ArcNatsCommandError).code).toBe("SYSTEM_ACCOUNT_NOT_FOUND");
+  });
+
+  test("account-name validation rejects flag-injection in --name", () => {
+    __setNscRunnerForTests(buildRunner({}));
+    expect(() => exportSystem({ name: "--all", json: true })).toThrow(ArcNatsCommandError);
   });
 });

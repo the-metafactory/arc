@@ -1374,3 +1374,150 @@ export function exportAccount(name: string, opts: ExportAccountOptions): ExportA
 
   return { account: name, pubKey, jwt, seedPath };
 }
+
+export interface ExportOperatorOptions {
+  /** Operator name to export. When omitted, the current nsc operator is used. */
+  name?: string;
+  /** When true: suppress human-readable stdout; throw ArcNatsCommandError on failure. */
+  json?: boolean;
+}
+
+export interface ExportOperatorResult {
+  operator: string;
+  pubKey: string;
+  jwt: string;
+  seedPath: string | null;
+}
+
+/**
+ * Export the operator JWT + identity seed path (cortex#1265 / server-config bridge).
+ *
+ * READ-ONLY: a pure `nsc describe operator <name> --raw` (JWT) + keystore-path
+ * derivation. Mutates nothing. `cortex network provision` shells this to obtain
+ * the operator JWT it writes into `stack.nats_infra.operator_jwt`, so the
+ * operator-mode `.conf` renderer (`cortex network join` O-3 / make-live bootstrap)
+ * gets its `operator:` block WITHOUT cortex ever running nsc (ADR-0013 invariant).
+ *
+ * The name resolves from `--name` (validated) else the current nsc operator
+ * (`nsc env`); with neither, VALIDATION_ERROR. OPERATOR_NOT_FOUND when the named
+ * operator does not exist (so provision surfaces "run init-operator first").
+ */
+export function exportOperator(opts: ExportOperatorOptions): ExportOperatorResult {
+  const json = opts.json === true;
+  ensureNscInstalled(json);
+
+  // Resolve the operator name: an explicit --name (validated), else the current
+  // operator from `nsc env`. Mirrors initOperator's name resolution.
+  let name: string;
+  if (opts.name && opts.name.length > 0) {
+    validateOperatorName(opts.name);
+    name = opts.name;
+  } else {
+    const current = detectCurrentOperator();
+    if (!current) {
+      throw new ArcNatsCommandError(
+        "VALIDATION_ERROR",
+        "no operator name given and no current nsc operator to infer from — pass --name <operator>.",
+      );
+    }
+    validateOperatorName(current);
+    name = current;
+  }
+
+  const pubKey = tryGetPubKey("operator", name);
+  if (pubKey === null) {
+    throw new ArcNatsCommandError(
+      "OPERATOR_NOT_FOUND",
+      `operator "${name}" not found in the nsc store. ` +
+      `Run \`cortex network provision <stack> --apply\` to mint it first.`,
+    );
+  }
+
+  // The raw operator JWT (`eyJ…`) — exactly what the `operator:` block needs.
+  const jwt = nsc(["describe", "operator", "-n", name, "--raw"]).trim();
+  if (!jwt.startsWith("eyJ")) {
+    throw new ArcNatsCommandError(
+      "NSC_COMMAND_FAILED",
+      `nsc describe operator -n ${name} --raw did not return a JWT (got: ${jwt.slice(0, 40)}…).`,
+    );
+  }
+
+  const candidateSeed = operatorSeedPath(pubKey);
+  const seedPath = existsSync(candidateSeed) ? candidateSeed : null;
+
+  if (!json) {
+    console.log(`Operator: ${name}`);
+    console.log(`  pubkey: ${pubKey}`);
+    console.log(`  jwt: ${jwt.slice(0, 24)}… (${jwt.length} chars)`);
+    if (seedPath) console.log(`  seed: ${seedPath} (mode 600)`);
+  }
+
+  return { operator: name, pubKey, jwt, seedPath };
+}
+
+export interface ExportSystemOptions {
+  /** System-account name (default "SYS"). */
+  name?: string;
+  /** When true: suppress human-readable stdout; throw ArcNatsCommandError on failure. */
+  json?: boolean;
+}
+
+export interface ExportSystemResult {
+  account: string;
+  pubKey: string;
+  jwt: string;
+  seedPath: string | null;
+}
+
+/**
+ * Export the operator's SYS (system) account pubkey + JWT (cortex#1265).
+ *
+ * READ-ONLY: the SYS account is just an account, so this is `export-account`
+ * pinned to the system-account name (default "SYS"). `cortex network provision`
+ * shells this best-effort to populate `stack.nats_infra.{system_account,
+ * system_account_jwt}` so the rendered operator-mode `.conf` can set
+ * `system_account:` + preload its JWT.
+ *
+ * A SYS account is OPTIONAL — `nsc add operator` does NOT auto-create one, and an
+ * operator-mode bus runs without it. So this throws SYSTEM_ACCOUNT_NOT_FOUND when
+ * absent and the caller (provision) treats that as a skip rather than a failure.
+ */
+export function exportSystem(opts: ExportSystemOptions): ExportSystemResult {
+  const json = opts.json === true;
+  ensureNscInstalled(json);
+
+  const name = opts.name && opts.name.length > 0 ? opts.name : "SYS";
+  // The SYS account is a normal account — reuse the strict UPPER_SNAKE guard
+  // (also rejects empty / flag-injection names before any nsc invocation).
+  validateAccountName(name);
+
+  const pubKey = tryGetPubKey("account", name);
+  if (pubKey === null) {
+    throw new ArcNatsCommandError(
+      "SYSTEM_ACCOUNT_NOT_FOUND",
+      `system account "${name}" not found under the current nsc operator. ` +
+      `A SYS account is optional (operator-mode runs without one) — provision skips the ` +
+      `system_account fields when this is absent.`,
+    );
+  }
+
+  const jwt = nsc(["describe", "account", "-n", name, "--raw"]).trim();
+  if (!jwt.startsWith("eyJ")) {
+    throw new ArcNatsCommandError(
+      "NSC_COMMAND_FAILED",
+      `nsc describe account -n ${name} --raw did not return a JWT (got: ${jwt.slice(0, 40)}…).`,
+    );
+  }
+
+  const candidateSeed = accountSeedPath(pubKey);
+  const seedPath = existsSync(candidateSeed) ? candidateSeed : null;
+
+  if (!json) {
+    console.log(`System account: ${name}`);
+    console.log(`  pubkey: ${pubKey}`);
+    console.log(`  jwt: ${jwt.slice(0, 24)}… (${jwt.length} chars)`);
+    if (seedPath) console.log(`  seed: ${seedPath} (mode 600)`);
+  }
+
+  return { account: name, pubKey, jwt, seedPath };
+}
