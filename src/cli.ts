@@ -48,7 +48,7 @@ import {
 import type { ArcManifest, CatalogEntry, ArtifactType, PackageTier, RegistrySource, SourceType } from "./types.js";
 import { login } from "./commands/login.js";
 import { logout } from "./commands/logout.js";
-import { addBot, reissueBot, listBots, removeBot, setupOperator, addFederationExport, initOperator, addAccount, exportAccount } from "./commands/nats.js";
+import { addBot, reissueBot, listBots, removeBot, setupOperator, addFederationExport, initOperator, addAccount, exportAccount, exportOperator, exportSystem } from "./commands/nats.js";
 import { provisionStreams, provisionConsumer } from "./commands/jetstream.js";
 import {
   ARC_NATS_SCHEMA,
@@ -65,6 +65,8 @@ import {
   type InitOperatorJson,
   type AddAccountJson,
   type ExportAccountJson,
+  type ExportOperatorJson,
+  type ExportSystemJson,
 } from "./lib/json-response.js";
 import { generateIdentity, exportPrincipals, importPrincipals, listPrincipals } from "./commands/identity.js";
 import { bundle, formatBundle } from "./commands/bundle.js";
@@ -1951,6 +1953,62 @@ nats
       return;
     }
     exportAccount(name, opts);
+  });
+
+nats
+  .command("export-operator")
+  .description("Export the operator JWT + identity seed path (read-only; cortex#1265 server-config)")
+  .option("--name <operator>", "Operator name (default: the current nsc operator)")
+  .option("--json", "Emit a single line of stable JSON (schema: arc.nats.operator.v1)")
+  .action((opts: { name?: string; json?: boolean }) => {
+    if (opts.json) {
+      try {
+        const r = exportOperator({ ...opts, json: true });
+        const payload: ExportOperatorJson = {
+          schema: ARC_NATS_OPERATOR_SCHEMA,
+          ok: true,
+          operator: r.operator,
+          pubKey: r.pubKey,
+          jwt: r.jwt,
+          seedPath: r.seedPath,
+        };
+        emitJson(payload);
+        process.exit(0);
+      } catch (err) {
+        emitJson({ schema: ARC_NATS_OPERATOR_SCHEMA, ok: false, error: classifyError(err) });
+        process.exit(1);
+      }
+      return;
+    }
+    exportOperator(opts);
+  });
+
+nats
+  .command("export-system")
+  .description("Export the operator's SYS account pubkey + JWT (read-only; cortex#1265 server-config)")
+  .option("--name <account>", "System-account name (default: SYS)")
+  .option("--json", "Emit a single line of stable JSON (schema: arc.nats.operator.v1)")
+  .action((opts: { name?: string; json?: boolean }) => {
+    if (opts.json) {
+      try {
+        const r = exportSystem({ ...opts, json: true });
+        const payload: ExportSystemJson = {
+          schema: ARC_NATS_OPERATOR_SCHEMA,
+          ok: true,
+          account: r.account,
+          pubKey: r.pubKey,
+          jwt: r.jwt,
+          seedPath: r.seedPath,
+        };
+        emitJson(payload);
+        process.exit(0);
+      } catch (err) {
+        emitJson({ schema: ARC_NATS_OPERATOR_SCHEMA, ok: false, error: classifyError(err) });
+        process.exit(1);
+      }
+      return;
+    }
+    exportSystem(opts);
   });
 
 // ── Identity management commands ──────────────────────────
