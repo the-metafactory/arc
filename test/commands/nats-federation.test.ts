@@ -70,6 +70,18 @@ function describeAccountJson(opts: {
   });
 }
 
+/**
+ * Build a fake `nsc describe operator -J` response. `accountServerUrl`
+ * controls whether the operator declares an account-JWT server — the signal
+ * `operatorHasAccountServer()` reads to decide whether `nsc push` applies
+ * (a `resolver: MEMORY` sovereign deployment has none → push is skipped).
+ */
+function describeOperatorJson(opts: { accountServerUrl?: string | null } = {}): string {
+  const nats: Record<string, unknown> = { type: "operator" };
+  if (opts.accountServerUrl != null) nats.account_server_url = opts.accountServerUrl;
+  return JSON.stringify({ jti: "fake", iat: 0, iss: "OOPERATOR", sub: "OOPERATOR", nats });
+}
+
 /** Key for the buildRunner dispatch map: first two args (verb + noun). */
 function keyFor(args: string[]): string {
   const verb = args[0] ?? "";
@@ -78,10 +90,23 @@ function keyFor(args: string[]): string {
   return verb;
 }
 
+/**
+ * Default `describe operator` handler injected when a test does not supply one:
+ * an operator WITH an account-JWT server, so the `--apply` push step runs (the
+ * pre-`operatorHasAccountServer` behaviour these tests were written against).
+ * Tests covering the MEMORY-resolver skip path supply their own handler
+ * returning {@link describeOperatorJson} with no `accountServerUrl`.
+ */
+const DEFAULT_OPERATOR_WITH_SERVER = "nats://hub.example:4222";
+
 function buildRunner(handlers: Record<string, (args: string[]) => NscResult>): NscRunner {
   return (args) => {
     const k = keyFor(args);
-    const handler = handlers[k];
+    const handler =
+      handlers[k] ??
+      (k === "describe operator"
+        ? () => ok(describeOperatorJson({ accountServerUrl: DEFAULT_OPERATOR_WITH_SERVER }))
+        : undefined);
     if (!handler) throw new Error(`Test runner: no handler for nsc ${args.join(" ")}`);
     return handler(args);
   };
@@ -307,6 +332,146 @@ describe("addFederationExport — --apply path", () => {
     // local-subject should also equal the subject
     const localSubIdx = importCall?.args.indexOf("--local-subject") ?? -1;
     expect(importCall?.args[localSubIdx + 1]).toBe(CUSTOM_SUBJECT);
+  });
+});
+
+// ── nsc-argv CONTRACT (anti-rot guard for the cortex#1225 flag fix) ───────────
+//
+// The previous mock dispatched on verb+noun and IGNORED flags, so it returned
+// success for ANY argv — including the broken `nsc add import --from-account
+// <name> --subject <s>` (nsc has no `--from-account`/`--subject` on `add
+// import`; it wants `--src-account <pubkey> --remote-subject --local-subject`).
+// These tests pin the contract to REAL nsc's commander behaviour: an undefined
+// flag exits non-zero with "unknown flag", so a wrong flag fails the test
+// rather than passing a permissive mock.
+
+describe("addFederationExport — nsc argv contract (cortex#1225)", () => {
+  // The set of flags REAL `nsc` accepts per verb (`nsc add export|import --help`,
+  // `nsc push --help`, `nsc describe --help`). Anything else → "unknown flag".
+  const KNOWN_FLAGS: Record<string, Set<string>> = {
+    "add export": new Set(["--account", "-a", "--subject", "-s", "--service", "-r", "--name", "-n"]),
+    "add import": new Set(["--account", "-a", "--src-account", "--remote-subject", "--local-subject", "-s", "--service", "--name", "-n"]),
+    "push": new Set(["-a", "--account", "-A", "--all"]),
+    "describe account": new Set(["-n", "--name", "-J"]),
+    "describe operator": new Set(["-J", "-n", "--name"]),
+  };
+
+  /** A runner that mimics nsc/commander: reject any flag not in KNOWN_FLAGS. */
+  function nscContractRunner(opts: {
+    fromPubkey?: string;
+    accountServerUrl?: string | null;
+    record?: string[][];
+  } = {}): NscRunner {
+    const fromPubkey = opts.fromPubkey ?? FROM_ACCOUNT_PUBKEY;
+    return (args) => {
+      opts.record?.push([...args]);
+      const k = keyFor(args);
+      const known = KNOWN_FLAGS[k];
+      if (known) {
+        for (const a of args) {
+          if (a.startsWith("-") && !known.has(a)) {
+            return { exitCode: 1, stdout: "", stderr: `Error: unknown flag: ${a}` };
+          }
+        }
+      }
+      if (k === "describe operator") return ok(describeOperatorJson({ accountServerUrl: opts.accountServerUrl ?? null }));
+      if (k === "describe account") return ok(describeAccountJson({ sub: fromPubkey }));
+      return ok();
+    };
+  }
+
+  test("add import uses --src-account <pubkey> --remote-subject --local-subject (NOT --from-account/--subject)", () => {
+    const record: string[][] = [];
+    __setNscRunnerForTests(nscContractRunner({ record }));
+
+    const result = addFederationExport({
+      fromAccount: FROM_ACCOUNT,
+      toAccount: TO_ACCOUNT,
+      apply: true,
+      json: true,
+    });
+
+    // The whole chain SUCCEEDS — proves no flag tripped the unknown-flag guard.
+    expect(result.exportAdded).toBe(true);
+    expect(result.importAdded).toBe(true);
+
+    const importArgs = record.find((a) => a[0] === "add" && a[1] === "import");
+    expect(importArgs).toBeDefined();
+    // Correct flags, with the PUBKEY (not the name) on --src-account.
+    expect(importArgs).toContain("--src-account");
+    expect(importArgs![importArgs!.indexOf("--src-account") + 1]).toBe(FROM_ACCOUNT_PUBKEY);
+    expect(importArgs).toContain("--remote-subject");
+    expect(importArgs).toContain("--local-subject");
+    // The buggy flags must NOT appear.
+    expect(importArgs).not.toContain("--from-account");
+    expect(importArgs).not.toContain("--subject");
+
+    // Export side stays on --account / --subject (those ARE its real flags).
+    const exportArgs = record.find((a) => a[0] === "add" && a[1] === "export");
+    expect(exportArgs).toContain("--account");
+    expect(exportArgs).toContain("--subject");
+  });
+
+  test("a runner mimicking real nsc would FAIL the old --from-account import argv", () => {
+    // Direct proof the guard bites: feed the OLD argv through the contract
+    // runner and confirm it rejects it (regression cannot silently return).
+    const runner = nscContractRunner();
+    const bad = runner(["add", "import", "--account", TO_ACCOUNT, "--from-account", FROM_ACCOUNT, "--subject", DEFAULT_SUBJECT]);
+    expect(bad.exitCode).toBe(1);
+    expect(bad.stderr).toContain("unknown flag");
+  });
+});
+
+// ── push gating: nats-account-resolver vs resolver:MEMORY (sovereign local) ────
+
+describe("addFederationExport — push gating on operator account-server", () => {
+  test("operator WITHOUT account-server (resolver: MEMORY) → push is SKIPPED", () => {
+    const calls: string[] = [];
+    const runner = buildRunner({
+      "describe operator": () => ok(describeOperatorJson({ accountServerUrl: null })),
+      "describe account": () => ok(describeAccountJson()),
+      "add export": () => { calls.push("add export"); return ok(); },
+      "add import": () => { calls.push("add import"); return ok(); },
+      "push": () => { calls.push("push"); return ok(); },
+    });
+    __setNscRunnerForTests(runner);
+
+    const result = addFederationExport({
+      fromAccount: FROM_ACCOUNT,
+      toAccount: TO_ACCOUNT,
+      apply: true,
+      json: true,
+    });
+
+    // Wiring mutation still landed; push was skipped (no account server).
+    expect(result.exportAdded).toBe(true);
+    expect(result.importAdded).toBe(true);
+    expect(result.pushResult).toEqual({ fromAccount: "skipped", toAccount: "skipped" });
+    expect(calls).toContain("add export");
+    expect(calls).toContain("add import");
+    expect(calls).not.toContain("push");
+  });
+
+  test("operator WITH account-server → push runs", () => {
+    const calls: string[] = [];
+    const runner = buildRunner({
+      "describe operator": () => ok(describeOperatorJson({ accountServerUrl: "nats://hub:4222" })),
+      "describe account": () => ok(describeAccountJson()),
+      "add export": () => ok(),
+      "add import": () => ok(),
+      "push": () => { calls.push("push"); return ok(); },
+    });
+    __setNscRunnerForTests(runner);
+
+    const result = addFederationExport({
+      fromAccount: FROM_ACCOUNT,
+      toAccount: TO_ACCOUNT,
+      apply: true,
+      json: true,
+    });
+
+    expect(result.pushResult).toEqual({ fromAccount: "ok", toAccount: "ok" });
+    expect(calls.filter((c) => c === "push")).toHaveLength(2);
   });
 });
 
@@ -599,53 +764,59 @@ describe("addFederationExport — JSON envelope shape", () => {
 // ── describe JSON resilience ──────────────────────────────────────────────────
 
 describe("addFederationExport — describe output resilience", () => {
-  test("treats non-JSON describe output as no existing export/import (fail open)", () => {
+  test("non-JSON describe: export fails open (added), import fails LOUD (no src-account pubkey)", () => {
+    // `nsc add import` names the source account by PUBKEY (`--src-account A…`),
+    // resolved from `nsc describe account -n <fromAccount> -J`. When describe
+    // emits non-JSON (older nsc), the pubkey can't be resolved — the export
+    // still adds (it only needs the account NAME), but the import MUST fail
+    // loudly rather than emit a broken `--src-account <name>` invocation.
     const sequence: string[] = [];
     const runner = buildRunner({
-      // Some nsc versions emit text, not JSON — treat as no existing entries
       "describe account": () => ok("Account: OP_PEER\nNo JWT output"),
-      "add export": (args) => { sequence.push("add export"); return ok(); },
-      "add import": (args) => { sequence.push("add import"); return ok(); },
-      "push": (args) => { sequence.push("push"); return ok(); },
+      "add export": () => { sequence.push("add export"); return ok(); },
+      "add import": () => { sequence.push("add import"); return ok(); },
+      "push": () => { sequence.push("push"); return ok(); },
     });
     __setNscRunnerForTests(runner);
 
-    const result = addFederationExport({
-      fromAccount: FROM_ACCOUNT,
-      toAccount: TO_ACCOUNT,
-      apply: true,
-      json: true,
-    });
+    let err: unknown;
+    try {
+      addFederationExport({ fromAccount: FROM_ACCOUNT, toAccount: TO_ACCOUNT, apply: true, json: true });
+    } catch (e) {
+      err = e;
+    }
 
-    // Non-JSON → treated as no existing entries → both are added
-    expect(result.exportAdded).toBe(true);
-    expect(result.importAdded).toBe(true);
+    expect(err).toBeInstanceOf(ArcNatsCommandError);
+    expect((err as ArcNatsCommandError).code).toBe("NSC_COMMAND_FAILED");
+    expect((err as ArcNatsCommandError).message).toContain("src-account");
+    // Export was added (fail-open); import + push never ran (loud failure).
     expect(sequence).toContain("add export");
-    expect(sequence).toContain("add import");
-    expect(sequence).toContain("push");
+    expect(sequence).not.toContain("add import");
+    expect(sequence).not.toContain("push");
   });
 
-  test("describe failure (describe throws) is treated as no existing entry", () => {
-    // describe fails → exportAlreadyPresent = false → add export is attempted
+  test("describe throws: export fails open (added), import fails LOUD (no src-account pubkey)", () => {
     let addExportCalled = false;
+    let addImportCalled = false;
     const runner = buildRunner({
       "describe account": () => fail("nsc describe: account not found"),
       "add export": () => { addExportCalled = true; return ok(); },
-      "add import": () => ok(),
+      "add import": () => { addImportCalled = true; return ok(); },
       "push": () => ok(),
     });
     __setNscRunnerForTests(runner);
 
-    const result = addFederationExport({
-      fromAccount: FROM_ACCOUNT,
-      toAccount: TO_ACCOUNT,
-      apply: true,
-      json: true,
-    });
+    let err: unknown;
+    try {
+      addFederationExport({ fromAccount: FROM_ACCOUNT, toAccount: TO_ACCOUNT, apply: true, json: true });
+    } catch (e) {
+      err = e;
+    }
 
-    expect(result.exportAlreadyPresent).toBe(false);
-    expect(result.exportAdded).toBe(true);
-    expect(addExportCalled).toBe(true);
+    expect(err).toBeInstanceOf(ArcNatsCommandError);
+    expect((err as ArcNatsCommandError).code).toBe("NSC_COMMAND_FAILED");
+    expect(addExportCalled).toBe(true);   // export fails open
+    expect(addImportCalled).toBe(false);  // import never attempts a broken invocation
   });
 });
 
