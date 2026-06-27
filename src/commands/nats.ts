@@ -705,6 +705,44 @@ export function removeBot(name: string, opts: RemoveBotOptions): RemoveBotResult
 const DEFAULT_FEDERATION_SUBJECT = "federated.>";
 
 /**
+ * Does the CURRENT nsc operator declare an account-JWT server URL?
+ *
+ * `nsc push` uploads account JWTs to a NATS account-resolver server (the
+ * `account_server_url` baked into the operator JWT). A sovereign LOCAL
+ * deployment (cortex `network provision`) runs a `resolver: MEMORY` nats-server
+ * with the accounts preloaded into the config — there is NO account server, so
+ * the operator JWT carries no `account_server_url` and `nsc push` fails hard
+ * with "no account server url or nats-server url was provided by the operator
+ * jwt".
+ *
+ * In that topology the local-store export/import mutation IS the federation
+ * wiring; making it live is the caller's config-regen + nats-server restart
+ * (cortex `network join` renders `resolver_preload`), NOT a push. So we detect
+ * the no-account-server operator and SKIP push rather than abort a wiring that
+ * already succeeded.
+ *
+ * Returns false (skip-safe) if the operator can't be described or the field is
+ * absent; true only when a non-empty `account_server_url` is present.
+ */
+function operatorHasAccountServer(): boolean {
+  let describeJson: string;
+  try {
+    describeJson = nsc(["describe", "operator", "-J"]);
+  } catch (_err) {
+    // Can't describe the operator — assume no account server (skip-safe).
+    return false;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(describeJson);
+  } catch (_err) {
+    return false;
+  }
+  const url = (parsed as { nats?: { account_server_url?: unknown } }).nats?.account_server_url;
+  return typeof url === "string" && url.trim().length > 0;
+}
+
+/**
  * Parses the JSON output of `nsc describe account -n <account> -J` and checks
  * whether an export for the given subject already exists.
  *
@@ -923,23 +961,47 @@ export function addFederationExport(opts: AddFederationExportOptions): AddFedera
   }
 
   // ── Step 4: add import (if not present) ────────────────────────────────────
+  // nsc contract (`nsc add import --help`): the importing side names the SOURCE
+  // account by its PUBKEY via `--src-account <A…>`, the exported subject via
+  // `--remote-subject`, and the rewritten local subject via `--local-subject`.
+  // There is NO `--from-account` flag and NO bare `--subject` on `add import`
+  // (those belong to other verbs) — passing them makes nsc exit non-zero with
+  // `unknown flag: --from-account`. `--service` mirrors the export side so a
+  // service export is imported as a service import (rarely needed for the
+  // federated.> stream default).
   let importAdded = false;
   if (!importAlreadyPresent) {
     if (!apply) {
       if (!json) {
+        const srcRef = fromAccountPubkey ?? `<pubkey of ${fromAccount}>`;
         console.log(
-          `[dry-run] nsc add import --account ${toAccount} --from-account ${fromAccount}` +
-          ` --subject "${subject}" --local-subject "${subject}"`,
+          `[dry-run] nsc add import --account ${toAccount} --src-account ${srcRef}` +
+          ` --remote-subject "${subject}" --local-subject "${subject}"${opts.service ? " --service" : ""}`,
         );
       }
     } else {
-      nsc([
+      // `--src-account` requires the exporting account's PUBKEY, captured in
+      // Step 1. If it could not be resolved (older nsc / non-JSON describe), we
+      // cannot construct a valid import — fail loudly rather than emit a broken
+      // nsc invocation (a name in --src-account is silently mis-recorded). The
+      // null-check here also NARROWS fromAccountPubkey to string for the argv.
+      if (fromAccountPubkey === null) {
+        throw new ArcNatsCommandError(
+          "NSC_COMMAND_FAILED",
+          `could not resolve the public key for source account "${fromAccount}" ` +
+            `(needed for 'nsc add import --src-account'). Confirm the account exists ` +
+            `and that this nsc emits JSON describe output (\`nsc describe account -n ${fromAccount} -J\`).`,
+        );
+      }
+      const importArgs: string[] = [
         "add", "import",
         "--account", toAccount,
-        "--from-account", fromAccount,
-        "--subject", subject,
+        "--src-account", fromAccountPubkey,
+        "--remote-subject", subject,
         "--local-subject", subject,
-      ]);
+      ];
+      if (opts.service) importArgs.push("--service");
+      nsc(importArgs);
       importAdded = true;
       if (!json) console.log(`Added import: ${toAccount} ← ${fromAccount} "${subject}"`);
     }
@@ -948,16 +1010,34 @@ export function addFederationExport(opts: AddFederationExportOptions): AddFedera
   }
 
   // ── Step 5: push both accounts (apply only) ────────────────────────────────
+  // `nsc push` only applies to a nats-account-resolver deployment (the operator
+  // JWT carries an `account_server_url`). A sovereign LOCAL stack runs a
+  // `resolver: MEMORY` server with no account server — push there fails hard,
+  // even though the export/import mutation already landed in the local store.
+  // Detect that topology and SKIP push (the caller regenerates the MEMORY
+  // resolver config + restarts the server — cortex `network join`).
   let pushResult: AddFederationExportResult["pushResult"];
   if (apply) {
-    if (!json) console.log(`Pushing ${fromAccount}...`);
-    nsc(["push", "-a", fromAccount]);
+    if (operatorHasAccountServer()) {
+      if (!json) console.log(`Pushing ${fromAccount}...`);
+      nsc(["push", "-a", fromAccount]);
 
-    if (!json) console.log(`Pushing ${toAccount}...`);
-    nsc(["push", "-a", toAccount]);
+      if (!json) console.log(`Pushing ${toAccount}...`);
+      nsc(["push", "-a", toAccount]);
 
-    pushResult = { fromAccount: "ok", toAccount: "ok" };
-    if (!json) console.log("Both accounts pushed. Export/import wired and live.");
+      pushResult = { fromAccount: "ok", toAccount: "ok" };
+      if (!json) console.log("Both accounts pushed. Export/import wired and live.");
+    } else {
+      pushResult = { fromAccount: "skipped", toAccount: "skipped" };
+      if (!json) {
+        console.log(
+          "Operator declares no account-JWT server (resolver: MEMORY deployment) — " +
+          "skipping push. The export/import is recorded in the local nsc store; " +
+          "regenerate the nats-server config + restart to make it live " +
+          "(cortex `network join`).",
+        );
+      }
+    }
   } else {
     if (!json) {
       console.log(`[dry-run] nsc push -a ${fromAccount}`);
