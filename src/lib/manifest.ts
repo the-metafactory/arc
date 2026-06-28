@@ -1,4 +1,5 @@
 import { readFile } from "fs/promises";
+import { readFileSync } from "fs";
 import { join } from "path";
 import YAML from "yaml";
 import type { ArcManifest, HostId, RiskLevel } from "../types.js";
@@ -13,6 +14,37 @@ export const LEGACY_MANIFEST_FILENAME = "pai-manifest.yaml";
 
 /** Both manifest filenames, preferred first. */
 export const MANIFEST_FILENAMES = [MANIFEST_FILENAME, LEGACY_MANIFEST_FILENAME] as const;
+
+/**
+ * Synchronously read the `version` field from arc's own bundled
+ * arc-manifest.yaml — the single release source of truth (per the compass
+ * versioning SOP). The CLI derives `arc --version` from this so the reported
+ * version can never drift from the manifest the way an independently-maintained
+ * `package.json` version can (which is exactly the drift this replaces:
+ * manifest said 0.33.0 while package.json still said 0.30.5).
+ *
+ * Synchronous on purpose: `--version` is wired into commander at program
+ * construction, before the async command handlers run.
+ *
+ * @param manifestPath absolute path to arc-manifest.yaml
+ * @returns the version string, or `null` when the file is missing, unreadable,
+ *          unparseable, or carries no string `version` — callers fall back to
+ *          the compiled-in `package.json` version in that case.
+ */
+export function readManifestVersionSync(manifestPath: string): string | null {
+  let raw: string;
+  try {
+    raw = readFileSync(manifestPath, "utf8");
+  } catch (_err) {
+    // Manifest not found alongside the running CLI (e.g. an unusual install
+    // layout). Safe to ignore: the caller falls back to package.json.
+    return null;
+  }
+
+  const parsed = YAML.parse(raw) as { version?: unknown } | null;
+  const version = parsed?.version;
+  return typeof version === "string" && version.length > 0 ? version : null;
+}
 
 /**
  * Read and parse an arc-manifest.yaml (or legacy pai-manifest.yaml) from a directory.
