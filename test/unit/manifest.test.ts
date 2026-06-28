@@ -4,6 +4,7 @@ import { join } from "path";
 import { tmpdir } from "os";
 import {
   readManifest,
+  readManifestVersionSync,
   assessRisk,
   formatCapabilities,
   normalizeNetworkEntry,
@@ -21,6 +22,40 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await rm(tempDir, { recursive: true, force: true });
+});
+
+describe("readManifestVersionSync", () => {
+  test("returns the version string from a manifest", async () => {
+    const path = join(tempDir, MANIFEST_FILENAME);
+    await Bun.write(path, `name: arc\nversion: 0.33.0\ntype: skill\n`);
+    expect(readManifestVersionSync(path)).toBe("0.33.0");
+  });
+
+  test("returns null when the file is missing (caller falls back)", () => {
+    expect(readManifestVersionSync(join(tempDir, "does-not-exist.yaml"))).toBeNull();
+  });
+
+  test("returns null when the manifest has no version field", async () => {
+    const path = join(tempDir, MANIFEST_FILENAME);
+    await Bun.write(path, `name: arc\ntype: skill\n`);
+    expect(readManifestVersionSync(path)).toBeNull();
+  });
+
+  test("returns null for an empty version string", async () => {
+    const path = join(tempDir, MANIFEST_FILENAME);
+    await Bun.write(path, `name: arc\nversion: ""\n`);
+    expect(readManifestVersionSync(path)).toBeNull();
+  });
+
+  test("arc's own bundled manifest version equals package.json version", async () => {
+    // Guards against the exact drift this fix addresses: the manifest the CLI
+    // derives --version from must match the compiled-in package.json.
+    const manifestVersion = readManifestVersionSync(
+      join(import.meta.dir, "..", "..", MANIFEST_FILENAME),
+    );
+    const pkg = (await import("../../package.json", { with: { type: "json" } })).default;
+    expect(manifestVersion).toBe(pkg.version);
+  });
 });
 
 describe("readManifest", () => {

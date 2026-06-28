@@ -30,6 +30,36 @@ jobs:
         run: bun run lint:errors
 
   # ──────────────────────────────────────────────────────────────────
+  # Version consistency — arc-manifest.yaml (release source of truth) and
+  # package.json MUST declare the same version. `arc --version` derives from
+  # the manifest; this gate keeps the compiled-in package.json fallback honest
+  # so the two can never silently drift (the bug this enforces against: manifest
+  # 0.33.0 vs package.json 0.30.5). Inline equivalent of compass's shared
+  # scripts/check-version-consistency.sh (that script lives in another repo).
+  # ──────────────────────────────────────────────────────────────────
+  version-consistency:
+    name: Version Consistency
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Assert arc-manifest.yaml and package.json versions match
+        run: |
+          manifest_version="$(grep -E '^version:' arc-manifest.yaml | head -1 | sed -E 's/^version:[[:space:]]*//; s/["'\'']//g; s/[[:space:]]*(#.*)?$//')"
+          package_version="$(grep -E '"version"' package.json | head -1 | sed -E 's/.*"version"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/')"
+          echo "arc-manifest.yaml: ${manifest_version}"
+          echo "package.json:      ${package_version}"
+          if [ -z "${manifest_version}" ] || [ -z "${package_version}" ]; then
+            echo "::error::Could not read a version from one of the files."
+            exit 1
+          fi
+          if [ "${manifest_version}" != "${package_version}" ]; then
+            echo "::error::Version drift — arc-manifest.yaml (${manifest_version}) != package.json (${package_version}). A release bump must update BOTH."
+            exit 1
+          fi
+          echo "OK: versions match (${manifest_version})."
+
+  # ──────────────────────────────────────────────────────────────────
   # Type-check
   # ──────────────────────────────────────────────────────────────────
   typecheck:

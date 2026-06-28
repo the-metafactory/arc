@@ -13,7 +13,7 @@ import {
   secretsRotate,
   secretsRemove,
 } from "./commands/secrets.js";
-import { readManifest } from "./lib/manifest.js";
+import { readManifest, readManifestVersionSync, MANIFEST_FILENAME } from "./lib/manifest.js";
 import { resolveSecretBackend, type SecretBackend, type SecretBackendChoice } from "./lib/secrets.js";
 import { list, formatList, formatListJson } from "./commands/list.js";
 import { info, formatInfo, formatInfoJson } from "./commands/info.js";
@@ -123,6 +123,14 @@ import pkg from "../package.json" with { type: "json" };
 
 const program = new Command();
 
+// Single source of truth for the version: arc-manifest.yaml is the release
+// source of truth (compass versioning SOP). Derive `arc --version` from it so
+// it can never drift from the manifest. Fall back to the compiled-in
+// package.json version only if the manifest can't be read at runtime.
+const CLI_VERSION =
+  readManifestVersionSync(join(import.meta.dir, "..", MANIFEST_FILENAME)) ??
+  pkg.version;
+
 function createInstallPaths(opts: { binDir?: string }): ReturnType<typeof createArcPaths> {
   return createArcPaths(
     opts.binDir
@@ -169,7 +177,7 @@ function printShimPathNotice(paths: ReturnType<typeof createArcPaths>, result: A
 program
   .name("arc")
   .description("Agentic component package manager")
-  .version(pkg.version);
+  .version(CLI_VERSION);
 
 program
   .command("install <name-or-url>")
