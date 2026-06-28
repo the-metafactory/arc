@@ -50,7 +50,7 @@ arc handles multiple artifact types:
 ```bash
 # Install arc
 git clone https://github.com/the-metafactory/arc.git
-cd arc && bun install && bun link
+cd arc && bun install && bun link   # bun link = the install step: puts the `arc` command on your PATH
 
 # Fetch the community registry
 arc source update
@@ -61,6 +61,8 @@ arc install _DOC
 ```
 
 Requires [Bun](https://bun.sh/) (v1.0+) and Git. Optional: [GitHub CLI](https://cli.github.com/) (`gh`) for release notes in `arc info`. See [QUICKSTART.md](QUICKSTART.md) for the full walkthrough.
+
+> **Why `bun link`?** arc is distributed *as source*, so `bun link` is the **install** step — not a dev-only one. It registers this checkout so the `arc` command resolves on your `PATH`. To avoid a global link, run arc directly instead: `bun run /path/to/arc/src/cli.ts …`.
 
 ---
 

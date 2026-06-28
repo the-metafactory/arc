@@ -6,3 +6,8 @@ dist/
 *.swp
 .env
 .specflow/
+
+# dev-loop process artifacts that leak into the repo root when a run's CWD == the checkout (arc#260)
+/cortex-config-fragment.yaml
+/dev-loop.process.yaml
+/gates.yaml
