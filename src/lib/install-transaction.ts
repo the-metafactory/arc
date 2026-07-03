@@ -12,6 +12,7 @@ import { errorMessage } from "./errors.js";
 import { rollbackWiredExtensions, wireExtensions } from "./extensions.js";
 import { recordInstall } from "./db.js";
 import { runLifecycleScripts, runScript } from "./scripts.js";
+import { runSomaSkillProjection } from "./soma-projection.js";
 import type { Database } from "bun:sqlite";
 import { existsSync } from "fs";
 import type {
@@ -31,6 +32,7 @@ export type LandedArtifact =
   | { kind: "hook"; settingsPath: string; count: number }
   | { kind: "extension"; name: string }
   | { kind: "launchd"; plistPath?: string; binSymlink?: string }
+  | { kind: "soma-projection"; skillDir: string }
   | { kind: "db-row"; name: string };
 
 export interface InstallTransactionEvidence {
@@ -49,6 +51,7 @@ export interface InstallTransaction {
   recordLaunchd(records: LaunchdInstallRecord[]): void;
   recordHookRegistration(settingsPath: string, count: number): void;
   recordExtensions(names: string[], claudeRoot: string): void;
+  recordSomaProjection(installPath: string, manifest: ArcManifest, quiet?: boolean): void;
   recordDbCommit(name: string): void;
   rollback(): Promise<InstallTransactionEvidence>;
 }
@@ -223,6 +226,7 @@ export function beginInstallTransaction(opts: {
   const launchdRecords: LaunchdInstallRecord[] = [];
   const hookRegistrations: { settingsPath: string; packageName: string }[] = [];
   const extensionRecords: { names: string[]; claudeRoot: string }[] = [];
+  const somaProjectionRecords: { installPath: string; manifest: ArcManifest; quiet?: boolean }[] = [];
   const evidence: InstallTransactionEvidence = {
     packageName: opts.packageName,
     landedArtifacts: [],
@@ -273,6 +277,12 @@ export function beginInstallTransaction(opts: {
       }
     },
 
+    recordSomaProjection(installPath, manifest, quiet) {
+      const skillDir = resolveArtifactSourceDir(manifest.type, installPath);
+      somaProjectionRecords.push({ installPath, manifest, quiet });
+      evidence.landedArtifacts.push({ kind: "soma-projection", skillDir });
+    },
+
     recordDbCommit(name) {
       evidence.dbCommitted = true;
       evidence.landedArtifacts.push({ kind: "db-row", name });
@@ -295,6 +305,17 @@ export function beginInstallTransaction(opts: {
           }
         } catch (err) {
           warn(`failed to roll back extensions: ${errorMessage(err)}`);
+        }
+      }
+      for (const record of somaProjectionRecords) {
+        const result = runSomaSkillProjection({
+          manifest: record.manifest,
+          installPath: record.installPath,
+          mode: "unproject",
+          quiet: record.quiet,
+        });
+        if (result.warning) {
+          warn(result.warning);
         }
       }
       for (const record of symlinkRecords) {
@@ -424,6 +445,16 @@ export async function completeInstallTransaction(
   if (!postinstallResult.success) {
     const evidence = await tx.rollback();
     return { ...postinstallResult, evidence };
+  }
+
+  const somaProjectionResult = runSomaSkillProjection({
+    manifest,
+    installPath,
+    mode: "project",
+    quiet: opts.quiet,
+  });
+  if (somaProjectionResult.success) {
+    tx.recordSomaProjection(installPath, manifest, opts.quiet);
   }
 
   const now = new Date().toISOString();
