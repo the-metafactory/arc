@@ -26,17 +26,24 @@ afterEach(async () => {
   await env.cleanup();
 });
 
+async function writeFakeSoma(
+  scriptForCallsPath: (callsPath: string) => string,
+  callsFile = "soma-calls.log",
+) {
+  const callsPath = join(env.root, callsFile);
+  const somaPath = join(env.arc.shimDir, "soma");
+  await mkdir(env.arc.shimDir, { recursive: true });
+  await writeFile(somaPath, scriptForCallsPath(callsPath));
+  await chmod(somaPath, 0o755);
+  process.env.ARC_SOMA_BIN = somaPath;
+  return { callsPath, somaPath };
+}
+
 describe("Soma skill projection lifecycle (arc#251)", () => {
   test("projects installed skills through soma and unprojects on remove", async () => {
-    const callsPath = join(env.root, "soma-calls.log");
-    const somaPath = join(env.arc.shimDir, "soma");
-    await mkdir(env.arc.shimDir, { recursive: true });
-    await writeFile(
-      somaPath,
-      `#!/bin/sh\necho "$@" >> "${callsPath}"\nexit 0\n`,
+    const { callsPath } = await writeFakeSoma(
+      (path) => `#!/bin/sh\necho "$@" >> "${path}"\nexit 0\n`,
     );
-    await chmod(somaPath, 0o755);
-    process.env.ARC_SOMA_BIN = somaPath;
 
     const repo = await createMockSkillRepo(env.root, {
       name: "ProjectedSkill",
@@ -78,16 +85,12 @@ describe("Soma skill projection lifecycle (arc#251)", () => {
     expect(installed.success).toBe(true);
   });
 
-  test("failed soma projection is tracked for possible rollback cleanup", async () => {
-    const callsPath = join(env.root, "soma-failed-calls.log");
-    const somaPath = join(env.arc.shimDir, "soma");
-    await mkdir(env.arc.shimDir, { recursive: true });
-    await writeFile(
-      somaPath,
-      `#!/bin/sh\necho "$@" >> "${callsPath}"\necho "projection failed" >&2\nexit 12\n`,
+  test("failed soma projection is recorded in transaction evidence", async () => {
+    const { callsPath } = await writeFakeSoma(
+      (path) =>
+        `#!/bin/sh\necho "$@" >> "${path}"\necho "projection failed" >&2\nexit 12\n`,
+      "soma-failed-calls.log",
     );
-    await chmod(somaPath, 0o755);
-    process.env.ARC_SOMA_BIN = somaPath;
 
     const repo = await createMockSkillRepo(env.root, {
       name: "PartialProjectionSkill",
