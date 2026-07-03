@@ -77,4 +77,36 @@ describe("Soma skill projection lifecycle (arc#251)", () => {
 
     expect(installed.success).toBe(true);
   });
+
+  test("remove --yes still warns when soma unprojection is unavailable", async () => {
+    const repo = await createMockSkillRepo(env.root, {
+      name: "WarnOnRemove",
+    });
+    process.env.ARC_SOMA_BIN = join(env.root, "missing-soma");
+
+    const installed = await install({
+      arc: env.arc,
+      host: env.host,
+      db: env.db,
+      repoUrl: repo.url,
+      yes: true,
+    });
+    expect(installed.success).toBe(true);
+
+    let stderr = "";
+    const originalWrite = process.stderr.write;
+    process.stderr.write = (chunk: string | Uint8Array) => {
+      stderr += chunk.toString();
+      return true;
+    };
+    try {
+      const removed = await remove(env.db, env.arc, env.host, "WarnOnRemove", { yes: true });
+      expect(removed.success).toBe(true);
+    } finally {
+      process.stderr.write = originalWrite;
+    }
+
+    expect(stderr).toContain("soma unproject-skill unavailable");
+    expect(stderr).toContain("continuing without Soma projection");
+  });
 });

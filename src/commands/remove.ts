@@ -394,12 +394,16 @@ export async function remove(
   }
 
   if (manifest?.type === "skill") {
-    runSomaSkillProjection({
+    const somaProjectionResult = await runSomaSkillProjection({
       manifest,
       installPath: skill.install_path,
       mode: "unproject",
-      quiet: opts.yes === true || opts.quiet === true,
     });
+    if (somaProjectionResult.warning && opts.quiet !== true) {
+      process.stderr.write(
+        `  ⚠ ${somaProjectionResult.warning}; continuing without Soma projection\n`,
+      );
+    }
   }
 
   // Mirror provides.files on the way out.

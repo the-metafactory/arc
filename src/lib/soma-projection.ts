@@ -15,7 +15,6 @@ export interface SomaSkillProjectionOptions {
   manifest: ArcManifest;
   installPath: string;
   mode: SomaSkillProjectionMode;
-  quiet?: boolean;
 }
 
 /**
@@ -25,9 +24,9 @@ export interface SomaSkillProjectionOptions {
  * Soma owns multi-substrate projection. Missing or failing Soma never aborts
  * the Arc lifecycle; the Claude-Code symlink remains the local fallback.
  */
-export function runSomaSkillProjection(
+export async function runSomaSkillProjection(
   opts: SomaSkillProjectionOptions,
-): SomaSkillProjectionResult {
+): Promise<SomaSkillProjectionResult> {
   if (opts.manifest.type !== "skill") {
     return { attempted: false, success: true, skipped: true };
   }
@@ -40,32 +39,30 @@ export function runSomaSkillProjection(
   }
 
   try {
-    const result = Bun.spawnSync([somaBin ?? "soma", command, skillDir, "--apply"], {
+    const result = Bun.spawn([somaBin ?? "soma", command, skillDir, "--apply"], {
       stdout: "pipe",
       stderr: "pipe",
     });
+    const [exitCode, stderr] = await Promise.all([
+      result.exited,
+      new Response(result.stderr).text(),
+    ]);
 
-    if (result.exitCode === 0) {
+    if (exitCode === 0) {
       return { attempted: true, success: true, skipped: false };
     }
 
-    const stderr = result.stderr.toString().trim();
-    return warnAndSkip(
+    return skipWithWarning(
       `soma ${command} failed for ${opts.manifest.name}${stderr ? `: ${stderr}` : ""}`,
-      opts.quiet,
     );
   } catch (err) {
-    return warnAndSkip(
+    return skipWithWarning(
       `soma ${command} unavailable for ${opts.manifest.name}: ${errorMessage(err)}`,
-      opts.quiet,
     );
   }
 }
 
-function warnAndSkip(message: string, quiet?: boolean): SomaSkillProjectionResult {
-  if (!quiet) {
-    process.stderr.write(`  ⚠ ${message}; continuing without Soma projection\n`);
-  }
+function skipWithWarning(message: string): SomaSkillProjectionResult {
   return {
     attempted: true,
     success: false,

@@ -308,11 +308,10 @@ export function beginInstallTransaction(opts: {
         }
       }
       for (const record of somaProjectionRecords) {
-        const result = runSomaSkillProjection({
+        const result = await runSomaSkillProjection({
           manifest: record.manifest,
           installPath: record.installPath,
           mode: "unproject",
-          quiet: record.quiet,
         });
         if (result.warning) {
           warn(result.warning);
@@ -447,14 +446,17 @@ export async function completeInstallTransaction(
     return { ...postinstallResult, evidence };
   }
 
-  const somaProjectionResult = runSomaSkillProjection({
+  const somaProjectionResult = await runSomaSkillProjection({
     manifest,
     installPath,
     mode: "project",
-    quiet: opts.quiet,
   });
   if (somaProjectionResult.success) {
     tx.recordSomaProjection(installPath, manifest, opts.quiet);
+  } else if (somaProjectionResult.warning && !opts.quiet) {
+    process.stderr.write(
+      `  ⚠ ${somaProjectionResult.warning}; continuing without Soma projection\n`,
+    );
   }
 
   const now = new Date().toISOString();
