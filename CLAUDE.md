@@ -126,6 +126,7 @@ Packages are git-cloned to `~/.config/metafactory/pkg/repos/` and symlinked into
 - **Capability honesty:** Undeclared capabilities are security bugs. Every capability a package uses must be declared in its manifest.
 - **Test isolation:** All tests run in temp directories via `createTestEnv()`. Never touch real `~/.claude/` or `~/.config/` during tests.
 - **No silent failures:** Every error path must log or return a meaningful status. No empty catch blocks.
+- **Confidentiality — treat this repo as exposed unless you've confirmed otherwise.** Before every commit, push, or PR (titles included — a leaked term in a PR title is still a leak), self-check: no client or engagement names, phrases, or acronyms/codes derived from them; no real people's identities, emails, or seed data anywhere — including seeds/migrations/fixtures — use placeholders; no live platform IDs (Discord/Slack channel or guild snowflakes, webhook URLs, tokens); deployment-specific config lives in `~/.config/<tool>/` on the machine running the stack, never committed to this repo. Every shippable path (`agents.d/`, `personas/`, `arc-manifest*.yaml`, and anywhere `arc` ships verbatim) carries only `.example`/`<REPLACE_ME>`/zeroed placeholders. Never use a real organization as a doc or code example. See [`compass/standards/data-classification.md`](https://github.com/the-metafactory/compass/blob/main/standards/data-classification.md) for the full class taxonomy and placeholder mapping.
 
 ## Instruction Precedence
 
