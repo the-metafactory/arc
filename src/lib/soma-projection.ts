@@ -40,7 +40,7 @@ export async function runSomaSkillProjection(
 
   try {
     const result = Bun.spawn([somaBin ?? "soma", command, skillDir, "--apply"], {
-      stdout: "pipe",
+      stdout: "ignore",
       stderr: "pipe",
     });
     const [exitCode, stderr] = await Promise.all([

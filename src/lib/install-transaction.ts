@@ -51,7 +51,7 @@ export interface InstallTransaction {
   recordLaunchd(records: LaunchdInstallRecord[]): void;
   recordHookRegistration(settingsPath: string, count: number): void;
   recordExtensions(names: string[], claudeRoot: string): void;
-  recordSomaProjection(installPath: string, manifest: ArcManifest, quiet?: boolean): void;
+  recordSomaProjection(installPath: string, manifest: ArcManifest): void;
   recordDbCommit(name: string): void;
   rollback(): Promise<InstallTransactionEvidence>;
 }
@@ -226,7 +226,7 @@ export function beginInstallTransaction(opts: {
   const launchdRecords: LaunchdInstallRecord[] = [];
   const hookRegistrations: { settingsPath: string; packageName: string }[] = [];
   const extensionRecords: { names: string[]; claudeRoot: string }[] = [];
-  const somaProjectionRecords: { installPath: string; manifest: ArcManifest; quiet?: boolean }[] = [];
+  const somaProjectionRecords: { installPath: string; manifest: ArcManifest }[] = [];
   const evidence: InstallTransactionEvidence = {
     packageName: opts.packageName,
     landedArtifacts: [],
@@ -277,9 +277,9 @@ export function beginInstallTransaction(opts: {
       }
     },
 
-    recordSomaProjection(installPath, manifest, quiet) {
+    recordSomaProjection(installPath, manifest) {
       const skillDir = resolveArtifactSourceDir(manifest.type, installPath);
-      somaProjectionRecords.push({ installPath, manifest, quiet });
+      somaProjectionRecords.push({ installPath, manifest });
       evidence.landedArtifacts.push({ kind: "soma-projection", skillDir });
     },
 
@@ -452,7 +452,7 @@ export async function completeInstallTransaction(
     mode: "project",
   });
   if (somaProjectionResult.success) {
-    tx.recordSomaProjection(installPath, manifest, opts.quiet);
+    tx.recordSomaProjection(installPath, manifest);
   } else if (somaProjectionResult.warning && !opts.quiet) {
     process.stderr.write(
       `  ⚠ ${somaProjectionResult.warning}; continuing without Soma projection\n`,
