@@ -8,6 +8,8 @@ import {
 } from "../helpers/test-env.js";
 import { install } from "../../src/commands/install.js";
 import { remove } from "../../src/commands/remove.js";
+import { runSomaSkillProjection } from "../../src/lib/soma-projection.js";
+import type { ArcManifest } from "../../src/types.js";
 
 let env: TestEnv;
 let originalSomaBin: string | undefined;
@@ -108,6 +110,49 @@ describe("Soma skill projection lifecycle (arc#251)", () => {
     expect(installed.evidence?.landedArtifacts).not.toEqual(
       expect.arrayContaining([expect.objectContaining({ kind: "soma-projection" })]),
     );
+
+    const calls = (await readFile(callsPath, "utf8")).trim().split("\n");
+    expect(calls).toEqual([
+      expect.stringMatching(/^project-skill .+\/skill --apply$/),
+    ]);
+  });
+
+  test("failed soma projection caps stderr in warning text", async () => {
+    const noisyStderr = "x".repeat(9000);
+    const { callsPath } = await writeFakeSoma(
+      (path) =>
+        `#!/bin/sh\necho "$@" >> "${path}"\nprintf '%s' '${noisyStderr}' >&2\nexit 12\n`,
+      "soma-noisy-calls.log",
+    );
+    const installPath = join(env.root, "noisy-package");
+    await mkdir(join(installPath, "skill"), { recursive: true });
+
+    const manifest: ArcManifest = {
+      name: "NoisyProjectionSkill",
+      version: "1.0.0",
+      type: "skill",
+      tier: "custom",
+      provides: {
+        skill: [{ trigger: "noisyprojection" }],
+      },
+      capabilities: {
+        filesystem: { read: [], write: [] },
+        network: [],
+        bash: { allowed: false },
+        secrets: [],
+      },
+    };
+
+    const result = await runSomaSkillProjection({
+      manifest,
+      installPath,
+      mode: "project",
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.skipped).toBe(false);
+    expect(result.warning).toContain("[stderr truncated after 8192 bytes]");
+    expect(result.warning!.length).toBeLessThan(8400);
 
     const calls = (await readFile(callsPath, "utf8")).trim().split("\n");
     expect(calls).toEqual([

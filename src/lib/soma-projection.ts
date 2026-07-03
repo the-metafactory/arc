@@ -17,6 +17,8 @@ export interface SomaSkillProjectionOptions {
   mode: SomaSkillProjectionMode;
 }
 
+const SOMA_STDERR_LIMIT_BYTES = 8192;
+
 /**
  * Delegate skill loader/catalog projection to Soma.
  *
@@ -45,7 +47,7 @@ export async function runSomaSkillProjection(
     });
     const [exitCode, stderr] = await Promise.all([
       result.exited,
-      new Response(result.stderr).text(),
+      readLimitedStderr(result.stderr, SOMA_STDERR_LIMIT_BYTES),
     ]);
 
     if (exitCode === 0) {
@@ -64,6 +66,63 @@ export async function runSomaSkillProjection(
 
 export function writeSomaProjectionWarning(warning: string): void {
   process.stderr.write(`  ⚠ ${warning}; continuing without Soma projection\n`);
+}
+
+async function readLimitedStderr(
+  stream: ReadableStream<Uint8Array> | null,
+  limitBytes: number,
+): Promise<string> {
+  if (!stream || limitBytes <= 0) {
+    return "";
+  }
+
+  const reader = stream.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  let truncated = false;
+
+  try {
+    while (total < limitBytes) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+
+      const remaining = limitBytes - total;
+      if (value.length > remaining) {
+        chunks.push(value.slice(0, remaining));
+        total = limitBytes;
+        truncated = true;
+        await reader.cancel();
+        break;
+      }
+
+      chunks.push(value);
+      total += value.length;
+    }
+
+    if (total >= limitBytes && !truncated) {
+      const next = await reader.read();
+      if (!next.done) {
+        truncated = true;
+        await reader.cancel();
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  const buffer = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    buffer.set(chunk, offset);
+    offset += chunk.length;
+  }
+
+  const stderr = new TextDecoder().decode(buffer);
+  return truncated
+    ? `${stderr}\n[stderr truncated after ${limitBytes} bytes]`
+    : stderr;
 }
 
 function skipWithWarning(message: string): SomaSkillProjectionResult {
