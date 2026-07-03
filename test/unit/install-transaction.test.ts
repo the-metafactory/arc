@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync } from "fs";
-import { chmod, mkdir, mkdtemp, readFile, symlink, writeFile } from "fs/promises";
+import { mkdir, mkdtemp, readFile, symlink, writeFile } from "fs/promises";
 import { join } from "path";
 import { tmpdir } from "os";
 import {
@@ -8,6 +8,7 @@ import {
   completeInstallTransaction,
 } from "../../src/lib/install-transaction.js";
 import { createTestEnv } from "../helpers/test-env.js";
+import { installFakeSoma } from "../helpers/fake-soma.js";
 import { getSkill } from "../../src/lib/db.js";
 import type { ArcManifest } from "../../src/types.js";
 
@@ -39,13 +40,11 @@ describe("InstallTransaction", () => {
     await mkdir(skillDir, { recursive: true });
     await writeFile(join(skillDir, "SKILL.md"), "# SomaCleanup\n");
 
-    const callsPath = join(root, "soma-calls.log");
-    const somaPath = join(root, "soma");
-    await writeFile(somaPath, `#!/bin/sh\necho "$@" >> "${callsPath}"\nexit 0\n`);
-    await chmod(somaPath, 0o755);
-
-    const originalSomaBin = process.env.ARC_SOMA_BIN;
-    process.env.ARC_SOMA_BIN = somaPath;
+    const fakeSoma = await installFakeSoma({
+      root,
+      scriptForCallsPath: (path) =>
+        `#!/bin/sh\necho "$@" >> "${path}"\nexit 0\n`,
+    });
     try {
       const manifest: ArcManifest = {
         name: "SomaCleanup",
@@ -76,16 +75,12 @@ describe("InstallTransaction", () => {
       const evidence = await tx.rollback();
       expect(evidence.rollback.attempted).toBe(true);
 
-      const calls = (await readFile(callsPath, "utf8")).trim().split("\n");
+      const calls = (await readFile(fakeSoma.callsPath, "utf8")).trim().split("\n");
       expect(calls).toEqual([
         expect.stringMatching(/^unproject-skill .+\/skill --apply$/),
       ]);
     } finally {
-      if (originalSomaBin === undefined) {
-        delete process.env.ARC_SOMA_BIN;
-      } else {
-        process.env.ARC_SOMA_BIN = originalSomaBin;
-      }
+      fakeSoma.restore();
     }
   });
 

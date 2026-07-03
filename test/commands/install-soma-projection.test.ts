@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { chmod, mkdir, readFile, writeFile } from "fs/promises";
+import { mkdir, readFile } from "fs/promises";
 import { join } from "path";
 import {
   createMockSkillRepo,
   createTestEnv,
   type TestEnv,
 } from "../helpers/test-env.js";
+import { installFakeSoma } from "../helpers/fake-soma.js";
 import { install } from "../../src/commands/install.js";
 import { remove } from "../../src/commands/remove.js";
 import { runSomaSkillProjection } from "../../src/lib/soma-projection.js";
@@ -28,22 +29,21 @@ afterEach(async () => {
   await env.cleanup();
 });
 
-async function writeFakeSoma(
+async function writeFakeSomaForEnv(
   scriptForCallsPath: (callsPath: string) => string,
   callsFile = "soma-calls.log",
 ) {
-  const callsPath = join(env.root, callsFile);
-  const somaPath = join(env.arc.shimDir, "soma");
-  await mkdir(env.arc.shimDir, { recursive: true });
-  await writeFile(somaPath, scriptForCallsPath(callsPath));
-  await chmod(somaPath, 0o755);
-  process.env.ARC_SOMA_BIN = somaPath;
-  return { callsPath, somaPath };
+  return installFakeSoma({
+    root: env.root,
+    shimDir: env.arc.shimDir,
+    callsFile,
+    scriptForCallsPath,
+  });
 }
 
 describe("Soma skill projection lifecycle (arc#251)", () => {
   test("projects installed skills through soma and unprojects on remove", async () => {
-    const { callsPath } = await writeFakeSoma(
+    const { callsPath } = await writeFakeSomaForEnv(
       (path) => `#!/bin/sh\necho "$@" >> "${path}"\nexit 0\n`,
     );
 
@@ -88,7 +88,7 @@ describe("Soma skill projection lifecycle (arc#251)", () => {
   });
 
   test("failed soma projection does not claim landed evidence", async () => {
-    const { callsPath } = await writeFakeSoma(
+    const { callsPath } = await writeFakeSomaForEnv(
       (path) =>
         `#!/bin/sh\necho "$@" >> "${path}"\necho "projection failed" >&2\nexit 12\n`,
       "soma-failed-calls.log",
@@ -119,7 +119,7 @@ describe("Soma skill projection lifecycle (arc#251)", () => {
 
   test("failed soma projection caps stderr in warning text", async () => {
     const noisyStderr = "x".repeat(9000);
-    const { callsPath } = await writeFakeSoma(
+    const { callsPath } = await writeFakeSomaForEnv(
       (path) =>
         `#!/bin/sh\necho "$@" >> "${path}"\nprintf '%s' '${noisyStderr}' >&2\nexit 12\n`,
       "soma-noisy-calls.log",
