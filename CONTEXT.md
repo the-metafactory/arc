@@ -21,7 +21,7 @@ A host-visible package output such as a skill symlink, command shim, hook regist
 _Avoid_: Installed file, output
 
 **Soma Projection**:
-A best-effort postinstall handoff where Arc asks Soma to project or unproject a skill into Soma-owned substrates after Arc has landed the package. Successful projection may be recorded as a **Landed Artifact**; failed, timed-out, or unavailable Soma projection remains non-fatal and is reported as warning/rollback cleanup state rather than committed package state.
+A best-effort postinstall handoff where Arc asks Soma to project or unproject a skill into Soma-owned substrates after Arc has landed the package. Successful projection may be recorded as a **Landed Artifact**; failed, timed-out, or unavailable Soma projection remains non-fatal and is reported as a warning rather than committed package state. During an **Install Transaction**, Arc may also retain internal cleanup state for an attempted projection so rollback can ask Soma to unproject possible partial state.
 _Avoid_: Soma install, Arc-owned substrate sync
 
 **Transaction Evidence**:

@@ -19,6 +19,7 @@ export interface SomaSkillProjectionOptions {
 
 const SOMA_STDERR_LIMIT_BYTES = 8192;
 const DEFAULT_SOMA_TIMEOUT_MS = 30_000;
+const SOMA_KILL_GRACE_MS = 250;
 
 /**
  * Delegate skill loader/catalog projection to Soma.
@@ -47,30 +48,20 @@ export async function runSomaSkillProjection(
       stderr: "pipe",
     });
     const timeoutMs = resolveSomaTimeoutMs();
-    const state = { timedOut: false };
-    const timeout = setTimeout(() => {
-      state.timedOut = true;
-      try {
-        result.kill();
-      } catch {
-        // Process may already have exited.
-      }
-    }, timeoutMs);
-    const [exitCode, stderr] = await Promise.all([
-      result.exited.finally(() => {
-        clearTimeout(timeout);
-      }),
-      readLimitedStderr(result.stderr, SOMA_STDERR_LIMIT_BYTES),
+    const abortController = new AbortController();
+    const [exitResult, stderr] = await Promise.all([
+      waitForSomaExit(result, timeoutMs, abortController),
+      readLimitedStderr(result.stderr, SOMA_STDERR_LIMIT_BYTES, abortController.signal),
     ]);
 
-    if (exitCode === 0) {
-      return { attempted: true, success: true, skipped: false };
-    }
-
-    if (state.timedOut) {
+    if (exitResult.timedOut) {
       return failWithWarning(
         `soma ${command} timed out after ${timeoutMs}ms for ${opts.manifest.name}${stderr ? `: ${stderr}` : ""}`,
       );
+    }
+
+    if (exitResult.exitCode === 0) {
+      return { attempted: true, success: true, skipped: false };
     }
 
     return failWithWarning(
@@ -93,9 +84,66 @@ function resolveSomaTimeoutMs(): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_SOMA_TIMEOUT_MS;
 }
 
+async function waitForSomaExit(
+  process: Bun.Subprocess<"ignore", "ignore", "pipe">,
+  timeoutMs: number,
+  abortController: AbortController,
+): Promise<{ exitCode: number | null; timedOut: boolean }> {
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+  let graceTimeout: ReturnType<typeof setTimeout> | undefined;
+  const state = { timedOut: false };
+
+  const timeout = new Promise<"timeout">((resolve) => {
+    timeoutHandle = setTimeout(() => {
+      state.timedOut = true;
+      try {
+        process.kill("SIGTERM");
+      } catch {
+        // Process may already have exited.
+      }
+      graceTimeout = setTimeout(() => {
+        try {
+          process.kill("SIGKILL");
+        } catch {
+          // Process may already have exited.
+        }
+        abortController.abort();
+        resolve("timeout");
+      }, SOMA_KILL_GRACE_MS);
+    }, timeoutMs);
+  });
+
+  const exited = process.exited.then((exitCode) => ({ exitCode }));
+  const result = await Promise.race([exited, timeout]);
+
+  if (typeof result === "string") {
+    return { exitCode: null, timedOut: true };
+  }
+
+  if (state.timedOut) {
+    if (timeoutHandle) {
+      clearTimeout(timeoutHandle);
+    }
+    if (graceTimeout) {
+      clearTimeout(graceTimeout);
+    }
+    abortController.abort();
+    return { exitCode: result.exitCode, timedOut: true };
+  }
+
+  if (timeoutHandle) {
+    clearTimeout(timeoutHandle);
+  }
+  if (graceTimeout) {
+    clearTimeout(graceTimeout);
+  }
+  return { exitCode: result.exitCode, timedOut: false };
+}
+
 async function readLimitedStderr(
   stream: ReadableStream<Uint8Array> | null,
   limitBytes: number,
+  abortSignal: AbortSignal,
 ): Promise<string> {
   if (!stream || limitBytes <= 0) {
     return "";
@@ -105,10 +153,29 @@ async function readLimitedStderr(
   const chunks: Uint8Array[] = [];
   let total = 0;
   let truncated = false;
+  const abort = new Promise<"aborted">((resolve) => {
+    if (abortSignal.aborted) {
+      resolve("aborted");
+      return;
+    }
+    abortSignal.addEventListener(
+      "abort",
+      () => {
+        resolve("aborted");
+      },
+      { once: true },
+    );
+  });
 
   try {
     while (total < limitBytes) {
-      const { done, value } = await reader.read();
+      const read = await Promise.race([reader.read(), abort]);
+      if (read === "aborted") {
+        await reader.cancel();
+        break;
+      }
+
+      const { done, value } = read;
       if (done) {
         break;
       }
