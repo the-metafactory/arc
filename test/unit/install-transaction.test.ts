@@ -9,6 +9,7 @@ import {
 } from "../../src/lib/install-transaction.js";
 import { createTestEnv } from "../helpers/test-env.js";
 import { installFakeSoma } from "../helpers/fake-soma.js";
+import { createSkillManifest } from "../helpers/manifests.js";
 import { getSkill } from "../../src/lib/db.js";
 import type { ArcManifest } from "../../src/types.js";
 
@@ -46,21 +47,7 @@ describe("InstallTransaction", () => {
         `#!/bin/sh\necho "$@" >> "${path}"\nexit 0\n`,
     });
     try {
-      const manifest: ArcManifest = {
-        name: "SomaCleanup",
-        version: "1.0.0",
-        type: "skill",
-        tier: "custom",
-        provides: {
-          skill: [{ trigger: "somacleanup" }],
-        },
-        capabilities: {
-          filesystem: { read: [], write: [] },
-          network: [],
-          bash: { allowed: false },
-          secrets: [],
-        },
-      };
+      const manifest = createSkillManifest("SomaCleanup", "somacleanup");
 
       const tx = beginInstallTransaction({
         packageName: "SomaCleanup",

@@ -15,7 +15,7 @@ import { removeHooks } from "../lib/hooks.js";
 import { findGitRoot } from "../lib/paths.js";
 import { unwireExtensions } from "../lib/extensions.js";
 import { runLifecycleScripts, runScript } from "../lib/scripts.js";
-import { runSomaSkillProjection, writeSomaProjectionWarning } from "../lib/soma-projection.js";
+import { runSomaSkillProjection } from "../lib/soma-projection.js";
 import {
   type HostOverrides,
   orderTargetsForInstall,
@@ -400,7 +400,9 @@ export async function remove(
       mode: "unproject",
     });
     if (somaProjectionResult.warning && opts.quiet !== true) {
-      writeSomaProjectionWarning(somaProjectionResult.warning);
+      process.stderr.write(
+        `  ⚠ ${somaProjectionResult.warning}; continuing without Soma projection\n`,
+      );
     }
   }
 

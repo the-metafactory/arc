@@ -7,10 +7,10 @@ import {
   type TestEnv,
 } from "../helpers/test-env.js";
 import { installFakeSoma } from "../helpers/fake-soma.js";
+import { createSkillManifest } from "../helpers/manifests.js";
 import { install } from "../../src/commands/install.js";
 import { remove } from "../../src/commands/remove.js";
 import { runSomaSkillProjection } from "../../src/lib/soma-projection.js";
-import type { ArcManifest } from "../../src/types.js";
 
 let env: TestEnv;
 let originalSomaBin: string | undefined;
@@ -134,21 +134,7 @@ describe("Soma skill projection lifecycle (arc#251)", () => {
     const installPath = join(env.root, "noisy-package");
     await mkdir(join(installPath, "skill"), { recursive: true });
 
-    const manifest: ArcManifest = {
-      name: "NoisyProjectionSkill",
-      version: "1.0.0",
-      type: "skill",
-      tier: "custom",
-      provides: {
-        skill: [{ trigger: "noisyprojection" }],
-      },
-      capabilities: {
-        filesystem: { read: [], write: [] },
-        network: [],
-        bash: { allowed: false },
-        secrets: [],
-      },
-    };
+    const manifest = createSkillManifest("NoisyProjectionSkill", "noisyprojection");
 
     const result = await runSomaSkillProjection({
       manifest,
@@ -167,7 +153,7 @@ describe("Soma skill projection lifecycle (arc#251)", () => {
     ]);
   });
 
-  test("hung soma projection times out without aborting lifecycle", async () => {
+  test("hung soma projection helper returns timeout warning", async () => {
     process.env.ARC_SOMA_TIMEOUT_MS = "50";
     await writeFakeSomaForEnv(
       (path) =>
@@ -177,21 +163,7 @@ describe("Soma skill projection lifecycle (arc#251)", () => {
     const installPath = join(env.root, "hung-package");
     await mkdir(join(installPath, "skill"), { recursive: true });
 
-    const manifest: ArcManifest = {
-      name: "HungProjectionSkill",
-      version: "1.0.0",
-      type: "skill",
-      tier: "custom",
-      provides: {
-        skill: [{ trigger: "hungprojection" }],
-      },
-      capabilities: {
-        filesystem: { read: [], write: [] },
-        network: [],
-        bash: { allowed: false },
-        secrets: [],
-      },
-    };
+    const manifest = createSkillManifest("HungProjectionSkill", "hungprojection");
 
     const result = await runSomaSkillProjection({
       manifest,

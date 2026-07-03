@@ -93,10 +93,6 @@ function resolveSomaTimeoutMs(): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_SOMA_TIMEOUT_MS;
 }
 
-export function writeSomaProjectionWarning(warning: string): void {
-  process.stderr.write(`  ⚠ ${warning}; continuing without Soma projection\n`);
-}
-
 async function readLimitedStderr(
   stream: ReadableStream<Uint8Array> | null,
   limitBytes: number,

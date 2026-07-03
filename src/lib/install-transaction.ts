@@ -12,7 +12,7 @@ import { errorMessage } from "./errors.js";
 import { rollbackWiredExtensions, wireExtensions } from "./extensions.js";
 import { recordInstall } from "./db.js";
 import { runLifecycleScripts, runScript } from "./scripts.js";
-import { runSomaSkillProjection, writeSomaProjectionWarning } from "./soma-projection.js";
+import { runSomaSkillProjection } from "./soma-projection.js";
 import type { Database } from "bun:sqlite";
 import { existsSync } from "fs";
 import type {
@@ -462,7 +462,9 @@ export async function completeInstallTransaction(
     tx.recordSomaProjectionCleanup(installPath, manifest);
   }
   if (somaProjectionResult.warning && !opts.quiet) {
-    writeSomaProjectionWarning(somaProjectionResult.warning);
+    process.stderr.write(
+      `  ⚠ ${somaProjectionResult.warning}; continuing without Soma projection\n`,
+    );
   }
 
   const now = new Date().toISOString();
