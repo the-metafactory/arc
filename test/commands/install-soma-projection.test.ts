@@ -78,6 +78,42 @@ describe("Soma skill projection lifecycle (arc#251)", () => {
     expect(installed.success).toBe(true);
   });
 
+  test("failed soma projection is tracked for possible rollback cleanup", async () => {
+    const callsPath = join(env.root, "soma-failed-calls.log");
+    const somaPath = join(env.arc.shimDir, "soma");
+    await mkdir(env.arc.shimDir, { recursive: true });
+    await writeFile(
+      somaPath,
+      `#!/bin/sh\necho "$@" >> "${callsPath}"\necho "projection failed" >&2\nexit 12\n`,
+    );
+    await chmod(somaPath, 0o755);
+    process.env.ARC_SOMA_BIN = somaPath;
+
+    const repo = await createMockSkillRepo(env.root, {
+      name: "PartialProjectionSkill",
+    });
+
+    const installed = await install({
+      arc: env.arc,
+      host: env.host,
+      db: env.db,
+      repoUrl: repo.url,
+      yes: true,
+    });
+
+    expect(installed.success).toBe(true);
+    expect(installed.evidence?.landedArtifacts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: "soma-projection" }),
+      ]),
+    );
+
+    const calls = (await readFile(callsPath, "utf8")).trim().split("\n");
+    expect(calls).toEqual([
+      expect.stringMatching(/^project-skill .+\/skill --apply$/),
+    ]);
+  });
+
   test("remove --yes still warns when soma unprojection is unavailable", async () => {
     const repo = await createMockSkillRepo(env.root, {
       name: "WarnOnRemove",

@@ -52,7 +52,7 @@ export async function runSomaSkillProjection(
       return { attempted: true, success: true, skipped: false };
     }
 
-    return skipWithWarning(
+    return failWithWarning(
       `soma ${command} failed for ${opts.manifest.name}${stderr ? `: ${stderr}` : ""}`,
     );
   } catch (err) {
@@ -62,11 +62,24 @@ export async function runSomaSkillProjection(
   }
 }
 
+export function writeSomaProjectionWarning(warning: string): void {
+  process.stderr.write(`  ⚠ ${warning}; continuing without Soma projection\n`);
+}
+
 function skipWithWarning(message: string): SomaSkillProjectionResult {
   return {
     attempted: true,
     success: false,
     skipped: true,
+    warning: message,
+  };
+}
+
+function failWithWarning(message: string): SomaSkillProjectionResult {
+  return {
+    attempted: true,
+    success: false,
+    skipped: false,
     warning: message,
   };
 }
