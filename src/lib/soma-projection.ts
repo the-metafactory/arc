@@ -18,6 +18,7 @@ export interface SomaSkillProjectionOptions {
 }
 
 const SOMA_STDERR_LIMIT_BYTES = 8192;
+const DEFAULT_SOMA_TIMEOUT_MS = 30_000;
 
 /**
  * Delegate skill loader/catalog projection to Soma.
@@ -45,13 +46,31 @@ export async function runSomaSkillProjection(
       stdout: "ignore",
       stderr: "pipe",
     });
+    const timeoutMs = resolveSomaTimeoutMs();
+    const state = { timedOut: false };
+    const timeout = setTimeout(() => {
+      state.timedOut = true;
+      try {
+        result.kill();
+      } catch {
+        // Process may already have exited.
+      }
+    }, timeoutMs);
     const [exitCode, stderr] = await Promise.all([
-      result.exited,
+      result.exited.finally(() => {
+        clearTimeout(timeout);
+      }),
       readLimitedStderr(result.stderr, SOMA_STDERR_LIMIT_BYTES),
     ]);
 
     if (exitCode === 0) {
       return { attempted: true, success: true, skipped: false };
+    }
+
+    if (state.timedOut) {
+      return failWithWarning(
+        `soma ${command} timed out after ${timeoutMs}ms for ${opts.manifest.name}${stderr ? `: ${stderr}` : ""}`,
+      );
     }
 
     return failWithWarning(
@@ -62,6 +81,16 @@ export async function runSomaSkillProjection(
       `soma ${command} unavailable for ${opts.manifest.name}: ${errorMessage(err)}`,
     );
   }
+}
+
+function resolveSomaTimeoutMs(): number {
+  const raw = process.env.ARC_SOMA_TIMEOUT_MS;
+  if (!raw) {
+    return DEFAULT_SOMA_TIMEOUT_MS;
+  }
+
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_SOMA_TIMEOUT_MS;
 }
 
 export function writeSomaProjectionWarning(warning: string): void {

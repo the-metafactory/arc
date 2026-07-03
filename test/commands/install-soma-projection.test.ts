@@ -14,10 +14,12 @@ import type { ArcManifest } from "../../src/types.js";
 
 let env: TestEnv;
 let originalSomaBin: string | undefined;
+let originalSomaTimeoutMs: string | undefined;
 
 beforeEach(async () => {
   env = await createTestEnv();
   originalSomaBin = process.env.ARC_SOMA_BIN;
+  originalSomaTimeoutMs = process.env.ARC_SOMA_TIMEOUT_MS;
 });
 
 afterEach(async () => {
@@ -25,6 +27,11 @@ afterEach(async () => {
     delete process.env.ARC_SOMA_BIN;
   } else {
     process.env.ARC_SOMA_BIN = originalSomaBin;
+  }
+  if (originalSomaTimeoutMs === undefined) {
+    delete process.env.ARC_SOMA_TIMEOUT_MS;
+  } else {
+    process.env.ARC_SOMA_TIMEOUT_MS = originalSomaTimeoutMs;
   }
   await env.cleanup();
 });
@@ -158,6 +165,44 @@ describe("Soma skill projection lifecycle (arc#251)", () => {
     expect(calls).toEqual([
       expect.stringMatching(/^project-skill .+\/skill --apply$/),
     ]);
+  });
+
+  test("hung soma projection times out without aborting lifecycle", async () => {
+    process.env.ARC_SOMA_TIMEOUT_MS = "50";
+    await writeFakeSomaForEnv(
+      (path) =>
+        `#!/bin/sh\necho "$@" >> "${path}"\necho "starting projection" >&2\nsleep 10\n`,
+      "soma-hung-calls.log",
+    );
+    const installPath = join(env.root, "hung-package");
+    await mkdir(join(installPath, "skill"), { recursive: true });
+
+    const manifest: ArcManifest = {
+      name: "HungProjectionSkill",
+      version: "1.0.0",
+      type: "skill",
+      tier: "custom",
+      provides: {
+        skill: [{ trigger: "hungprojection" }],
+      },
+      capabilities: {
+        filesystem: { read: [], write: [] },
+        network: [],
+        bash: { allowed: false },
+        secrets: [],
+      },
+    };
+
+    const result = await runSomaSkillProjection({
+      manifest,
+      installPath,
+      mode: "project",
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.skipped).toBe(false);
+    expect(result.attempted).toBe(true);
+    expect(result.warning).toContain("soma project-skill timed out after 50ms");
   });
 
   test("remove --yes still warns when soma unprojection is unavailable", async () => {
