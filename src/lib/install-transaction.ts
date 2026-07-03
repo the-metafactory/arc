@@ -52,6 +52,7 @@ export interface InstallTransaction {
   recordHookRegistration(settingsPath: string, count: number): void;
   recordExtensions(names: string[], claudeRoot: string): void;
   recordSomaProjection(installPath: string, manifest: ArcManifest): void;
+  recordSomaProjectionCleanup(installPath: string, manifest: ArcManifest): void;
   recordDbCommit(name: string): void;
   rollback(): Promise<InstallTransactionEvidence>;
 }
@@ -283,6 +284,10 @@ export function beginInstallTransaction(opts: {
       evidence.landedArtifacts.push({ kind: "soma-projection", skillDir });
     },
 
+    recordSomaProjectionCleanup(installPath, manifest) {
+      somaProjectionRecords.push({ installPath, manifest });
+    },
+
     recordDbCommit(name) {
       evidence.dbCommitted = true;
       evidence.landedArtifacts.push({ kind: "db-row", name });
@@ -451,8 +456,10 @@ export async function completeInstallTransaction(
     installPath,
     mode: "project",
   });
-  if (somaProjectionResult.attempted && !somaProjectionResult.skipped) {
+  if (somaProjectionResult.success) {
     tx.recordSomaProjection(installPath, manifest);
+  } else if (somaProjectionResult.attempted && !somaProjectionResult.skipped) {
+    tx.recordSomaProjectionCleanup(installPath, manifest);
   }
   if (somaProjectionResult.warning && !opts.quiet) {
     writeSomaProjectionWarning(somaProjectionResult.warning);

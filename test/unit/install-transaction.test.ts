@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync } from "fs";
-import { mkdir, mkdtemp, symlink, writeFile } from "fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, symlink, writeFile } from "fs/promises";
 import { join } from "path";
 import { tmpdir } from "os";
 import {
@@ -30,6 +30,63 @@ describe("InstallTransaction", () => {
     expect(evidence.rollback.warnings).toEqual([
       expect.stringContaining("statusline:blocked"),
     ]);
+  });
+
+  test("soma projection cleanup records rollback without landed evidence", async () => {
+    const root = await mkdtemp(join(tmpdir(), "arc-soma-cleanup-"));
+    const installPath = join(root, "package");
+    const skillDir = join(installPath, "skill");
+    await mkdir(skillDir, { recursive: true });
+    await writeFile(join(skillDir, "SKILL.md"), "# SomaCleanup\n");
+
+    const callsPath = join(root, "soma-calls.log");
+    const somaPath = join(root, "soma");
+    await writeFile(somaPath, `#!/bin/sh\necho "$@" >> "${callsPath}"\nexit 0\n`);
+    await chmod(somaPath, 0o755);
+
+    const originalSomaBin = process.env.ARC_SOMA_BIN;
+    process.env.ARC_SOMA_BIN = somaPath;
+    try {
+      const manifest: ArcManifest = {
+        name: "SomaCleanup",
+        version: "1.0.0",
+        type: "skill",
+        tier: "custom",
+        provides: {
+          skill: [{ trigger: "somacleanup" }],
+        },
+        capabilities: {
+          filesystem: { read: [], write: [] },
+          network: [],
+          bash: { allowed: false },
+          secrets: [],
+        },
+      };
+
+      const tx = beginInstallTransaction({
+        packageName: "SomaCleanup",
+        authorization: { approved: true },
+      });
+      tx.recordSomaProjectionCleanup(installPath, manifest);
+
+      expect(tx.evidence.landedArtifacts).not.toEqual(
+        expect.arrayContaining([expect.objectContaining({ kind: "soma-projection" })]),
+      );
+
+      const evidence = await tx.rollback();
+      expect(evidence.rollback.attempted).toBe(true);
+
+      const calls = (await readFile(callsPath, "utf8")).trim().split("\n");
+      expect(calls).toEqual([
+        expect.stringMatching(/^unproject-skill .+\/skill --apply$/),
+      ]);
+    } finally {
+      if (originalSomaBin === undefined) {
+        delete process.env.ARC_SOMA_BIN;
+      } else {
+        process.env.ARC_SOMA_BIN = originalSomaBin;
+      }
+    }
   });
 
   test("postinstall failure rolls back Landed Artifacts before DB commit", async () => {

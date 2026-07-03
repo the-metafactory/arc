@@ -85,7 +85,7 @@ describe("Soma skill projection lifecycle (arc#251)", () => {
     expect(installed.success).toBe(true);
   });
 
-  test("failed soma projection is recorded in transaction evidence", async () => {
+  test("failed soma projection does not claim landed evidence", async () => {
     const { callsPath } = await writeFakeSoma(
       (path) =>
         `#!/bin/sh\necho "$@" >> "${path}"\necho "projection failed" >&2\nexit 12\n`,
@@ -105,10 +105,8 @@ describe("Soma skill projection lifecycle (arc#251)", () => {
     });
 
     expect(installed.success).toBe(true);
-    expect(installed.evidence?.landedArtifacts).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ kind: "soma-projection" }),
-      ]),
+    expect(installed.evidence?.landedArtifacts).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ kind: "soma-projection" })]),
     );
 
     const calls = (await readFile(callsPath, "utf8")).trim().split("\n");
