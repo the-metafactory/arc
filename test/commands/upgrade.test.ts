@@ -10,11 +10,12 @@ import {
   formatUpgradeResults,
 } from "../../src/commands/upgrade.js";
 import { saveSources } from "../../src/lib/sources.js";
-import { writeFile, mkdir, rm } from "fs/promises";
+import { mkdir, readFile, rm, writeFile } from "fs/promises";
 import { existsSync, readFileSync, writeFileSync } from "fs";
 import { join } from "path";
 import YAML from "yaml";
 import type { RegistryConfig, SourcesConfig } from "../../src/types.js";
+import { installFakeSoma } from "../helpers/fake-soma.js";
 
 let env: TestEnv;
 
@@ -417,6 +418,63 @@ describe("upgradePackage — registry-extracted package (arc#187)", () => {
       expect(row.version).toBe("0.7.1");
     } finally {
       globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("registry upgrade preserves user overlay files and re-projects Soma skills", async () => {
+    const fakeSoma = await installFakeSoma({
+      root: env.root,
+      shimDir: env.arc.shimDir,
+      scriptForCallsPath: (path) => `#!/bin/sh\necho "$@" >> "${path}"\nexit 0\n`,
+    });
+
+    try {
+      const repo = await createMockSkillRepo(env.root, { name: "soma", version: "0.6.4" });
+      await install({ arc: env.arc, host: env.host, db: env.db, repoUrl: repo.url, yes: true });
+      const installPath = (env.db.prepare("SELECT install_path FROM skills WHERE name = ?").get("soma") as { install_path: string }).install_path;
+      const overlayPath = join(installPath, "skill", "EXTEND.yaml");
+      const statePath = join(installPath, ".soma-projection-state.json");
+      const stalePayloadPath = join(installPath, "skill", "removed-package-file.txt");
+      await writeFile(overlayPath, "user: overlay\n");
+      await writeFile(statePath, '{"projected":true}\n');
+      await writeFile(stalePayloadPath, "removed by publisher\n");
+
+      env.db.prepare("UPDATE skills SET repo_url = ? WHERE name = ?").run("@metafactory/soma@0.6.4", "soma");
+      await addMetafactorySource(env);
+
+      const fixture = await buildRegistryFixture(env.root, "soma", "0.7.1");
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = mockFetch(metafactoryRegistryHandler({
+        scope: "metafactory",
+        name: "soma",
+        latestVersion: "0.7.1",
+        sha256: fixture.sha256,
+        tarball: fixture.bytes,
+      }));
+
+      try {
+        const result = await upgradePackage(env.db, env.arc, env.host, "soma");
+        expect(result.success).toBe(true);
+        expect(result.oldVersion).toBe("0.6.4");
+        expect(result.newVersion).toBe("0.7.1");
+
+        expect(await readFile(overlayPath, "utf8")).toBe("user: overlay\n");
+        expect(await readFile(statePath, "utf8")).toBe('{"projected":true}\n');
+        expect(existsSync(stalePayloadPath)).toBe(false);
+
+        const upgradedManifest = YAML.parse(await readFile(join(installPath, "arc-manifest.yaml"), "utf8"));
+        expect(upgradedManifest.version).toBe("0.7.1");
+
+        const calls = (await readFile(fakeSoma.callsPath, "utf8")).trim().split("\n");
+        expect(calls).toEqual([
+          expect.stringMatching(/^project-skill .+\/skill --apply$/),
+          expect.stringMatching(/^project-skill .+\/skill --apply$/),
+        ]);
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    } finally {
+      fakeSoma.restore();
     }
   });
 

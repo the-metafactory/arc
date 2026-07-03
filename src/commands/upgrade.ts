@@ -1,6 +1,6 @@
 import { existsSync, readdirSync } from "fs";
 import { join, dirname } from "path";
-import { mkdir } from "fs/promises";
+import { cp, mkdir } from "fs/promises";
 import { homedir } from "os";
 import type { ArcPaths, HostAdapter, RulesTemplate } from "../types.js";
 import type { Database } from "bun:sqlite";
@@ -21,6 +21,7 @@ import { registerHooks, removeHooks, resolveHooksFromManifest } from "../lib/hoo
 import { generateRules } from "../lib/rules.js";
 import { wireExtensions } from "../lib/extensions.js";
 import { requireBrokerForManifest } from "../lib/nats-broker.js";
+import { runSomaSkillProjection } from "../lib/soma-projection.js";
 
 export interface UpgradeCheckResult {
   name: string;
@@ -160,6 +161,29 @@ function findConsumerRepos(templates: RulesTemplate[]): string[] {
   return dirs;
 }
 
+const REGISTRY_UPGRADE_PRESERVED_OVERLAY_PATHS = [
+  "EXTEND.yaml",
+  "skill/EXTEND.yaml",
+  ".soma-projection-state.json",
+];
+
+async function copyKnownOverlayEntries(srcDir: string, destDir: string): Promise<void> {
+  // Preserve explicit overlay/state paths only. Copying every old path absent
+  // from the new payload would keep package files the publisher removed.
+  for (const relPath of REGISTRY_UPGRADE_PRESERVED_OVERLAY_PATHS) {
+    const src = join(srcDir, relPath);
+    const dest = join(destDir, relPath);
+    if (!existsSync(src) || existsSync(dest)) continue;
+
+    await mkdir(dirname(dest), { recursive: true });
+    await cp(src, dest, {
+      recursive: true,
+      preserveTimestamps: true,
+      verbatimSymlinks: true,
+    });
+  }
+}
+
 /**
  * Upgrade a single installed package.
  * Pulls latest from git, re-reads manifest, updates DB version.
@@ -215,6 +239,13 @@ export async function upgradePackage(
     const newPath = fetched.extractedPath;
     const backupPath = `${installPath}.arc-upgrade-bak`;
     Bun.spawnSync(["rm", "-rf", backupPath], { stdout: "pipe", stderr: "pipe" });
+    try {
+      await copyKnownOverlayEntries(installPath, newPath);
+    } catch (err) {
+      Bun.spawnSync(["rm", "-rf", newPath], { stdout: "pipe", stderr: "pipe" });
+      const detail = err instanceof Error ? err.message : String(err);
+      return { success: false, name, oldVersion: skill.version, error: `upgrade overlay preservation failed: ${detail}` };
+    }
     const aside = Bun.spawnSync(["mv", installPath, backupPath], { stdout: "pipe", stderr: "pipe" });
     if (aside.exitCode !== 0) {
       Bun.spawnSync(["rm", "-rf", newPath], { stdout: "pipe", stderr: "pipe" });
@@ -437,6 +468,17 @@ export async function upgradePackage(
 
   // Upgrade committed — drop the registry backup (no-op for git packages).
   commitSwap();
+
+  const somaProjectionResult = await runSomaSkillProjection({
+    manifest,
+    installPath,
+    mode: "project",
+  });
+  if (somaProjectionResult.warning) {
+    process.stderr.write(
+      `  ⚠ ${somaProjectionResult.warning}; continuing without Soma projection\n`,
+    );
+  }
 
   return { success: true, name, oldVersion, newVersion };
 }
