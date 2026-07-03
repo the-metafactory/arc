@@ -20,6 +20,10 @@ _Avoid_: Approval flag, yes option, confirmation
 A host-visible package output such as a skill symlink, command shim, hook registration, extension wiring, launchd plist, or generated template.
 _Avoid_: Installed file, output
 
+**Soma Projection**:
+A best-effort postinstall handoff where Arc asks Soma to project or unproject a skill into Soma-owned substrates after Arc has landed the package. Successful projection may be recorded as a **Landed Artifact**; failed, timed-out, or unavailable Soma projection remains non-fatal and is reported as a warning rather than committed package state. During an **Install Transaction**, Arc may also retain internal cleanup state for an attempted projection so rollback can ask Soma to unproject possible partial state.
+_Avoid_: Soma install, Arc-owned substrate sync
+
 **Transaction Evidence**:
 The structured record of what an Install Transaction landed, committed, rolled back, or failed to roll back.
 _Avoid_: Result object, debug details
@@ -29,6 +33,7 @@ _Avoid_: Result object, debug details
 - An **Install Transaction** starts from exactly one **Resolved Package**.
 - An **Install Transaction** requires exactly one **Install Authorization** before landing artifacts.
 - An **Install Transaction** may create many **Landed Artifacts**.
+- An **Install Transaction** may delegate a skill **Soma Projection** after package lifecycle checks; Soma owns projection into its substrates.
 - An **Install Transaction** returns **Transaction Evidence** whether it succeeds or fails.
 - A package database row is committed only after the **Install Transaction** has landed artifacts and completed lifecycle checks.
 

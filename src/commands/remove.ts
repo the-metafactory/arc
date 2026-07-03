@@ -15,6 +15,7 @@ import { removeHooks } from "../lib/hooks.js";
 import { findGitRoot } from "../lib/paths.js";
 import { unwireExtensions } from "../lib/extensions.js";
 import { runLifecycleScripts, runScript } from "../lib/scripts.js";
+import { runSomaSkillProjection } from "../lib/soma-projection.js";
 import {
   type HostOverrides,
   orderTargetsForInstall,
@@ -390,6 +391,19 @@ export async function remove(
   // Remove extensions (before deleting repo)
   if (manifest?.extensions) {
     await unwireExtensions(manifest, host.paths.root);
+  }
+
+  if (manifest?.type === "skill") {
+    const somaProjectionResult = await runSomaSkillProjection({
+      manifest,
+      installPath: skill.install_path,
+      mode: "unproject",
+    });
+    if (somaProjectionResult.warning && opts.quiet !== true) {
+      process.stderr.write(
+        `  ⚠ ${somaProjectionResult.warning}; continuing without Soma projection\n`,
+      );
+    }
   }
 
   // Mirror provides.files on the way out.

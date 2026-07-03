@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync } from "fs";
-import { mkdir, mkdtemp, symlink, writeFile } from "fs/promises";
+import { mkdir, mkdtemp, readFile, symlink, writeFile } from "fs/promises";
 import { join } from "path";
 import { tmpdir } from "os";
 import {
@@ -8,6 +8,8 @@ import {
   completeInstallTransaction,
 } from "../../src/lib/install-transaction.js";
 import { createTestEnv } from "../helpers/test-env.js";
+import { installFakeSoma } from "../helpers/fake-soma.js";
+import { createSkillManifest } from "../helpers/manifests.js";
 import { getSkill } from "../../src/lib/db.js";
 import type { ArcManifest } from "../../src/types.js";
 
@@ -30,6 +32,43 @@ describe("InstallTransaction", () => {
     expect(evidence.rollback.warnings).toEqual([
       expect.stringContaining("statusline:blocked"),
     ]);
+  });
+
+  test("soma projection cleanup records rollback without landed evidence", async () => {
+    const root = await mkdtemp(join(tmpdir(), "arc-soma-cleanup-"));
+    const installPath = join(root, "package");
+    const skillDir = join(installPath, "skill");
+    await mkdir(skillDir, { recursive: true });
+    await writeFile(join(skillDir, "SKILL.md"), "# SomaCleanup\n");
+
+    const fakeSoma = await installFakeSoma({
+      root,
+      scriptForCallsPath: (path) =>
+        `#!/bin/sh\necho "$@" >> "${path}"\nexit 0\n`,
+    });
+    try {
+      const manifest = createSkillManifest("SomaCleanup", "somacleanup");
+
+      const tx = beginInstallTransaction({
+        packageName: "SomaCleanup",
+        authorization: { approved: true },
+      });
+      tx.recordSomaProjectionCleanup(installPath, manifest);
+
+      expect(tx.evidence.landedArtifacts).not.toEqual(
+        expect.arrayContaining([expect.objectContaining({ kind: "soma-projection" })]),
+      );
+
+      const evidence = await tx.rollback();
+      expect(evidence.rollback.attempted).toBe(true);
+
+      const calls = (await readFile(fakeSoma.callsPath, "utf8")).trim().split("\n");
+      expect(calls).toEqual([
+        expect.stringMatching(/^unproject-skill .+\/skill --apply$/),
+      ]);
+    } finally {
+      fakeSoma.restore();
+    }
   });
 
   test("postinstall failure rolls back Landed Artifacts before DB commit", async () => {
