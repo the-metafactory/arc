@@ -231,7 +231,11 @@ function defaultCredsPath(name: string): string {
  * envelope's `jwt` field will be empty).
  */
 function extractJwt(credsContent: string): string {
-  const match = /-----BEGIN NATS USER JWT-----\s*([\s\S]*?)\s*-----END NATS USER JWT-----/.exec(credsContent);
+  // NB: the decorated creds format nsc emits uses FIVE dashes on the BEGIN
+  // marker but SIX on the END markers (`------END NATS USER JWT------`). Match
+  // the end marker with `-+` — a fixed five-dash end pattern lazily matches
+  // INSIDE the six-dash marker and captures a stray leading `-` into the JWT.
+  const match = /-+BEGIN NATS USER JWT-+\s*([\s\S]*?)\s*-+END NATS USER JWT-+/.exec(credsContent);
   if (!match) return "";
   return match[1].replace(/\s+/g, "");
 }
@@ -1520,4 +1524,360 @@ export function exportSystem(opts: ExportSystemOptions): ExportSystemResult {
   }
 
   return { account: name, pubKey, jwt, seedPath };
+}
+
+// =============================================================================
+// arc nats add-federated-user — scoped hub-transport user mint (cortex#1598)
+// =============================================================================
+
+/**
+ * The role name of the account's federated scoped signing key. ONE key per
+ * account carries the role-wide, subject-TEMPLATED permission set; every
+ * federated-user is signed by it and carries no permissions of its own
+ * (nsc/nats-server enforce that scoped-key users must be permission-free).
+ */
+export const FEDERATED_SCOPE_ROLE = "federated";
+
+/**
+ * The scope's permission templates (cortex#1598, design §5.3 — least privilege
+ * is CODE). HARDWIRED, not caller-supplied: a typo'd hand-typed permission set
+ * must be structurally impossible.
+ *
+ *   - subscribe: the member's OWN scope only. `{{name()}}` expands to the user
+ *     name at connect time; the dotted `<principal>.<stack>` user-name
+ *     convention makes it `federated.<principal>.<stack>.>` — exactly the
+ *     receiving scope the cortex boot validator pins. Plus `_INBOX.>` for
+ *     request/reply.
+ *   - publish: the whole `federated.>` wire — a member dispatches INTO peers'
+ *     scopes, so publish cannot be narrowed to the own scope. Plus `_INBOX.>`
+ *     for replies.
+ */
+export const FEDERATED_SUB_TEMPLATE = "federated.{{name()}}.>,_INBOX.>";
+export const FEDERATED_PUB_TEMPLATE = "federated.>,_INBOX.>";
+
+/**
+ * Federated-user names are `<principal>.<stack>` — dotted, so the scope
+ * template's `{{name()}}` expansion lands the stack segment on its own subject
+ * token. Principal: letter-prefixed lowercase alnum+hyphen (the cortex
+ * principal grammar); stack slug: letter-prefixed lowercase alnum/underscore/
+ * hyphen (the cortex slug grammar). Also rejects flag-injection values.
+ */
+const FEDERATED_USER_NAME_RE = /^[a-z](?:[a-z0-9]|-(?=[a-z0-9]))*\.[a-z](?:[a-z0-9]|[-_](?=[a-z0-9]))*$/;
+
+function validateFederatedUserName(name: string): void {
+  if (!FEDERATED_USER_NAME_RE.test(name)) {
+    throw new ArcNatsCommandError(
+      "VALIDATION_ERROR",
+      `federated-user name "${name}" must be <principal>.<stack> (lowercase, letter-prefixed segments, e.g. "jc.default").`,
+    );
+  }
+}
+
+/** A discovered `federated`-role scoped key: its pubkey + its LIVE templates. */
+interface FederatedScopedKey {
+  key: string;
+  /** The scope's actual sub/pub allow lists as found in the account claims. */
+  subAllow: string[];
+  pubAllow: string[];
+  /** True when the scope carries ANY deny entries (divergent from ours). */
+  hasDeny: boolean;
+}
+
+/**
+ * Find the account's `federated`-role scoped signing key in
+ * `nsc describe account -J` output — returning its pubkey AND its live
+ * permission templates so the caller can verify them (never trust that an
+ * existing role key still carries the expected scope). Tolerant of the two
+ * shapes nsc emits for scoped keys across versions: an ARRAY of mixed strings
+ * (plain keys) and objects (`{ key, role?/name?, template?, kind? }`), or a
+ * MAP keyed by pubkey with scope objects as values. Returns null when no key
+ * carries the role.
+ */
+function findFederatedScopedKey(accountJson: unknown): FederatedScopedKey | null {
+  const nats = (accountJson as { nats?: { signing_keys?: unknown } } | null)?.nats;
+  const sks = nats?.signing_keys;
+  if (sks === undefined || sks === null) return null;
+
+  const roleOf = (entry: unknown): string | undefined => {
+    if (typeof entry !== "object" || entry === null) return undefined;
+    const e = entry as { role?: unknown; name?: unknown; template?: { name?: unknown } };
+    if (typeof e.role === "string") return e.role;
+    if (typeof e.name === "string") return e.name;
+    if (typeof e.template?.name === "string") return e.template.name;
+    return undefined;
+  };
+  const keyOf = (entry: unknown, fallback?: string): string | undefined => {
+    if (typeof entry === "object" && entry !== null) {
+      const k = (entry as { key?: unknown }).key;
+      if (typeof k === "string" && k.startsWith("A")) return k;
+    }
+    return fallback;
+  };
+  const strings = (v: unknown): string[] =>
+    Array.isArray(v) ? v.filter((s): s is string => typeof s === "string") : [];
+  const scopeOf = (entry: unknown, key: string): FederatedScopedKey => {
+    // Permissions live on the entry itself or under `template` depending on
+    // the nsc version; both use the JWT Permissions shape {pub:{allow,deny},sub:{...}}.
+    const e = entry as {
+      template?: { pub?: { allow?: unknown; deny?: unknown }; sub?: { allow?: unknown; deny?: unknown } };
+      pub?: { allow?: unknown; deny?: unknown };
+      sub?: { allow?: unknown; deny?: unknown };
+    };
+    const pub = e.template?.pub ?? e.pub;
+    const sub = e.template?.sub ?? e.sub;
+    return {
+      key,
+      subAllow: strings(sub?.allow),
+      pubAllow: strings(pub?.allow),
+      hasDeny: strings(pub?.deny).length > 0 || strings(sub?.deny).length > 0,
+    };
+  };
+
+  if (Array.isArray(sks)) {
+    for (const entry of sks) {
+      if (roleOf(entry) === FEDERATED_SCOPE_ROLE) {
+        const key = keyOf(entry);
+        if (key !== undefined) return scopeOf(entry, key);
+      }
+    }
+    return null;
+  }
+  if (typeof sks === "object") {
+    for (const [mapKey, entry] of Object.entries(sks as Record<string, unknown>)) {
+      if (roleOf(entry) === FEDERATED_SCOPE_ROLE) {
+        const key = keyOf(entry, mapKey.startsWith("A") ? mapKey : undefined);
+        if (key !== undefined) return scopeOf(entry, key);
+      }
+    }
+  }
+  return null;
+}
+
+/** Order-insensitive set equality of a live allow list vs a comma-joined template. */
+function allowListMatches(live: string[], template: string): boolean {
+  const expected = new Set(template.split(","));
+  if (live.length !== expected.size) return false;
+  return live.every((s) => expected.has(s));
+}
+
+/** `nsc describe account -n <name> -J`, parsed. */
+function describeAccountJson(account: string): unknown {
+  const raw = nsc(["describe", "account", "-n", account, "-J"]);
+  try {
+    return JSON.parse(raw);
+  } catch (err) {
+    throw new ArcNatsCommandError(
+      "NSC_COMMAND_FAILED",
+      `nsc describe account -n ${account} -J returned unparseable JSON: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+}
+
+/**
+ * Assert a discovered `federated`-role scope carries EXACTLY the hardwired
+ * templates. A divergent pre-existing scope (edited by hand, or minted by a
+ * different tool) means every credential minted under it has a scope OTHER
+ * than what this command reports — the "unscoped export" class §5.3 refuses.
+ * The scope is never silently rewritten (that is a rotation-class operation);
+ * the command refuses instead.
+ */
+function assertScopeMatchesTemplates(account: string, scope: FederatedScopedKey): void {
+  const subOk = allowListMatches(scope.subAllow, FEDERATED_SUB_TEMPLATE);
+  const pubOk = allowListMatches(scope.pubAllow, FEDERATED_PUB_TEMPLATE);
+  if (subOk && pubOk && !scope.hasDeny) return;
+  throw new ArcNatsCommandError(
+    "SIGNING_KEY_FAILED",
+    `account "${account}" already carries a ${FEDERATED_SCOPE_ROLE}-role scoped signing key (${scope.key}) ` +
+      `whose permission template DIVERGES from the expected scope ` +
+      `(live sub=[${scope.subAllow.join(",")}] pub=[${scope.pubAllow.join(",")}]${scope.hasDeny ? " with deny entries" : ""}; ` +
+      `expected sub=[${FEDERATED_SUB_TEMPLATE}] pub=[${FEDERATED_PUB_TEMPLATE}]) — refusing to mint under it. ` +
+      `Rotating the scope is a manual operation (nsc edit signing-key), never silent.`,
+  );
+}
+
+/**
+ * Ensure the account carries its ONE `federated`-role scoped signing key with
+ * EXACTLY the hardwired templates. Probe-first idempotent: an existing key
+ * with the role is verified against the templates and returned untouched on a
+ * match — and REFUSED on a mismatch (never silently rewritten; changing the
+ * scope is a rotation-class operation, out of scope here). Absent → generate
+ * + scope in one `nsc edit signing-key --sk generate` call, then re-describe
+ * to resolve + verify the generated key (deterministic — no output-scraping).
+ */
+function ensureFederatedScopedKey(
+  account: string,
+): { signingKeyPubKey: string; created: boolean } {
+  const existing = findFederatedScopedKey(describeAccountJson(account));
+  if (existing !== null) {
+    assertScopeMatchesTemplates(account, existing);
+    return { signingKeyPubKey: existing.key, created: false };
+  }
+
+  try {
+    nsc([
+      "edit", "signing-key",
+      "--account", account,
+      "--sk", "generate",
+      "--role", FEDERATED_SCOPE_ROLE,
+      "--allow-sub", FEDERATED_SUB_TEMPLATE,
+      "--allow-pub", FEDERATED_PUB_TEMPLATE,
+    ]);
+  } catch (err) {
+    throw new ArcNatsCommandError(
+      "SIGNING_KEY_FAILED",
+      `failed to create the ${FEDERATED_SCOPE_ROLE}-role scoped signing key on account "${account}": ` +
+        (err instanceof Error ? err.message : String(err)),
+    );
+  }
+
+  const created = findFederatedScopedKey(describeAccountJson(account));
+  if (created === null) {
+    throw new ArcNatsCommandError(
+      "SIGNING_KEY_FAILED",
+      `scoped signing key was created on "${account}" but no ${FEDERATED_SCOPE_ROLE}-role key is visible in nsc describe — refusing to mint against an unverified scope.`,
+    );
+  }
+  // Verify the fresh scope too — the templates the result reports must be the
+  // templates the store actually carries, or the report is fabricated.
+  assertScopeMatchesTemplates(account, created);
+  return { signingKeyPubKey: created.key, created: true };
+}
+
+/**
+ * Describe a user and return `{ iss, sub, hasOwnPerms }` — the issuer is what
+ * proves the user is signed by the scoped key; own perms on a scoped-key user
+ * are structurally illegal and mean the user is NOT scope-governed.
+ */
+function describeUserClaims(account: string, name: string): { iss: string; sub: string; hasOwnPerms: boolean } {
+  const raw = nsc(["describe", "user", "-a", account, "-n", name, "-J"]);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    throw new ArcNatsCommandError(
+      "INVALID_USER_KEY",
+      `nsc describe user -J for "${name}" returned unparseable JSON: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+  const p = parsed as { iss?: unknown; sub?: unknown; nats?: { pub?: { allow?: unknown[]; deny?: unknown[] }; sub?: { allow?: unknown[]; deny?: unknown[] } } };
+  const iss = typeof p.iss === "string" ? p.iss : "";
+  const sub = typeof p.sub === "string" ? p.sub : "";
+  const perms = p.nats;
+  const hasOwnPerms =
+    (perms?.pub?.allow?.length ?? 0) > 0 ||
+    (perms?.pub?.deny?.length ?? 0) > 0 ||
+    (perms?.sub?.allow?.length ?? 0) > 0 ||
+    (perms?.sub?.deny?.length ?? 0) > 0;
+  return { iss, sub, hasOwnPerms };
+}
+
+export interface AddFederatedUserOptions {
+  /** The hub's federation account (UPPER_SNAKE). REQUIRED — never inferred: this is hub topology. */
+  account: string;
+  /** Creds output path. Default: `~/.config/nats/<name>.creds`. */
+  output?: string;
+  /** When true: suppress human-readable stdout; throw ArcNatsCommandError on failure. */
+  json?: boolean;
+}
+
+export interface AddFederatedUserResult {
+  account: string;
+  accountPubKey: string;
+  user: string;
+  userPubKey: string;
+  signingKeyPubKey: string;
+  scopeCreated: boolean;
+  scopeAlreadyPresent: boolean;
+  userCreated: boolean;
+  userAlreadyPresent: boolean;
+  credsPath: string;
+  jwt: string;
+  subTemplate: string;
+  pubTemplate: string;
+}
+
+/**
+ * Mint a subject-scoped hub-transport user (cortex#1598, design §5.3/§5.4).
+ *
+ * Order of operations (each half probe-first idempotent):
+ *   1. ensure the account's `federated`-role scoped signing key (created once;
+ *      never rewritten),
+ *   2. mint user `<principal>.<stack>` signed by that key (`nsc add user -K`),
+ *      with NO permissions of its own — an existing user signed by the scoped
+ *      key is re-exported; an existing user signed by ANYTHING ELSE is refused
+ *      (`USER_NOT_SCOPED`): re-exporting it would hand out an unscoped
+ *      credential,
+ *   3. post-mint verification: the user's `iss` must equal the scoped key and
+ *      the user must carry no own permissions — refuse the export otherwise,
+ *   4. `nsc generate creds` → written 0600.
+ */
+export function addFederatedUser(
+  name: string,
+  opts: AddFederatedUserOptions,
+): AddFederatedUserResult {
+  const json = opts.json === true;
+  ensureNscInstalled(json);
+  validateFederatedUserName(name);
+  validateAccountName(opts.account);
+  const account = opts.account;
+
+  const accountPubKey = tryGetPubKey("account", account);
+  if (accountPubKey === null) {
+    throw new ArcNatsCommandError(
+      "ACCOUNT_NOT_FOUND",
+      `account "${account}" does not exist under the current operator — create it first (arc nats add-account ${account}).`,
+    );
+  }
+
+  // 1. The scoped signing key (probe-first, created once).
+  const scope = ensureFederatedScopedKey(account);
+
+  // 2. The user (probe-first).
+  const alreadyExisted = userExists(account, name);
+  if (!alreadyExisted) {
+    nsc(["add", "user", "-a", account, "-n", name, "-K", scope.signingKeyPubKey]);
+  }
+
+  // 3. Post-mint verification — refuse an unscoped export EITHER way (a fresh
+  //    mint that somehow bound the wrong key, or a pre-existing foreign user).
+  const claims = describeUserClaims(account, name);
+  if (claims.iss !== scope.signingKeyPubKey || claims.hasOwnPerms) {
+    throw new ArcNatsCommandError(
+      "USER_NOT_SCOPED",
+      `user "${name}" under "${account}" is not governed by the ${FEDERATED_SCOPE_ROLE} scope ` +
+        `(issuer ${claims.iss || "(none)"} vs scoped key ${scope.signingKeyPubKey}` +
+        `${claims.hasOwnPerms ? ", and it carries its own permissions" : ""}) — refusing to export. ` +
+        (alreadyExisted ? `Delete the conflicting user (nsc delete user -a ${account} -n ${name}) and re-run.` : "This is a mint-path bug."),
+    );
+  }
+
+  // 4. Export the creds (0600 via writeCredsFile).
+  const outPath = opts.output ?? defaultCredsPath(name);
+  const credsContent = nsc(["generate", "creds", "-a", account, "-n", name]);
+  writeCredsFile(outPath, credsContent);
+  const jwt = extractJwt(credsContent);
+
+  if (!json) {
+    console.log(`${alreadyExisted ? "Re-exported" : "Created"} federated user: ${name} (account: ${account})`);
+    console.log(`  scoped signing key: ${scope.signingKeyPubKey}${scope.created ? " (created)" : " (existing)"}`);
+    console.log(`  subscribe scope: ${FEDERATED_SUB_TEMPLATE}`);
+    console.log(`  publish scope:  ${FEDERATED_PUB_TEMPLATE}`);
+    console.log(`  credentials: ${outPath} (mode 600)`);
+  }
+
+  return {
+    account,
+    accountPubKey,
+    user: name,
+    userPubKey: claims.sub,
+    signingKeyPubKey: scope.signingKeyPubKey,
+    scopeCreated: scope.created,
+    scopeAlreadyPresent: !scope.created,
+    userCreated: !alreadyExisted,
+    userAlreadyPresent: alreadyExisted,
+    credsPath: outPath,
+    jwt,
+    subTemplate: FEDERATED_SUB_TEMPLATE,
+    pubTemplate: FEDERATED_PUB_TEMPLATE,
+  };
 }

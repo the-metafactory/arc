@@ -34,6 +34,14 @@ export const ARC_NATS_FEDERATION_SCHEMA = "arc.nats.federation.v1" as const;
 export const ARC_NATS_OPERATOR_SCHEMA = "arc.nats.operator.v1" as const;
 
 /**
+ * Schema string for the federated-user mint (`arc nats add-federated-user`,
+ * cortex#1598). Its own namespace (the `arc.nats.federation.v1` precedent):
+ * this is the one verb that mints SCOPED hub-transport users, and the consumer
+ * (cortex admit-and-seal) guards on exactly this schema string.
+ */
+export const ARC_NATS_FEDERATED_USER_SCHEMA = "arc.nats.federated-user.v1" as const;
+
+/**
  * Closed set of error codes emitted by `arc nats --json`. Cortex (and any
  * other consumer) can branch on these without parsing human-readable text.
  *
@@ -56,6 +64,8 @@ export type ArcNatsErrorCode =
   | "BROKER_UNREACHABLE"    // JetStream provisioning: NATS broker not reachable
   | "STREAM_OP_FAILED"      // JetStream provisioning: stream info/add/update failed
   | "CONSUMER_OP_FAILED"    // JetStream provisioning: consumer info/add failed
+  | "SIGNING_KEY_FAILED"    // scoped signing key create/verify failed (add-federated-user)
+  | "USER_NOT_SCOPED"       // existing user is NOT signed by the scoped key — refuse to export
   | "UNKNOWN";              // catch-all for un-mapped failures
 
 export interface ArcNatsError {
@@ -106,6 +116,17 @@ export interface JsonFederationError {
 
 export interface JsonOperatorError {
   schema: typeof ARC_NATS_OPERATOR_SCHEMA;
+  ok: false;
+  error: ArcNatsError;
+}
+
+export interface JsonFederatedUserOkBase {
+  schema: typeof ARC_NATS_FEDERATED_USER_SCHEMA;
+  ok: true;
+}
+
+export interface JsonFederatedUserError {
+  schema: typeof ARC_NATS_FEDERATED_USER_SCHEMA;
   ok: false;
   error: ArcNatsError;
 }
@@ -318,6 +339,48 @@ export interface ExportSystemJson extends JsonOperatorOkBase {
 }
 
 /**
+ * `arc nats add-federated-user` result (schema: arc.nats.federated-user.v1;
+ * cortex#1598). Mints a hub-transport user whose permissions come ENTIRELY
+ * from the account's `federated`-role scoped signing key (subject-templated —
+ * the user itself carries no permissions). Both halves are idempotent:
+ *
+ *   - `scopeCreated` / `scopeAlreadyPresent` — the scoped signing key is
+ *     created once per account and never silently rewritten.
+ *   - `userCreated` / `userAlreadyPresent` — an existing user signed by the
+ *     scoped key is re-exported and reported present; an existing user signed
+ *     by anything else is REFUSED (`USER_NOT_SCOPED`) — re-exporting it would
+ *     hand out an unscoped credential.
+ *
+ * `subTemplate` / `pubTemplate` report the scope the credential is bound to —
+ * VERIFIED, not assumed: the command reads the scope's live templates from the
+ * account claims and refuses the mint (`SIGNING_KEY_FAILED`) when a
+ * pre-existing role key diverges from these values, so a reported template is
+ * always the store's actual template.
+ */
+export interface AddFederatedUserJson extends JsonFederatedUserOkBase {
+  account: string;
+  /** A-prefixed account NKey public key. */
+  accountPubKey: string;
+  /** The minted user name (`<principal>.<stack>` dotted convention). */
+  user: string;
+  /** U-prefixed user NKey public key (the `sub` claim). */
+  userPubKey: string;
+  /** A-prefixed pubkey of the `federated`-role scoped signing key that signed the user. */
+  signingKeyPubKey: string;
+  scopeCreated: boolean;
+  scopeAlreadyPresent: boolean;
+  userCreated: boolean;
+  userAlreadyPresent: boolean;
+  credsPath: string;
+  /** Raw user JWT (the `BEGIN NATS USER JWT` block, base64 body only). */
+  jwt: string;
+  /** The scope's subscribe template (own-scope only). */
+  subTemplate: string;
+  /** The scope's publish template (the cross-principal wire grammar). */
+  pubTemplate: string;
+}
+
+/**
  * Emit a single line of JSON to stdout and return. Caller is responsible for
  * setting the process exit code (0 for ok, 1 for !ok).
  *
@@ -337,9 +400,11 @@ export function emitJson(
     | ExportAccountJson
     | ExportOperatorJson
     | ExportSystemJson
+    | AddFederatedUserJson
     | JsonError
     | JsonFederationError
-    | JsonOperatorError,
+    | JsonOperatorError
+    | JsonFederatedUserError,
 ): void {
   process.stdout.write(JSON.stringify(payload) + "\n");
 }
