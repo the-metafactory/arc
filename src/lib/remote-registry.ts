@@ -132,9 +132,18 @@ export async function fetchRemoteRegistry(
 
     if (!response.ok) {
       const body = await response.text().catch(() => "");
-      const hint = (response.status === 401 || response.status === 404)
-        ? `\n   hint: check that GITHUB_TOKEN has 'Contents: Read' on the source repo`
-        : "";
+      let hint = "";
+      if (response.status === 401) {
+        // 401 is genuinely an auth problem -- the token hint stands.
+        hint = `\n   hint: check that GITHUB_TOKEN has 'Contents: Read' on the source repo`;
+      } else if (response.status === 404) {
+        // A 404 usually means the source just does not exist, not that you lack
+        // a token -- don't send people chasing a GITHUB_TOKEN they may not need.
+        // See arc#267.
+        hint = fetchUrl.includes("github")
+          ? `\n   hint: the source repo or path may not exist -- or, if it is private, GITHUB_TOKEN needs 'Contents: Read'`
+          : `\n   hint: the source URL returned 404 -- verify it still exists`;
+      }
       process.stderr.write(
         `Warning: failed to fetch source "${source.name}" (${response.status} ${response.statusText}): ${fetchUrl}` +
         (body ? `\n   ${body.slice(0, 200)}` : "") +

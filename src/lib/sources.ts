@@ -7,8 +7,8 @@ import type { SourcesConfig, RegistrySource, SourceType } from "../types.js";
 /** Valid source types */
 export const VALID_SOURCE_TYPES: readonly SourceType[] = ["registry", "metafactory"];
 
-// API source -- becomes the primary once F-3 (registry API client) lands.
-// Until then, fetchRemoteRegistry skips type:"metafactory" sources gracefully.
+// The metafactory API source -- the sole default. Discovery goes through
+// meta-factory.ai via the metafactory-api client.
 const DEFAULT_API_SOURCE: RegistrySource = {
   name: "metafactory",
   url: "https://meta-factory.ai",
@@ -17,13 +17,13 @@ const DEFAULT_API_SOURCE: RegistrySource = {
   enabled: true,
 };
 
-// REGISTRY.yaml fallback -- works today, keeps arc search functional during F-1..F-3 window.
-const DEFAULT_REGISTRY_SOURCE: RegistrySource = {
-  name: "metafactory-registry",
-  url: "https://raw.githubusercontent.com/the-metafactory/meta-factory/main/REGISTRY.yaml",
-  tier: "community",
-  enabled: true,
-};
+// A dead default shipped by arc <= 0.33.0: a REGISTRY.yaml fallback pointing at
+// the-metafactory/meta-factory, which is not publicly reachable (404 on both the
+// raw URL and the repo). New installs no longer get it; loadSources() prunes it
+// from pre-existing configs. See arc#267.
+const DEAD_DEFAULT_REGISTRY_NAME = "metafactory-registry";
+const DEAD_DEFAULT_REGISTRY_URL =
+  "https://raw.githubusercontent.com/the-metafactory/meta-factory/main/REGISTRY.yaml";
 
 export async function loadSources(
   sourcesPath: string
@@ -41,13 +41,33 @@ export async function loadSources(
     return createDefaultSources();
   }
 
-  return parsed as SourcesConfig;
+  const config = parsed as SourcesConfig;
+  // Self-heal: shed the dead metafactory-registry default (arc#267) from
+  // pre-existing configs, persisting only when something actually changed.
+  if (pruneDeadDefaultSources(config)) {
+    await saveSources(sourcesPath, config);
+  }
+  return config;
 }
 
 export function createDefaultSources(): SourcesConfig {
   return {
-    sources: [DEFAULT_API_SOURCE, DEFAULT_REGISTRY_SOURCE],
+    sources: [DEFAULT_API_SOURCE],
   };
+}
+
+/**
+ * Remove the dead `metafactory-registry` default (arc#267) from a loaded config.
+ * Matches on the exact shipped name AND url so user-defined registry sources --
+ * even one a user named `metafactory-registry` -- are never touched.
+ * Returns true if an entry was removed.
+ */
+export function pruneDeadDefaultSources(config: SourcesConfig): boolean {
+  const before = config.sources.length;
+  config.sources = config.sources.filter(
+    (s) => !(s.name === DEAD_DEFAULT_REGISTRY_NAME && s.url === DEAD_DEFAULT_REGISTRY_URL),
+  );
+  return config.sources.length !== before;
 }
 
 export async function saveSources(
