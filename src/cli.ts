@@ -1955,22 +1955,12 @@ nats
           ...(opts.output !== undefined && { output: opts.output }),
           json: true,
         });
+        // Field names match AddFederatedUserResult 1:1 — spread so a new field
+        // is added in two places (result + json interface), not three.
         const payload: AddFederatedUserJson = {
           schema: ARC_NATS_FEDERATED_USER_SCHEMA,
           ok: true,
-          account: r.account,
-          accountPubKey: r.accountPubKey,
-          user: r.user,
-          userPubKey: r.userPubKey,
-          signingKeyPubKey: r.signingKeyPubKey,
-          scopeCreated: r.scopeCreated,
-          scopeAlreadyPresent: r.scopeAlreadyPresent,
-          userCreated: r.userCreated,
-          userAlreadyPresent: r.userAlreadyPresent,
-          credsPath: r.credsPath,
-          jwt: r.jwt,
-          subTemplate: r.subTemplate,
-          pubTemplate: r.pubTemplate,
+          ...r,
         };
         emitJson(payload);
         process.exit(0);

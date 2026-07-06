@@ -235,7 +235,7 @@ function extractJwt(credsContent: string): string {
   // marker but SIX on the END markers (`------END NATS USER JWT------`). Match
   // the end marker with `-+` — a fixed five-dash end pattern lazily matches
   // INSIDE the six-dash marker and captures a stray leading `-` into the JWT.
-  const match = /-----BEGIN NATS USER JWT-----\s*([\s\S]*?)\s*-+END NATS USER JWT-+/.exec(credsContent);
+  const match = /-+BEGIN NATS USER JWT-+\s*([\s\S]*?)\s*-+END NATS USER JWT-+/.exec(credsContent);
   if (!match) return "";
   return match[1].replace(/\s+/g, "");
 }
@@ -1562,7 +1562,7 @@ export const FEDERATED_PUB_TEMPLATE = "federated.>,_INBOX.>";
  * principal grammar); stack slug: letter-prefixed lowercase alnum/underscore/
  * hyphen (the cortex slug grammar). Also rejects flag-injection values.
  */
-const FEDERATED_USER_NAME_RE = /^[a-z](?:[a-z0-9]|-(?=[a-z0-9]))*\.[a-z][a-z0-9_-]*$/;
+const FEDERATED_USER_NAME_RE = /^[a-z](?:[a-z0-9]|-(?=[a-z0-9]))*\.[a-z](?:[a-z0-9]|[-_](?=[a-z0-9]))*$/;
 
 function validateFederatedUserName(name: string): void {
   if (!FEDERATED_USER_NAME_RE.test(name)) {
@@ -1573,15 +1573,27 @@ function validateFederatedUserName(name: string): void {
   }
 }
 
+/** A discovered `federated`-role scoped key: its pubkey + its LIVE templates. */
+interface FederatedScopedKey {
+  key: string;
+  /** The scope's actual sub/pub allow lists as found in the account claims. */
+  subAllow: string[];
+  pubAllow: string[];
+  /** True when the scope carries ANY deny entries (divergent from ours). */
+  hasDeny: boolean;
+}
+
 /**
  * Find the account's `federated`-role scoped signing key in
- * `nsc describe account -J` output. Tolerant of the two shapes nsc emits for
- * scoped keys across versions: an ARRAY of mixed strings (plain keys) and
- * objects (`{ key, role?/name?, template?, kind? }`), or a MAP keyed by
- * pubkey with scope objects as values. Returns the A-prefixed key pubkey, or
- * null when no key carries the role.
+ * `nsc describe account -J` output — returning its pubkey AND its live
+ * permission templates so the caller can verify them (never trust that an
+ * existing role key still carries the expected scope). Tolerant of the two
+ * shapes nsc emits for scoped keys across versions: an ARRAY of mixed strings
+ * (plain keys) and objects (`{ key, role?/name?, template?, kind? }`), or a
+ * MAP keyed by pubkey with scope objects as values. Returns null when no key
+ * carries the role.
  */
-function findFederatedScopedKey(accountJson: unknown): string | null {
+function findFederatedScopedKey(accountJson: unknown): FederatedScopedKey | null {
   const nats = (accountJson as { nats?: { signing_keys?: unknown } } | null)?.nats;
   const sks = nats?.signing_keys;
   if (sks === undefined || sks === null) return null;
@@ -1601,12 +1613,31 @@ function findFederatedScopedKey(accountJson: unknown): string | null {
     }
     return fallback;
   };
+  const strings = (v: unknown): string[] =>
+    Array.isArray(v) ? v.filter((s): s is string => typeof s === "string") : [];
+  const scopeOf = (entry: unknown, key: string): FederatedScopedKey => {
+    // Permissions live on the entry itself or under `template` depending on
+    // the nsc version; both use the JWT Permissions shape {pub:{allow,deny},sub:{...}}.
+    const e = entry as {
+      template?: { pub?: { allow?: unknown; deny?: unknown }; sub?: { allow?: unknown; deny?: unknown } };
+      pub?: { allow?: unknown; deny?: unknown };
+      sub?: { allow?: unknown; deny?: unknown };
+    };
+    const pub = e.template?.pub ?? e.pub;
+    const sub = e.template?.sub ?? e.sub;
+    return {
+      key,
+      subAllow: strings(sub?.allow),
+      pubAllow: strings(pub?.allow),
+      hasDeny: strings(pub?.deny).length > 0 || strings(sub?.deny).length > 0,
+    };
+  };
 
   if (Array.isArray(sks)) {
     for (const entry of sks) {
       if (roleOf(entry) === FEDERATED_SCOPE_ROLE) {
         const key = keyOf(entry);
-        if (key !== undefined) return key;
+        if (key !== undefined) return scopeOf(entry, key);
       }
     }
     return null;
@@ -1615,11 +1646,18 @@ function findFederatedScopedKey(accountJson: unknown): string | null {
     for (const [mapKey, entry] of Object.entries(sks as Record<string, unknown>)) {
       if (roleOf(entry) === FEDERATED_SCOPE_ROLE) {
         const key = keyOf(entry, mapKey.startsWith("A") ? mapKey : undefined);
-        if (key !== undefined) return key;
+        if (key !== undefined) return scopeOf(entry, key);
       }
     }
   }
   return null;
+}
+
+/** Order-insensitive set equality of a live allow list vs a comma-joined template. */
+function allowListMatches(live: string[], template: string): boolean {
+  const expected = new Set(template.split(","));
+  if (live.length !== expected.size) return false;
+  return live.every((s) => expected.has(s));
 }
 
 /** `nsc describe account -n <name> -J`, parsed. */
@@ -1636,18 +1674,44 @@ function describeAccountJson(account: string): unknown {
 }
 
 /**
- * Ensure the account carries its ONE `federated`-role scoped signing key.
- * Probe-first idempotent: an existing key with the role is returned untouched
- * (its permission template is NEVER silently rewritten — changing the scope is
- * a rotation-class operation, out of scope here). Absent → generate + scope in
- * one `nsc edit signing-key --sk generate` call, then re-describe to resolve
- * the generated key pubkey (deterministic — no output-scraping).
+ * Assert a discovered `federated`-role scope carries EXACTLY the hardwired
+ * templates. A divergent pre-existing scope (edited by hand, or minted by a
+ * different tool) means every credential minted under it has a scope OTHER
+ * than what this command reports — the "unscoped export" class §5.3 refuses.
+ * The scope is never silently rewritten (that is a rotation-class operation);
+ * the command refuses instead.
+ */
+function assertScopeMatchesTemplates(account: string, scope: FederatedScopedKey): void {
+  const subOk = allowListMatches(scope.subAllow, FEDERATED_SUB_TEMPLATE);
+  const pubOk = allowListMatches(scope.pubAllow, FEDERATED_PUB_TEMPLATE);
+  if (subOk && pubOk && !scope.hasDeny) return;
+  throw new ArcNatsCommandError(
+    "SIGNING_KEY_FAILED",
+    `account "${account}" already carries a ${FEDERATED_SCOPE_ROLE}-role scoped signing key (${scope.key}) ` +
+      `whose permission template DIVERGES from the expected scope ` +
+      `(live sub=[${scope.subAllow.join(",")}] pub=[${scope.pubAllow.join(",")}]${scope.hasDeny ? " with deny entries" : ""}; ` +
+      `expected sub=[${FEDERATED_SUB_TEMPLATE}] pub=[${FEDERATED_PUB_TEMPLATE}]) — refusing to mint under it. ` +
+      `Rotating the scope is a manual operation (nsc edit signing-key), never silent.`,
+  );
+}
+
+/**
+ * Ensure the account carries its ONE `federated`-role scoped signing key with
+ * EXACTLY the hardwired templates. Probe-first idempotent: an existing key
+ * with the role is verified against the templates and returned untouched on a
+ * match — and REFUSED on a mismatch (never silently rewritten; changing the
+ * scope is a rotation-class operation, out of scope here). Absent → generate
+ * + scope in one `nsc edit signing-key --sk generate` call, then re-describe
+ * to resolve + verify the generated key (deterministic — no output-scraping).
  */
 function ensureFederatedScopedKey(
   account: string,
 ): { signingKeyPubKey: string; created: boolean } {
   const existing = findFederatedScopedKey(describeAccountJson(account));
-  if (existing !== null) return { signingKeyPubKey: existing, created: false };
+  if (existing !== null) {
+    assertScopeMatchesTemplates(account, existing);
+    return { signingKeyPubKey: existing.key, created: false };
+  }
 
   try {
     nsc([
@@ -1673,7 +1737,10 @@ function ensureFederatedScopedKey(
       `scoped signing key was created on "${account}" but no ${FEDERATED_SCOPE_ROLE}-role key is visible in nsc describe — refusing to mint against an unverified scope.`,
     );
   }
-  return { signingKeyPubKey: created, created: true };
+  // Verify the fresh scope too — the templates the result reports must be the
+  // templates the store actually carries, or the report is fabricated.
+  assertScopeMatchesTemplates(account, created);
+  return { signingKeyPubKey: created.key, created: true };
 }
 
 /**

@@ -351,8 +351,11 @@ export interface ExportSystemJson extends JsonOperatorOkBase {
  *     by anything else is REFUSED (`USER_NOT_SCOPED`) — re-exporting it would
  *     hand out an unscoped credential.
  *
- * `subTemplate` / `pubTemplate` echo the hardwired permission templates so the
- * consumer can display + verify what scope the credential is bound to.
+ * `subTemplate` / `pubTemplate` report the scope the credential is bound to —
+ * VERIFIED, not assumed: the command reads the scope's live templates from the
+ * account claims and refuses the mint (`SIGNING_KEY_FAILED`) when a
+ * pre-existing role key diverges from these values, so a reported template is
+ * always the store's actual template.
  */
 export interface AddFederatedUserJson extends JsonFederatedUserOkBase {
   account: string;

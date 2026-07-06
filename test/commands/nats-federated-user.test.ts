@@ -67,25 +67,36 @@ function buildRunner(handlers: Record<string, (args: string[]) => NscResult>): N
   };
 }
 
+/** The LIVE template shape a well-formed federated scope carries. */
+const GOOD_TEMPLATE = {
+  sub: { allow: [`federated.{{name()}}.>`, `_INBOX.>`] },
+  pub: { allow: [`federated.>`, `_INBOX.>`] },
+};
+/** A hand-edited / divergent scope (wider sub than the hardwired template). */
+const DIVERGENT_TEMPLATE = {
+  sub: { allow: [`federated.>`] },
+  pub: { allow: [`federated.>`, `_INBOX.>`] },
+};
+
 /** Account claims JSON with signing_keys in the ARRAY-of-objects shape. */
-function accountJsonArray(withScope: boolean): NscResult {
+function accountJsonArray(withScope: boolean, template: object = GOOD_TEMPLATE): NscResult {
   return ok(JSON.stringify({
     sub: ACCT_PUBKEY,
     nats: {
       signing_keys: withScope
-        ? [{ key: SK_PUBKEY, role: "federated", template: { pub: {}, sub: {} } }]
+        ? [{ key: SK_PUBKEY, role: "federated", template }]
         : [],
     },
   }));
 }
 
 /** Account claims JSON with signing_keys in the MAP-keyed-by-pubkey shape. */
-function accountJsonMap(withScope: boolean): NscResult {
+function accountJsonMap(withScope: boolean, template: object = GOOD_TEMPLATE): NscResult {
   return ok(JSON.stringify({
     sub: ACCT_PUBKEY,
     nats: {
       signing_keys: withScope
-        ? { [SK_PUBKEY]: { kind: "user_scope", role: "federated", template: { pub: {}, sub: {} } } }
+        ? { [SK_PUBKEY]: { kind: "user_scope", role: "federated", template } }
         : {},
     },
   }));
@@ -296,6 +307,24 @@ describe("addFederatedUser — validation", () => {
     } catch (err) {
       expect((err as ArcNatsCommandError).code).toBe("ACCOUNT_NOT_FOUND");
     }
+  });
+
+  test("pre-existing federated scope with DIVERGENT templates → SIGNING_KEY_FAILED, no mint", () => {
+    const calls: string[] = [];
+    __setNscRunnerForTests(buildRunner({
+      "describe account": (args) =>
+        (args.includes("-F") ? subField(ACCT_PUBKEY) : accountJsonArray(true, DIVERGENT_TEMPLATE)),
+      "add user": (args) => { calls.push(`add user ${args.join(" ")}`); return ok(); },
+    }));
+    try {
+      addFederatedUser(USER, { account: ACCT, output: join(tmp, "d.creds"), json: true });
+      throw new Error("expected SIGNING_KEY_FAILED");
+    } catch (err) {
+      expect((err as ArcNatsCommandError).code).toBe("SIGNING_KEY_FAILED");
+      expect((err as ArcNatsCommandError).message).toContain("DIVERGES");
+    }
+    // Nothing was minted under the divergent scope.
+    expect(calls).toEqual([]);
   });
 
   test("signing-key creation failure → SIGNING_KEY_FAILED", () => {
