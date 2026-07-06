@@ -269,7 +269,7 @@ an unscoped credential.
 create/verify failed), `USER_NOT_SCOPED` (existing user not governed by the
 `federated` scope — resolve manually, never auto-clobbered), plus
 `ACCOUNT_NOT_FOUND`, `VALIDATION_ERROR`, `NSC_COMMAND_FAILED`,
-`NSC_NOT_INSTALLED`.
+`NSC_NOT_INSTALLED`, `INVALID_USER_KEY` (unparseable `nsc describe user -J`).
 
 ## Path resolution
 
