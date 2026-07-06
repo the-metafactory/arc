@@ -48,12 +48,13 @@ import {
 import type { ArcManifest, CatalogEntry, ArtifactType, PackageTier, RegistrySource, SourceType } from "./types.js";
 import { login } from "./commands/login.js";
 import { logout } from "./commands/logout.js";
-import { addBot, reissueBot, listBots, removeBot, setupOperator, addFederationExport, initOperator, addAccount, exportAccount, exportOperator, exportSystem } from "./commands/nats.js";
+import { addBot, reissueBot, listBots, removeBot, setupOperator, addFederationExport, initOperator, addAccount, addFederatedUser, exportAccount, exportOperator, exportSystem } from "./commands/nats.js";
 import { provisionStreams, provisionConsumer } from "./commands/jetstream.js";
 import {
   ARC_NATS_SCHEMA,
   ARC_NATS_FEDERATION_SCHEMA,
   ARC_NATS_OPERATOR_SCHEMA,
+  ARC_NATS_FEDERATED_USER_SCHEMA,
   emitJson,
   classifyError,
   type AddBotJson,
@@ -64,6 +65,7 @@ import {
   type AddFederationExportJson,
   type InitOperatorJson,
   type AddAccountJson,
+  type AddFederatedUserJson,
   type ExportAccountJson,
   type ExportOperatorJson,
   type ExportSystemJson,
@@ -1934,6 +1936,54 @@ nats
       return;
     }
     addAccount(name, opts);
+  });
+
+nats
+  .command("add-federated-user <name>")
+  .description(
+    "Mint a subject-scoped hub-transport user under an account's federated scoped signing key " +
+      "(idempotent; permissions are hardwired templates, never flags; cortex#1598)",
+  )
+  .requiredOption("--account <ACCOUNT>", "The hub federation account (UPPER_SNAKE). Required — hub topology is never inferred.")
+  .option("--output <path>", "Creds output path (default: ~/.config/nats/<name>.creds)")
+  .option("--json", "Emit a single line of stable JSON (schema: arc.nats.federated-user.v1)")
+  .action((name: string, opts: { account: string; output?: string; json?: boolean }) => {
+    if (opts.json) {
+      try {
+        const r = addFederatedUser(name, {
+          account: opts.account,
+          ...(opts.output !== undefined && { output: opts.output }),
+          json: true,
+        });
+        const payload: AddFederatedUserJson = {
+          schema: ARC_NATS_FEDERATED_USER_SCHEMA,
+          ok: true,
+          account: r.account,
+          accountPubKey: r.accountPubKey,
+          user: r.user,
+          userPubKey: r.userPubKey,
+          signingKeyPubKey: r.signingKeyPubKey,
+          scopeCreated: r.scopeCreated,
+          scopeAlreadyPresent: r.scopeAlreadyPresent,
+          userCreated: r.userCreated,
+          userAlreadyPresent: r.userAlreadyPresent,
+          credsPath: r.credsPath,
+          jwt: r.jwt,
+          subTemplate: r.subTemplate,
+          pubTemplate: r.pubTemplate,
+        };
+        emitJson(payload);
+        process.exit(0);
+      } catch (err) {
+        emitJson({ schema: ARC_NATS_FEDERATED_USER_SCHEMA, ok: false, error: classifyError(err) });
+        process.exit(1);
+      }
+      return;
+    }
+    addFederatedUser(name, {
+      account: opts.account,
+      ...(opts.output !== undefined && { output: opts.output }),
+    });
   });
 
 nats

@@ -217,6 +217,60 @@ for BOTH the federation account and a per-stack agents account (ADR-0012 isolati
 - `created` — `true` iff `nsc add account` ran this invocation.
 - `alreadyExisted` — `true` iff the account existed before this invocation.
 
+### Federated-user mint (schema `arc.nats.federated-user.v1`)
+
+#### `arc nats add-federated-user <name> --json`
+
+**Flags:** `--account <ACCOUNT>` (**required**, UPPER_SNAKE — hub topology is
+never inferred from the nsc env), `--output <path>` (default
+`~/.config/nats/<name>.creds`), `--json`.
+
+The scoped hub-transport user mint for cortex's operator-mode `admit --and-seal`
+(cortex#1598, design §5.3/§5.4). Names are `<principal>.<stack>` — dotted, so
+the scope template's `{{name()}}` expansion lands the stack segment on its own
+subject token.
+
+**Least privilege is code, not flags:** the permission set is HARDWIRED — one
+`federated`-role scoped signing key per account carries
+`sub: federated.{{name()}}.>,_INBOX.>` (own scope only) and
+`pub: federated.>,_INBOX.>` (the cross-principal wire); the minted user is
+signed by that key and carries **no permissions of its own**. There are no
+permission flags to typo.
+
+Both halves are probe-first idempotent: the scoped key is created once and
+never silently rewritten; an existing user signed by the scoped key is
+re-exported (`userAlreadyPresent: true`). An existing user signed by **any
+other key** is refused with `USER_NOT_SCOPED` — re-exporting it would hand out
+an unscoped credential.
+
+**Success:**
+
+```json
+{
+  "schema": "arc.nats.federated-user.v1",
+  "ok": true,
+  "account": "FEDERATION",
+  "accountPubKey": "AA…",
+  "user": "jc.default",
+  "userPubKey": "UD…",
+  "signingKeyPubKey": "AB…",
+  "scopeCreated": false,
+  "scopeAlreadyPresent": true,
+  "userCreated": true,
+  "userAlreadyPresent": false,
+  "credsPath": "/Users/.../.config/nats/jc.default.creds",
+  "jwt": "eyJ0eXAiOiJKV1QiLCJhbGciOiJlZDI1NTE5LW5rZXkifQ…",
+  "subTemplate": "federated.{{name()}}.>,_INBOX.>",
+  "pubTemplate": "federated.>,_INBOX.>"
+}
+```
+
+**Error codes** (beyond the shared taxonomy): `SIGNING_KEY_FAILED` (scoped-key
+create/verify failed), `USER_NOT_SCOPED` (existing user not governed by the
+`federated` scope — resolve manually, never auto-clobbered), plus
+`ACCOUNT_NOT_FOUND`, `VALIDATION_ERROR`, `NSC_COMMAND_FAILED`,
+`NSC_NOT_INSTALLED`.
+
 ## Path resolution
 
 By default `arc nats add-bot` writes the `.creds` file to:

@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **`arc nats add-federated-user <name> --account <A>` — scoped hub-transport user mint** (cortex#1598). Ensures ONE `federated`-role scoped signing key per account (subject-templated `federated.{{name()}}.>` sub scope + `federated.>` pub, hardwired — no permission flags), mints the user signed by it with no own permissions, exports 0600 creds. Probe-first idempotent on both halves; refuses to export a user signed by any other key (`USER_NOT_SCOPED`). New schema `arc.nats.federated-user.v1`; new error codes `SIGNING_KEY_FAILED`, `USER_NOT_SCOPED`. Documented in `docs/integrations/cortex-creds.md`.
+
+### Fixed
+
+- **`extractJwt` no longer captures a stray dash from real nsc creds output.** The decorated creds format uses six-dash END markers (`------END NATS USER JWT------`); the previous five-dash pattern lazily matched inside the marker and appended a `-` to the returned JWT (affects the `jwt` field of `add-bot`/`reissue-bot` JSON envelopes on real nsc output).
+
 ## 0.30.5
 
 ### Added
