@@ -132,8 +132,10 @@ export async function fetchRemoteRegistry(
 
     if (!response.ok) {
       const body = await response.text().catch(() => "");
-      const hint = (response.status === 401 || response.status === 404)
-        ? `\n   hint: check that GITHUB_TOKEN has 'Contents: Read' on the source repo`
+      const hint = response.status === 401
+        ? `\n   hint: authentication failed -- check GITHUB_TOKEN has access to the source repo`
+        : response.status === 404
+        ? `\n   hint: source not found -- the repo or URL may not exist or be private (if private, GITHUB_TOKEN needs 'Contents: Read'); if it's a stale default, remove it with \`arc source remove ${source.name}\``
         : "";
       process.stderr.write(
         `Warning: failed to fetch source "${source.name}" (${response.status} ${response.statusText}): ${fetchUrl}` +

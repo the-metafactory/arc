@@ -7,8 +7,9 @@ import type { SourcesConfig, RegistrySource, SourceType } from "../types.js";
 /** Valid source types */
 export const VALID_SOURCE_TYPES: readonly SourceType[] = ["registry", "metafactory"];
 
-// API source -- becomes the primary once F-3 (registry API client) lands.
-// Until then, fetchRemoteRegistry skips type:"metafactory" sources gracefully.
+// The metafactory API source -- the sole default. The registry API client
+// (F-3) has landed: remote-registry.ts routes type:"metafactory" sources to
+// metafactory-api.ts, so this source fully serves search/install on its own.
 const DEFAULT_API_SOURCE: RegistrySource = {
   name: "metafactory",
   url: "https://meta-factory.ai",
@@ -17,13 +18,19 @@ const DEFAULT_API_SOURCE: RegistrySource = {
   enabled: true,
 };
 
-// REGISTRY.yaml fallback -- works today, keeps arc search functional during F-1..F-3 window.
-const DEFAULT_REGISTRY_SOURCE: RegistrySource = {
-  name: "metafactory-registry",
-  url: "https://raw.githubusercontent.com/the-metafactory/meta-factory/main/REGISTRY.yaml",
-  tier: "community",
-  enabled: true,
-};
+// Known-dead default sources that older arc versions baked into every install.
+// The metafactory-registry REGISTRY.yaml fallback (the F-1..F-3 window bridge)
+// is retired: the-metafactory/meta-factory is not public, so the raw URL 404s
+// on every `arc search` (arc#267). pruneKnownDeadSources() drops these from an
+// existing sources.yaml on load so the warning self-clears -- but only when a
+// source still matches the exact baked-in signature (name AND url), leaving a
+// user who repurposed the name untouched.
+const KNOWN_DEAD_DEFAULT_SOURCES: readonly { name: string; url: string }[] = [
+  {
+    name: "metafactory-registry",
+    url: "https://raw.githubusercontent.com/the-metafactory/meta-factory/main/REGISTRY.yaml",
+  },
+];
 
 export async function loadSources(
   sourcesPath: string
@@ -41,13 +48,33 @@ export async function loadSources(
     return createDefaultSources();
   }
 
-  return parsed as SourcesConfig;
+  const config = parsed as SourcesConfig;
+  // Self-heal (arc#267): drop the known-dead default source so its 404 fetch
+  // warning clears without a manual `arc source remove`. One-time -- once the
+  // rewrite lands the dead source is gone, so subsequent loads don't re-save.
+  if (pruneKnownDeadSources(config)) {
+    await saveSources(sourcesPath, config);
+  }
+  return config;
 }
 
 export function createDefaultSources(): SourcesConfig {
   return {
-    sources: [DEFAULT_API_SOURCE, DEFAULT_REGISTRY_SOURCE],
+    sources: [DEFAULT_API_SOURCE],
   };
+}
+
+/**
+ * Remove known-dead baked-in default sources (arc#267) from a loaded config,
+ * matching on the exact name AND url so a user who repointed the name to a live
+ * URL is left untouched. Returns true if the config was modified.
+ */
+export function pruneKnownDeadSources(config: SourcesConfig): boolean {
+  const before = config.sources.length;
+  config.sources = config.sources.filter(
+    (s) => !KNOWN_DEAD_DEFAULT_SOURCES.some((d) => d.name === s.name && d.url === s.url),
+  );
+  return config.sources.length !== before;
 }
 
 export async function saveSources(

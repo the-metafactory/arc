@@ -6,11 +6,12 @@ import {
   addSource,
   removeSource,
   createDefaultSources,
+  pruneKnownDeadSources,
   formatSourceList,
   validateSource,
   getSourceType,
 } from "../../src/lib/sources.js";
-import type { SourcesConfig, RegistrySource } from "../../src/types.js";
+import type { SourcesConfig } from "../../src/types.js";
 import YAML from "yaml";
 import { join } from "path";
 import { mkdtemp } from "fs/promises";
@@ -30,16 +31,15 @@ afterEach(async () => {
 describe("loadSources", () => {
   test("creates default sources.yaml if missing", async () => {
     const config = await loadSources(env.arc.sourcesPath);
-    expect(config.sources).toHaveLength(2);
-    // Primary: metafactory API source
+    // The metafactory API source is the sole default (arc#267 retired the
+    // REGISTRY.yaml fallback that used to ship alongside it).
+    expect(config.sources).toHaveLength(1);
     expect(config.sources[0].name).toBe("metafactory");
     expect(config.sources[0].url).toBe("https://meta-factory.ai");
     expect(config.sources[0].type).toBe("metafactory");
     expect(config.sources[0].tier).toBe("official");
-    // Fallback: REGISTRY.yaml (works until F-3 lands)
-    expect(config.sources[1].name).toBe("metafactory-registry");
-    expect(config.sources[1].tier).toBe("community");
-    expect(config.sources[1].type).toBeUndefined();
+    // The dead metafactory-registry source must never be a default again.
+    expect(config.sources.some((s) => s.name === "metafactory-registry")).toBe(false);
   });
 
   test("creates parent config directory on a fresh machine", async () => {
@@ -48,7 +48,7 @@ describe("loadSources", () => {
 
     const config = await loadSources(sourcesPath);
 
-    expect(config.sources).toHaveLength(2);
+    expect(config.sources).toHaveLength(1);
     expect(existsSync(sourcesPath)).toBe(true);
   });
 
@@ -71,7 +71,7 @@ describe("loadSources", () => {
     await Bun.write(env.arc.sourcesPath, "foo: bar\n");
 
     const config = await loadSources(env.arc.sourcesPath);
-    expect(config.sources).toHaveLength(2);
+    expect(config.sources).toHaveLength(1);
     expect(config.sources[0].name).toBe("metafactory");
   });
 
@@ -79,7 +79,66 @@ describe("loadSources", () => {
     await Bun.write(env.arc.sourcesPath, "");
 
     const config = await loadSources(env.arc.sourcesPath);
-    expect(config.sources).toHaveLength(2);
+    expect(config.sources).toHaveLength(1);
+  });
+});
+
+describe("pruneKnownDeadSources (arc#267)", () => {
+  const DEAD = {
+    name: "metafactory-registry",
+    url: "https://raw.githubusercontent.com/the-metafactory/meta-factory/main/REGISTRY.yaml",
+    tier: "community" as const,
+    enabled: true,
+  };
+
+  test("removes the known-dead default when it matches name AND url", () => {
+    const config: SourcesConfig = {
+      sources: [
+        { name: "metafactory", url: "https://meta-factory.ai", tier: "official", enabled: true, type: "metafactory" },
+        { ...DEAD },
+      ],
+    };
+    expect(pruneKnownDeadSources(config)).toBe(true);
+    expect(config.sources).toHaveLength(1);
+    expect(config.sources[0].name).toBe("metafactory");
+  });
+
+  test("leaves a repurposed metafactory-registry name (different url) untouched", () => {
+    const config: SourcesConfig = {
+      sources: [{ name: "metafactory-registry", url: "https://my.internal/REGISTRY.yaml", tier: "community", enabled: true }],
+    };
+    expect(pruneKnownDeadSources(config)).toBe(false);
+    expect(config.sources).toHaveLength(1);
+  });
+
+  test("no-op (returns false) when nothing dead is present", () => {
+    const config = createDefaultSources();
+    expect(pruneKnownDeadSources(config)).toBe(false);
+    expect(config.sources).toHaveLength(1);
+  });
+
+  test("loadSources self-heals an existing sources.yaml, then persists the cleanup", async () => {
+    const legacy = `sources:
+  - name: metafactory
+    url: https://meta-factory.ai
+    type: metafactory
+    tier: official
+    enabled: true
+  - name: metafactory-registry
+    url: https://raw.githubusercontent.com/the-metafactory/meta-factory/main/REGISTRY.yaml
+    tier: community
+    enabled: true
+`;
+    await Bun.write(env.arc.sourcesPath, legacy);
+
+    const config = await loadSources(env.arc.sourcesPath);
+    expect(config.sources).toHaveLength(1);
+    expect(config.sources[0].name).toBe("metafactory");
+
+    // Persisted: a second load reads the already-cleaned file.
+    const reloaded = await loadSources(env.arc.sourcesPath);
+    expect(reloaded.sources).toHaveLength(1);
+    expect(reloaded.sources.some((s) => s.name === "metafactory-registry")).toBe(false);
   });
 });
 
@@ -107,8 +166,8 @@ describe("addSource", () => {
       tier: "official",
       enabled: true,
     });
-    expect(config.sources).toHaveLength(3);
-    expect(config.sources[2].name).toBe("new-hub");
+    expect(config.sources).toHaveLength(2);
+    expect(config.sources[1].name).toBe("new-hub");
   });
 
   test("throws on duplicate name", () => {
@@ -127,9 +186,12 @@ describe("addSource", () => {
 describe("removeSource", () => {
   test("removes existing source", () => {
     const config = createDefaultSources();
+    addSource(config, {
+      name: "keep", url: "https://example.com/k.yaml", tier: "community", enabled: true,
+    });
     removeSource(config, "metafactory");
     expect(config.sources).toHaveLength(1);
-    expect(config.sources[0].name).toBe("metafactory-registry");
+    expect(config.sources[0].name).toBe("keep");
   });
 
   test("throws for non-existent source", () => {
