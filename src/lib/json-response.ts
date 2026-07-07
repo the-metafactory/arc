@@ -411,9 +411,13 @@ export interface ReissueFederatedUserJson extends JsonFederatedUserOkBase {
  * `arc nats revoke-federated-user` result (schema: arc.nats.federated-user.v1;
  * cortex#1599 revoke). Adds the user's pubkey to the account's revocation map
  * and pushes the updated account JWT so the server rejects the outstanding creds
- * at runtime (no hub restart), then deletes the local user. Runtime revocation
- * REQUIRES a push-capable resolver on the hub — a memory/preload resolver makes
- * the push a no-op (the `PUSH_FAILED` path surfaces that loudly).
+ * at runtime (no hub restart), then deletes the local user. A push that reaches
+ * a live resolver and FAILS surfaces `PUSH_FAILED` (the JWT stays valid — abort
+ * loudly). But whether a push to a memory/preload resolver fails non-zero or
+ * silently no-ops (exit 0) is resolver-dependent, so this exit code is NOT the
+ * guarantee that a revoke lands — a push-capable resolver on the hub is (cortex
+ * enforces it via the `resolver_mode: nats` attestation, design §5.1). The verb
+ * always attempts the push; it cannot itself detect a silently-no-op resolver.
  */
 export interface RevokeFederatedUserJson extends JsonFederatedUserOkBase {
   account: string;

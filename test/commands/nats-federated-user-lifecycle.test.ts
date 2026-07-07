@@ -30,7 +30,9 @@ const ACCT = "FEDERATION";
 const ACCT_PUBKEY = "AAFAKEACCOUNTPUBKEYXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX";
 const SK_PUBKEY = "AAFAKESCOPEDSIGNINGKEYXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX";
 const OTHER_KEY = "AAFAKEOTHERISSUERKEYXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX";
-const USER_PUBKEY = "UAFAKEUSERPUBKEYXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX";
+const USER_PUBKEY = "UAFAKEOLDUSERPUBKEYXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX";
+/** The FRESH key a rotation re-mints — DIFFERENT from the revoked one. */
+const NEW_USER_PUBKEY = "UAFAKENEWUSERPUBKEYXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX";
 const USER = "jc.default";
 
 const FAKE_CREDS =
@@ -63,8 +65,8 @@ function buildRunner(handlers: Record<string, (args: string[]) => NscResult>): N
 function accountJson(): NscResult {
   return ok(JSON.stringify({ sub: ACCT_PUBKEY, nats: { signing_keys: [{ key: SK_PUBKEY, role: "federated", template: GOOD_TEMPLATE }] } }));
 }
-function userClaims(iss: string, ownPerms = false): NscResult {
-  return ok(JSON.stringify({ iss, sub: USER_PUBKEY, nats: ownPerms ? { pub: { allow: ["federated.>"] }, sub: {} } : {} }));
+function userClaims(iss: string, sub: string, ownPerms = false): NscResult {
+  return ok(JSON.stringify({ iss, sub, nats: ownPerms ? { pub: { allow: ["federated.>"] }, sub: {} } : {} }));
 }
 
 /**
@@ -76,6 +78,9 @@ function fakeStore(opts: { userExists?: boolean; pushFails?: boolean; newUserIss
   const state = {
     userExists: opts.userExists ?? true,
     newUserIss: opts.newUserIss ?? SK_PUBKEY,
+    // The OLD user pubkey until a re-mint runs (`add user`), then the NEW one —
+    // so getUserPubKey (pre-delete) sees OLD and the post-mint describe sees NEW.
+    reminted: false,
     calls: [] as string[],
   };
   const runner = buildRunner({
@@ -83,7 +88,7 @@ function fakeStore(opts: { userExists?: boolean; pushFails?: boolean; newUserIss
     "describe user": (args) => {
       if (!state.userExists) return fail("user not found");
       // -J → claims (getUserPubKey reads .sub; describeUserClaims reads .iss).
-      return args.includes("-J") ? userClaims(state.newUserIss) : ok("user");
+      return args.includes("-J") ? userClaims(state.newUserIss, state.reminted ? NEW_USER_PUBKEY : USER_PUBKEY) : ok("user");
     },
     "revocations add-user": (args) => { state.calls.push(`revocations add-user ${args.join(" ")}`); return ok("[ OK ] added revocation"); },
     "push": () => {
@@ -92,7 +97,7 @@ function fakeStore(opts: { userExists?: boolean; pushFails?: boolean; newUserIss
       return ok("[ OK ] pushed");
     },
     "delete user": () => { state.calls.push("delete user"); state.userExists = false; return ok("[ OK ] deleted"); },
-    "add user": (args) => { state.calls.push(`add user ${args.join(" ")}`); state.userExists = true; return ok("[ OK ] added"); },
+    "add user": (args) => { state.calls.push(`add user ${args.join(" ")}`); state.userExists = true; state.reminted = true; return ok("[ OK ] added"); },
     "generate creds": () => { state.calls.push("generate creds"); return ok(FAKE_CREDS); },
   });
   return { state, runner };
@@ -157,8 +162,12 @@ describe("reissueFederatedUser", () => {
 
     const r = reissueFederatedUser(USER, { account: ACCT, output: out, json: true });
 
+    // Rotation's DEFINING property: the revoked (old) key and the new key DIFFER.
+    // If a regression reused the old key, revocation (keyed by pubkey) would kill
+    // the freshly-minted user — so revoked !== new is the load-bearing assertion.
     expect(r.revokedPubKey).toBe(USER_PUBKEY);
-    expect(r.newPubKey).toBe(USER_PUBKEY);
+    expect(r.newPubKey).toBe(NEW_USER_PUBKEY);
+    expect(r.revokedPubKey).not.toBe(r.newPubKey);
     expect(r.signingKeyPubKey).toBe(SK_PUBKEY);
     expect(r.credsPath).toBe(out);
     expect(existsSync(out)).toBe(true);

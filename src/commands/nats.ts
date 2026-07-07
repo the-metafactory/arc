@@ -1953,10 +1953,12 @@ export function reissueFederatedUser(
 
   // 2. Backup the old creds if present (safe now: the old JWT is revoked).
   const outPath = opts.output ?? defaultCredsPath(name);
+  let backedUp = false;
   if (existsSync(outPath)) {
     const backup = `${outPath}.bak`;
     writeFileSync(backup, readFileSync(outPath));
     chmodSync(backup, 0o600);
+    backedUp = true;
     if (!json) console.log(`  backup: ${backup}`);
   }
 
@@ -1986,7 +1988,10 @@ export function reissueFederatedUser(
     throw new ArcNatsCommandError(
       "ROLLBACK_FAILED",
       `CRITICAL: failed to re-create federated user "${name}" after delete. ` +
-        `The OLD creds are revoked server-side (backup at ${outPath}.bak captures the old JWT for forensics only). ` +
+        `The OLD creds are revoked server-side` +
+        (backedUp
+          ? ` (backup at ${outPath}.bak captures the old JWT for forensics only). `
+          : ` (no prior creds file existed at ${outPath}, so no backup was written). `) +
         `Manual recovery: arc nats add-federated-user ${name} --account ${account}. ` +
         `Cause: ${err instanceof Error ? err.message : String(err)}`,
     );
@@ -2041,9 +2046,13 @@ export interface RevokeFederatedUserResult {
  * the member's transport at runtime — no hub restart:
  *   1. `nsc revocations add-user` (keyed by pubkey, survives the local delete)
  *      + `nsc push` the updated account JWT so the server rejects the
- *      outstanding creds. Throws REVOKE_FAILED / PUSH_FAILED — a failed push
- *      means the JWT is STILL VALID on the bus (the memory/preload-resolver
- *      caveat surfaces here, not silently),
+ *      outstanding creds. A push that reaches a live resolver and fails throws
+ *      REVOKE_FAILED / PUSH_FAILED (the JWT is STILL VALID — abort before the
+ *      delete). NOTE: whether a push to a memory/preload resolver fails non-zero
+ *      or silently no-ops is resolver-dependent — this verb always ATTEMPTS the
+ *      push but cannot detect a silently-no-op resolver; the real guarantee a
+ *      revoke lands is a push-capable resolver (cortex's resolver_mode: nats
+ *      attestation, design §5.1), not this exit code,
  *   2. delete the local user.
  * The registry-side admission-row revoke is cortex's concern; this is the
  * hub-transport half only.
