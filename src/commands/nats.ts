@@ -1881,3 +1881,219 @@ export function addFederatedUser(
     pubTemplate: FEDERATED_PUB_TEMPLATE,
   };
 }
+
+export interface ReissueFederatedUserOptions {
+  /** The hub's federation account (UPPER_SNAKE). REQUIRED. */
+  account: string;
+  /** Creds output path. Default: `~/.config/nats/<name>.creds`. */
+  output?: string;
+  /** When true: suppress human-readable stdout; throw ArcNatsCommandError on failure. */
+  json?: boolean;
+}
+
+export interface ReissueFederatedUserResult {
+  account: string;
+  accountPubKey: string;
+  user: string;
+  newPubKey: string;
+  revokedPubKey: string;
+  signingKeyPubKey: string;
+  scopeAlreadyPresent: boolean;
+  credsPath: string;
+  jwt: string;
+  subTemplate: string;
+  pubTemplate: string;
+}
+
+/**
+ * ROTATE a subject-scoped federated user (cortex#1599, design §2 seam 4). Swaps
+ * the user's key material without a hub-config round-trip:
+ *   1. revoke the OLD user server-side FIRST (`revocations add-user` + `nsc
+ *      push`) — a runtime cut, and it MUST land before any local delete (a
+ *      half-done revoke leaves a live JWT on the bus),
+ *   2. delete + re-add the user under the SAME `federated`-role scoped signing
+ *      key (fresh material, no own perms — the scope is created ONCE and reused),
+ *   3. post-mint verification: the new user's `iss` must equal the scoped key
+ *      and it must carry no own permissions — refuse the export otherwise,
+ *   4. `nsc generate creds` → written 0600.
+ * The new user needs no ADDITIONAL account push: the revoke in step 1 already
+ * `nsc push`es the account JWT, and that push carries whatever the account JWT
+ * holds AT THAT POINT — including a scoped signing key `ensureFederatedScopedKey`
+ * had to create (the scope edit precedes the revoke push). So even the unusual
+ * scope-created-during-rotate case is covered; the re-minted user is signed by a
+ * key already in the pushed account JWT.
+ */
+export function reissueFederatedUser(
+  name: string,
+  opts: ReissueFederatedUserOptions,
+): ReissueFederatedUserResult {
+  const json = opts.json === true;
+  ensureNscInstalled(json);
+  validateFederatedUserName(name);
+  validateAccountName(opts.account);
+  const account = opts.account;
+
+  const accountPubKey = tryGetPubKey("account", account);
+  if (accountPubKey === null) {
+    throw new ArcNatsCommandError(
+      "ACCOUNT_NOT_FOUND",
+      `account "${account}" does not exist under the current operator — create it first (arc nats add-account ${account}).`,
+    );
+  }
+  if (!userExists(account, name)) {
+    throw new ArcNatsCommandError(
+      "USER_NOT_FOUND",
+      `federated user "${name}" not found under "${account}" — nothing to rotate (mint it first with arc nats add-federated-user).`,
+    );
+  }
+
+  // The scope must exist (the user we're rotating was minted under it); reuse it.
+  const scope = ensureFederatedScopedKey(account);
+
+  // 1. Revoke the OLD user server-side BEFORE any local mutation. Throws
+  //    REVOKE_FAILED / PUSH_FAILED on failure — abort cleanly (no local delete,
+  //    no backup written while the old JWT is still live).
+  const revokedPubKey = revokeAndPushUser(account, name);
+
+  // 2. Backup the old creds if present (safe now: the old JWT is revoked).
+  const outPath = opts.output ?? defaultCredsPath(name);
+  let backedUp = false;
+  if (existsSync(outPath)) {
+    const backup = `${outPath}.bak`;
+    writeFileSync(backup, readFileSync(outPath));
+    chmodSync(backup, 0o600);
+    backedUp = true;
+    if (!json) console.log(`  backup: ${backup}`);
+  }
+
+  // 3. nsc has no in-place rekey — delete + re-add under the scoped key.
+  nsc(["delete", "user", "-a", account, "-n", name]);
+  let jwt: string;
+  let newPubKey: string;
+  try {
+    nsc(["add", "user", "-a", account, "-n", name, "-K", scope.signingKeyPubKey]);
+    // Post-mint verification — refuse an unscoped export (a fresh mint that
+    // somehow bound the wrong key, or carries own perms).
+    const claims = describeUserClaims(account, name);
+    if (claims.iss !== scope.signingKeyPubKey || claims.hasOwnPerms) {
+      throw new ArcNatsCommandError(
+        "USER_NOT_SCOPED",
+        `re-minted user "${name}" under "${account}" is not governed by the ${FEDERATED_SCOPE_ROLE} scope ` +
+          `(issuer ${claims.iss || "(none)"} vs scoped key ${scope.signingKeyPubKey}` +
+          `${claims.hasOwnPerms ? ", and it carries its own permissions" : ""}) — refusing to export. This is a mint-path bug.`,
+      );
+    }
+    const credsContent = nsc(["generate", "creds", "-a", account, "-n", name]);
+    writeCredsFile(outPath, credsContent);
+    jwt = extractJwt(credsContent);
+    newPubKey = claims.sub;
+  } catch (err) {
+    if (err instanceof ArcNatsCommandError) throw err;
+    throw new ArcNatsCommandError(
+      "ROLLBACK_FAILED",
+      `CRITICAL: failed to re-create federated user "${name}" after delete. ` +
+        `The OLD creds are revoked server-side` +
+        (backedUp
+          ? ` (backup at ${outPath}.bak captures the old JWT for forensics only). `
+          : ` (no prior creds file existed at ${outPath}, so no backup was written). `) +
+        `Manual recovery: arc nats add-federated-user ${name} --account ${account}. ` +
+        `Cause: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+
+  // Clean up backup on success.
+  try {
+    unlinkSync(`${outPath}.bak`);
+  } catch {
+    /* ok if no backup */
+  }
+
+  if (!json) {
+    console.log(`Rotated federated user: ${name} (account: ${account})`);
+    console.log(`  old pubkey (revoked): ${revokedPubKey}`);
+    console.log(`  new pubkey:           ${newPubKey}`);
+    console.log(`  scoped signing key:   ${scope.signingKeyPubKey}`);
+    console.log(`  credentials: ${outPath} (mode 600)`);
+    console.log(`  Note: old credentials revoked + pushed; the leaf is cut at runtime (no hub restart).`);
+  }
+
+  return {
+    account,
+    accountPubKey,
+    user: name,
+    newPubKey,
+    revokedPubKey,
+    signingKeyPubKey: scope.signingKeyPubKey,
+    scopeAlreadyPresent: !scope.created,
+    credsPath: outPath,
+    jwt,
+    subTemplate: FEDERATED_SUB_TEMPLATE,
+    pubTemplate: FEDERATED_PUB_TEMPLATE,
+  };
+}
+
+export interface RevokeFederatedUserOptions {
+  /** The hub's federation account (UPPER_SNAKE). REQUIRED. */
+  account: string;
+  /** When true: suppress human-readable stdout; throw ArcNatsCommandError on failure. */
+  json?: boolean;
+}
+
+export interface RevokeFederatedUserResult {
+  account: string;
+  user: string;
+  revokedPubKey: string;
+}
+
+/**
+ * REVOKE a subject-scoped federated user (cortex#1599, design §2 seam 4). Cuts
+ * the member's transport at runtime — no hub restart:
+ *   1. `nsc revocations add-user` (keyed by pubkey, survives the local delete)
+ *      + `nsc push` the updated account JWT so the server rejects the
+ *      outstanding creds. A push that reaches a live resolver and fails throws
+ *      REVOKE_FAILED / PUSH_FAILED (the JWT is STILL VALID — abort before the
+ *      delete). NOTE: whether a push to a memory/preload resolver fails non-zero
+ *      or silently no-ops is resolver-dependent — this verb always ATTEMPTS the
+ *      push but cannot detect a silently-no-op resolver; the real guarantee a
+ *      revoke lands is a push-capable resolver (cortex's resolver_mode: nats
+ *      attestation, design §5.1), not this exit code,
+ *   2. delete the local user.
+ * The registry-side admission-row revoke is cortex's concern; this is the
+ * hub-transport half only.
+ */
+export function revokeFederatedUser(
+  name: string,
+  opts: RevokeFederatedUserOptions,
+): RevokeFederatedUserResult {
+  const json = opts.json === true;
+  ensureNscInstalled(json);
+  validateFederatedUserName(name);
+  validateAccountName(opts.account);
+  const account = opts.account;
+
+  if (tryGetPubKey("account", account) === null) {
+    throw new ArcNatsCommandError(
+      "ACCOUNT_NOT_FOUND",
+      `account "${account}" does not exist under the current operator.`,
+    );
+  }
+  if (!userExists(account, name)) {
+    throw new ArcNatsCommandError(
+      "USER_NOT_FOUND",
+      `federated user "${name}" not found under "${account}" — nothing to revoke.`,
+    );
+  }
+
+  // Revoke + push FIRST (throws on failure — the JWT stays valid on any push
+  // failure, surfaced loudly), then delete the local user.
+  const revokedPubKey = revokeAndPushUser(account, name);
+  nsc(["delete", "user", "-a", account, "-n", name]);
+
+  if (!json) {
+    console.log(`Revoked federated user: ${name} (account: ${account})`);
+    console.log(`  revoked pubkey: ${revokedPubKey}`);
+    console.log(`  Note: account JWT pushed — the leaf is cut at runtime (no hub restart).`);
+  }
+
+  return { account, user: name, revokedPubKey };
+}

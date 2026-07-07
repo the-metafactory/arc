@@ -36,8 +36,15 @@ export const ARC_NATS_OPERATOR_SCHEMA = "arc.nats.operator.v1" as const;
 /**
  * Schema string for the federated-user mint (`arc nats add-federated-user`,
  * cortex#1598). Its own namespace (the `arc.nats.federation.v1` precedent):
- * this is the one verb that mints SCOPED hub-transport users, and the consumer
- * (cortex admit-and-seal) guards on exactly this schema string.
+ * the federated-user FAMILY of verbs (add / reissue / revoke) all emit this
+ * schema, and the consumer guards on exactly this string.
+ *
+ * NOTE — field presence VARIES within this schema version by verb: `add`
+ * (`AddFederatedUserJson`) and `reissue` (`ReissueFederatedUserJson`) carry
+ * creds + pubkeys; `revoke` (`RevokeFederatedUserJson`) is a strict subset
+ * (account/user/revokedPubKey only). A consumer must dispatch on WHICH verb it
+ * invoked, not on the schema string alone, to know which fields to expect — the
+ * cortex adapter does exactly that (one port method per verb).
  */
 export const ARC_NATS_FEDERATED_USER_SCHEMA = "arc.nats.federated-user.v1" as const;
 
@@ -381,6 +388,52 @@ export interface AddFederatedUserJson extends JsonFederatedUserOkBase {
 }
 
 /**
+ * `arc nats reissue-federated-user` result (schema: arc.nats.federated-user.v1;
+ * cortex#1599 rotate). Revokes the OLD user server-side (revocations add-user +
+ * push — a runtime cut, no hub restart), then re-mints FRESH material under the
+ * SAME `federated`-role scoped signing key (no own perms) and exports its creds.
+ * Same schema family as add-federated-user; the extra `revokedPubKey`/`newPubKey`
+ * name the two keys the rotation swapped.
+ */
+export interface ReissueFederatedUserJson extends JsonFederatedUserOkBase {
+  account: string;
+  /** A-prefixed account NKey public key. */
+  accountPubKey: string;
+  user: string;
+  /** U-prefixed pubkey of the NEW (freshly-minted) user. */
+  newPubKey: string;
+  /** U-prefixed pubkey of the OLD user, added to the account's revocation map. */
+  revokedPubKey: string;
+  /** A-prefixed pubkey of the `federated`-role scoped signing key that signed the new user. */
+  signingKeyPubKey: string;
+  scopeAlreadyPresent: boolean;
+  credsPath: string;
+  /** Raw NEW user JWT. */
+  jwt: string;
+  subTemplate: string;
+  pubTemplate: string;
+}
+
+/**
+ * `arc nats revoke-federated-user` result (schema: arc.nats.federated-user.v1;
+ * cortex#1599 revoke). Adds the user's pubkey to the account's revocation map
+ * and pushes the updated account JWT so the server rejects the outstanding creds
+ * at runtime (no hub restart), then deletes the local user. A push that reaches
+ * a live resolver and FAILS surfaces `PUSH_FAILED` (the JWT stays valid — abort
+ * loudly). But whether a push to a memory/preload resolver fails non-zero or
+ * silently no-ops (exit 0) is resolver-dependent, so this exit code is NOT the
+ * guarantee that a revoke lands — a push-capable resolver on the hub is (cortex
+ * enforces it via the `resolver_mode: nats` attestation, design §5.1). The verb
+ * always attempts the push; it cannot itself detect a silently-no-op resolver.
+ */
+export interface RevokeFederatedUserJson extends JsonFederatedUserOkBase {
+  account: string;
+  user: string;
+  /** U-prefixed pubkey added to the account's revocation map (survives local delete). */
+  revokedPubKey: string;
+}
+
+/**
  * Emit a single line of JSON to stdout and return. Caller is responsible for
  * setting the process exit code (0 for ok, 1 for !ok).
  *
@@ -401,6 +454,8 @@ export function emitJson(
     | ExportOperatorJson
     | ExportSystemJson
     | AddFederatedUserJson
+    | ReissueFederatedUserJson
+    | RevokeFederatedUserJson
     | JsonError
     | JsonFederationError
     | JsonOperatorError
