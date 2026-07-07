@@ -381,6 +381,48 @@ export interface AddFederatedUserJson extends JsonFederatedUserOkBase {
 }
 
 /**
+ * `arc nats reissue-federated-user` result (schema: arc.nats.federated-user.v1;
+ * cortex#1599 rotate). Revokes the OLD user server-side (revocations add-user +
+ * push — a runtime cut, no hub restart), then re-mints FRESH material under the
+ * SAME `federated`-role scoped signing key (no own perms) and exports its creds.
+ * Same schema family as add-federated-user; the extra `revokedPubKey`/`newPubKey`
+ * name the two keys the rotation swapped.
+ */
+export interface ReissueFederatedUserJson extends JsonFederatedUserOkBase {
+  account: string;
+  /** A-prefixed account NKey public key. */
+  accountPubKey: string;
+  user: string;
+  /** U-prefixed pubkey of the NEW (freshly-minted) user. */
+  newPubKey: string;
+  /** U-prefixed pubkey of the OLD user, added to the account's revocation map. */
+  revokedPubKey: string;
+  /** A-prefixed pubkey of the `federated`-role scoped signing key that signed the new user. */
+  signingKeyPubKey: string;
+  scopeAlreadyPresent: boolean;
+  credsPath: string;
+  /** Raw NEW user JWT. */
+  jwt: string;
+  subTemplate: string;
+  pubTemplate: string;
+}
+
+/**
+ * `arc nats revoke-federated-user` result (schema: arc.nats.federated-user.v1;
+ * cortex#1599 revoke). Adds the user's pubkey to the account's revocation map
+ * and pushes the updated account JWT so the server rejects the outstanding creds
+ * at runtime (no hub restart), then deletes the local user. Runtime revocation
+ * REQUIRES a push-capable resolver on the hub — a memory/preload resolver makes
+ * the push a no-op (the `PUSH_FAILED` path surfaces that loudly).
+ */
+export interface RevokeFederatedUserJson extends JsonFederatedUserOkBase {
+  account: string;
+  user: string;
+  /** U-prefixed pubkey added to the account's revocation map (survives local delete). */
+  revokedPubKey: string;
+}
+
+/**
  * Emit a single line of JSON to stdout and return. Caller is responsible for
  * setting the process exit code (0 for ok, 1 for !ok).
  *
@@ -401,6 +443,8 @@ export function emitJson(
     | ExportOperatorJson
     | ExportSystemJson
     | AddFederatedUserJson
+    | ReissueFederatedUserJson
+    | RevokeFederatedUserJson
     | JsonError
     | JsonFederationError
     | JsonOperatorError

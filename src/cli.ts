@@ -48,7 +48,7 @@ import {
 import type { ArcManifest, CatalogEntry, ArtifactType, PackageTier, RegistrySource, SourceType } from "./types.js";
 import { login } from "./commands/login.js";
 import { logout } from "./commands/logout.js";
-import { addBot, reissueBot, listBots, removeBot, setupOperator, addFederationExport, initOperator, addAccount, addFederatedUser, exportAccount, exportOperator, exportSystem } from "./commands/nats.js";
+import { addBot, reissueBot, listBots, removeBot, setupOperator, addFederationExport, initOperator, addAccount, addFederatedUser, reissueFederatedUser, revokeFederatedUser, exportAccount, exportOperator, exportSystem } from "./commands/nats.js";
 import { provisionStreams, provisionConsumer } from "./commands/jetstream.js";
 import {
   ARC_NATS_SCHEMA,
@@ -66,6 +66,8 @@ import {
   type InitOperatorJson,
   type AddAccountJson,
   type AddFederatedUserJson,
+  type ReissueFederatedUserJson,
+  type RevokeFederatedUserJson,
   type ExportAccountJson,
   type ExportOperatorJson,
   type ExportSystemJson,
@@ -1974,6 +1976,70 @@ nats
       account: opts.account,
       ...(opts.output !== undefined && { output: opts.output }),
     });
+  });
+
+nats
+  .command("reissue-federated-user <name>")
+  .description(
+    "Rotate a subject-scoped federated user: revoke + push the old key, re-mint fresh material " +
+      "under the same scoped signing key (no hub restart; cortex#1599)",
+  )
+  .requiredOption("--account <ACCOUNT>", "The hub federation account (UPPER_SNAKE). Required — hub topology is never inferred.")
+  .option("--output <path>", "Creds output path (default: ~/.config/nats/<name>.creds)")
+  .option("--json", "Emit a single line of stable JSON (schema: arc.nats.federated-user.v1)")
+  .action((name: string, opts: { account: string; output?: string; json?: boolean }) => {
+    if (opts.json) {
+      try {
+        const r = reissueFederatedUser(name, {
+          account: opts.account,
+          ...(opts.output !== undefined && { output: opts.output }),
+          json: true,
+        });
+        const payload: ReissueFederatedUserJson = {
+          schema: ARC_NATS_FEDERATED_USER_SCHEMA,
+          ok: true,
+          ...r,
+        };
+        emitJson(payload);
+        process.exit(0);
+      } catch (err) {
+        emitJson({ schema: ARC_NATS_FEDERATED_USER_SCHEMA, ok: false, error: classifyError(err) });
+        process.exit(1);
+      }
+      return;
+    }
+    reissueFederatedUser(name, {
+      account: opts.account,
+      ...(opts.output !== undefined && { output: opts.output }),
+    });
+  });
+
+nats
+  .command("revoke-federated-user <name>")
+  .description(
+    "Revoke a subject-scoped federated user: add to the account revocation map + push, cutting " +
+      "the leaf at runtime (no hub restart; cortex#1599)",
+  )
+  .requiredOption("--account <ACCOUNT>", "The hub federation account (UPPER_SNAKE). Required — hub topology is never inferred.")
+  .option("--json", "Emit a single line of stable JSON (schema: arc.nats.federated-user.v1)")
+  .action((name: string, opts: { account: string; json?: boolean }) => {
+    if (opts.json) {
+      try {
+        const r = revokeFederatedUser(name, { account: opts.account, json: true });
+        const payload: RevokeFederatedUserJson = {
+          schema: ARC_NATS_FEDERATED_USER_SCHEMA,
+          ok: true,
+          ...r,
+        };
+        emitJson(payload);
+        process.exit(0);
+      } catch (err) {
+        emitJson({ schema: ARC_NATS_FEDERATED_USER_SCHEMA, ok: false, error: classifyError(err) });
+        process.exit(1);
+      }
+      return;
+    }
+    revokeFederatedUser(name, { account: opts.account });
   });
 
 nats
