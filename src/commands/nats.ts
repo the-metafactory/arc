@@ -20,10 +20,12 @@ import {
 const DEFAULT_CREDS_DIR = join(homedir(), ".config", "nats");
 const NAMING_RE = /^[a-z](?:[a-z0-9]|-(?=[a-z0-9]))*$/;
 const NATS_SUBJECT_RE = /^[a-zA-Z0-9.*>_-]+$/;
-// NSC account names are UPPER_SNAKE by convention. Guard rejects empty strings
-// and flag-injection values (e.g. "--all", "--force") that nsc would silently
-// accept as option names, potentially touching the entire operator store.
-const ACCOUNT_NAME_RE = /^[A-Z][A-Z0-9_]+$/;
+// NSC account names are any-case (nsc accepts "metafactory" as readily as
+// "OP_HUB"). The guard's real job is to reject empty strings and flag-injection
+// values (e.g. "--all", "--force") that nsc would silently accept as option
+// names, potentially touching the entire operator store — the leading-letter
+// requirement does exactly that. (Mirrors OPERATOR_NAME_RE below; arc#273.)
+const ACCOUNT_NAME_RE = /^[A-Za-z][A-Za-z0-9_-]*$/;
 
 // NSC config can live in several locations depending on version/platform
 const NSC_CONFIG_CANDIDATES = [
@@ -176,20 +178,19 @@ function validateSubject(subject: string): void {
 /**
  * Validates an NSC account name before passing it to any nsc invocation.
  *
- * NSC account names are UPPER_SNAKE by convention (e.g. "OP_HUB", "MYFACTORY").
+ * NSC account names are any-case (e.g. "OP_HUB", "MYFACTORY", "metafactory").
  * Rejecting empty strings and flag-injection patterns (e.g. "--all", "--force")
  * prevents nsc push -a "" from pushing the entire operator store, and prevents
- * option-flag injection into nsc add export / add import / push -a calls.
- *
- * If arc ever needs to support lowercase or hyphenated account names, update
- * ACCOUNT_NAME_RE to match — but the empty + flag-injection guard MUST stay.
+ * option-flag injection into nsc add export / add import / push -a calls — the
+ * required leading letter is what enforces that (a "-…" or "" value can never
+ * match), independent of case.
  */
 function validateAccountName(name: string): void {
   if (!name || !ACCOUNT_NAME_RE.test(name)) {
     throw new ArcNatsCommandError(
       "VALIDATION_ERROR",
-      `Invalid account name: "${name}" — must match [A-Z][A-Z0-9_]+ (UPPER_SNAKE). ` +
-      `Empty or flag-style values (e.g. "--all") are not accepted.`,
+      `Invalid account name: "${name}" — must match [A-Za-z][A-Za-z0-9_-]* ` +
+      `(a letter, then letters/digits/_/-). Empty or flag-style values (e.g. "--all") are not accepted.`,
     );
   }
 }
@@ -1072,7 +1073,7 @@ export function addFederationExport(opts: AddFederationExportOptions): AddFedera
 // arc owns the nsc boundary, cortex orchestrates but never runs nsc itself.
 
 // Operator names in the ecosystem are like "OP_ANDREAS". Permit a slightly wider
-// charset than account names (which are strict UPPER_SNAKE) but still reject the
+// charset than account names (any-case, leading letter) but still reject the
 // empty string and flag-injection values (e.g. "--all", "--force") that nsc would
 // otherwise treat as option names.
 const OPERATOR_NAME_RE = /^[A-Za-z][A-Za-z0-9_-]*$/;
@@ -1277,7 +1278,7 @@ export function addAccount(name: string, opts: AddAccountOptions): AddAccountRes
   const json = opts.json === true;
   ensureNscInstalled(json);
 
-  // Reuse the strict UPPER_SNAKE account-name guard — also rejects empty strings
+  // Reuse the account-name guard (any-case; leading letter) — also rejects empty strings
   // and flag-injection values before any nsc invocation.
   validateAccountName(name);
 
@@ -1491,7 +1492,7 @@ export function exportSystem(opts: ExportSystemOptions): ExportSystemResult {
   ensureNscInstalled(json);
 
   const name = opts.name && opts.name.length > 0 ? opts.name : "SYS";
-  // The SYS account is a normal account — reuse the strict UPPER_SNAKE guard
+  // The SYS account is a normal account — reuse the account-name guard
   // (also rejects empty / flag-injection names before any nsc invocation).
   validateAccountName(name);
 
@@ -1772,7 +1773,7 @@ function describeUserClaims(account: string, name: string): { iss: string; sub: 
 }
 
 export interface AddFederatedUserOptions {
-  /** The hub's federation account (UPPER_SNAKE). REQUIRED — never inferred: this is hub topology. */
+  /** The hub's federation account (any-case nsc name). REQUIRED — never inferred: this is hub topology. */
   account: string;
   /** Creds output path. Default: `~/.config/nats/<name>.creds`. */
   output?: string;
@@ -1883,7 +1884,7 @@ export function addFederatedUser(
 }
 
 export interface ReissueFederatedUserOptions {
-  /** The hub's federation account (UPPER_SNAKE). REQUIRED. */
+  /** The hub's federation account (any-case nsc name). REQUIRED. */
   account: string;
   /** Creds output path. Default: `~/.config/nats/<name>.creds`. */
   output?: string;
@@ -2033,7 +2034,7 @@ export function reissueFederatedUser(
 }
 
 export interface RevokeFederatedUserOptions {
-  /** The hub's federation account (UPPER_SNAKE). REQUIRED. */
+  /** The hub's federation account (any-case nsc name). REQUIRED. */
   account: string;
   /** When true: suppress human-readable stdout; throw ArcNatsCommandError on failure. */
   json?: boolean;

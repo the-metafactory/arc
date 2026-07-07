@@ -9,7 +9,7 @@
  *   - --apply: calls add export, add import, push both accounts in order
  *   - Idempotent re-run: both already present → no mutations, push still runs
  *   - Same account (Case A): no-op result, no nsc mutations
- *   - Account name validation (M1): empty, flag-injection, valid UPPER_SNAKE
+ *   - Account name validation (M1): empty, flag-injection, valid any-case (lowercase + UPPER_SNAKE)
  *   - Subject validation: VALIDATION_ERROR for invalid subjects
  *   - NSC_NOT_INSTALLED: typed error when nsc is missing
  *   - JSON envelope shape: schema, ok, field names, pushResult presence
@@ -862,17 +862,22 @@ describe("addFederationExport — account name validation (M1)", () => {
     expect((err as ArcNatsCommandError).code).toBe("VALIDATION_ERROR");
   });
 
-  test("throws VALIDATION_ERROR for a lowercase account name", () => {
-    __setNscRunnerForTests(buildRunner({}));
+  test("accepts a lowercase account name (nsc allows it; arc#273)", () => {
+    // Regression: the guard used to force UPPER_SNAKE and reject "metafactory",
+    // even though nsc accepts lowercase account names. The security invariant is
+    // the leading-letter requirement (rejects empty + "--flag"), NOT the case —
+    // see the empty/flag-injection tests above, which still throw.
+    __setNscRunnerForTests(buildRunner({
+      "describe account": () => ok(describeAccountJson()),
+    }));
 
-    let err: unknown;
-    try {
-      addFederationExport({ fromAccount: "op_peer", toAccount: TO_ACCOUNT, json: true });
-    } catch (e) {
-      err = e;
-    }
-    expect(err).toBeInstanceOf(ArcNatsCommandError);
-    expect((err as ArcNatsCommandError).code).toBe("VALIDATION_ERROR");
+    const result = addFederationExport({
+      fromAccount: "metafactory",
+      toAccount: "OP_HUB",
+      apply: false,
+      json: true,
+    });
+    expect(result.fromAccount).toBe("metafactory");
   });
 
   test("accepts valid UPPER_SNAKE account names without throwing", () => {

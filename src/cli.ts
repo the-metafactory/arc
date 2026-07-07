@@ -1946,7 +1946,7 @@ nats
     "Mint a subject-scoped hub-transport user under an account's federated scoped signing key " +
       "(idempotent; permissions are hardwired templates, never flags; cortex#1598)",
   )
-  .requiredOption("--account <ACCOUNT>", "The hub federation account (UPPER_SNAKE). Required — hub topology is never inferred.")
+  .requiredOption("--account <ACCOUNT>", "The hub federation account (any-case nsc name, e.g. metafactory). Required — hub topology is never inferred.")
   .option("--output <path>", "Creds output path (default: ~/.config/nats/<name>.creds)")
   .option("--json", "Emit a single line of stable JSON (schema: arc.nats.federated-user.v1)")
   .action((name: string, opts: { account: string; output?: string; json?: boolean }) => {
@@ -1984,7 +1984,7 @@ nats
     "Rotate a subject-scoped federated user: revoke + push the old key, re-mint fresh material " +
       "under the same scoped signing key (no hub restart; cortex#1599)",
   )
-  .requiredOption("--account <ACCOUNT>", "The hub federation account (UPPER_SNAKE). Required — hub topology is never inferred.")
+  .requiredOption("--account <ACCOUNT>", "The hub federation account (any-case nsc name, e.g. metafactory). Required — hub topology is never inferred.")
   .option("--output <path>", "Creds output path (default: ~/.config/nats/<name>.creds)")
   .option("--json", "Emit a single line of stable JSON (schema: arc.nats.federated-user.v1)")
   .action((name: string, opts: { account: string; output?: string; json?: boolean }) => {
@@ -2020,7 +2020,7 @@ nats
     "Revoke a subject-scoped federated user: add to the account revocation map + push, cutting " +
       "the leaf at runtime (no hub restart; cortex#1599)",
   )
-  .requiredOption("--account <ACCOUNT>", "The hub federation account (UPPER_SNAKE). Required — hub topology is never inferred.")
+  .requiredOption("--account <ACCOUNT>", "The hub federation account (any-case nsc name, e.g. metafactory). Required — hub topology is never inferred.")
   .option("--json", "Emit a single line of stable JSON (schema: arc.nats.federated-user.v1)")
   .action((name: string, opts: { account: string; json?: boolean }) => {
     if (opts.json) {

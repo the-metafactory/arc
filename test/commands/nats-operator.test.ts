@@ -381,16 +381,26 @@ describe("addAccount — distinct names (federation + per-stack agents)", () => 
 // ── add-account: validation ───────────────────────────────────────────────────
 
 describe("addAccount — account name validation", () => {
-  test("throws VALIDATION_ERROR for a lowercase account name", () => {
-    __setNscRunnerForTests(buildRunner({}));
-    let err: unknown;
-    try {
-      addAccount("federation", { json: true });
-    } catch (e) {
-      err = e;
-    }
-    expect(err).toBeInstanceOf(ArcNatsCommandError);
-    expect((err as ArcNatsCommandError).code).toBe("VALIDATION_ERROR");
+  test("accepts a lowercase account name (nsc allows it; arc#273)", () => {
+    // Regression: the guard used to force UPPER_SNAKE and reject "metafactory",
+    // though nsc accepts lowercase. The security invariant is the leading-letter
+    // rule (empty + flag-injection still throw — see the tests below), not case.
+    const created = new Set<string>();
+    __setNscRunnerForTests(buildRunner({
+      "describe account": (args) => {
+        const name = args[args.indexOf("-n") + 1] ?? "";
+        return created.has(name) ? subField(ACCT_PUBKEY) : fail("not found");
+      },
+      "add account": (args) => {
+        const name = args[args.indexOf("-n") + 1] ?? "";
+        created.add(name);
+        return ok();
+      },
+    }));
+
+    const result = addAccount("metafactory", { json: true });
+    expect(result.account).toBe("metafactory");
+    expect(result.created).toBe(true);
   });
 
   test("throws VALIDATION_ERROR for a flag-injection account name (--all)", () => {
