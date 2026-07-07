@@ -1916,8 +1916,12 @@ export interface ReissueFederatedUserResult {
  *   3. post-mint verification: the new user's `iss` must equal the scoped key
  *      and it must carry no own permissions — refuse the export otherwise,
  *   4. `nsc generate creds` → written 0600.
- * Adding a user under an EXISTING scoped key does not change the account JWT, so
- * (unlike the first mint) no account push is needed for the new user to connect.
+ * The new user needs no ADDITIONAL account push: the revoke in step 1 already
+ * `nsc push`es the account JWT, and that push carries whatever the account JWT
+ * holds AT THAT POINT — including a scoped signing key `ensureFederatedScopedKey`
+ * had to create (the scope edit precedes the revoke push). So even the unusual
+ * scope-created-during-rotate case is covered; the re-minted user is signed by a
+ * key already in the pushed account JWT.
  */
 export function reissueFederatedUser(
   name: string,

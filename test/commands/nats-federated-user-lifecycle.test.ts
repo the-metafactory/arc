@@ -74,10 +74,11 @@ function userClaims(iss: string, sub: string, ownPerms = false): NscResult {
  * handlers for revocations / push / delete. `pushFails` aborts the push;
  * `newUserIss` is what the RE-MINTED user reports (default: scoped, valid).
  */
-function fakeStore(opts: { userExists?: boolean; pushFails?: boolean; newUserIss?: string } = {}) {
+function fakeStore(opts: { userExists?: boolean; pushFails?: boolean; newUserIss?: string; newUserOwnPerms?: boolean } = {}) {
   const state = {
     userExists: opts.userExists ?? true,
     newUserIss: opts.newUserIss ?? SK_PUBKEY,
+    newUserOwnPerms: opts.newUserOwnPerms ?? false,
     // The OLD user pubkey until a re-mint runs (`add user`), then the NEW one —
     // so getUserPubKey (pre-delete) sees OLD and the post-mint describe sees NEW.
     reminted: false,
@@ -88,7 +89,10 @@ function fakeStore(opts: { userExists?: boolean; pushFails?: boolean; newUserIss
     "describe user": (args) => {
       if (!state.userExists) return fail("user not found");
       // -J → claims (getUserPubKey reads .sub; describeUserClaims reads .iss).
-      return args.includes("-J") ? userClaims(state.newUserIss, state.reminted ? NEW_USER_PUBKEY : USER_PUBKEY) : ok("user");
+      // Own perms only apply to the RE-MINTED user (the invariant reissue checks).
+      return args.includes("-J")
+        ? userClaims(state.newUserIss, state.reminted ? NEW_USER_PUBKEY : USER_PUBKEY, state.reminted && state.newUserOwnPerms)
+        : ok("user");
     },
     "revocations add-user": (args) => { state.calls.push(`revocations add-user ${args.join(" ")}`); return ok("[ OK ] added revocation"); },
     "push": () => {
@@ -189,7 +193,7 @@ describe("reissueFederatedUser", () => {
     expect(state.calls.some((c) => c === "delete user")).toBe(false);
   });
 
-  test("refuses to export when the re-minted user is not scope-governed (USER_NOT_SCOPED)", () => {
+  test("refuses to export when the re-minted user's issuer is not the scoped key (USER_NOT_SCOPED)", () => {
     const { runner } = fakeStore({ newUserIss: OTHER_KEY });
     __setNscRunnerForTests(runner);
     const out = join(tmp, "jc.default.creds");
@@ -198,6 +202,20 @@ describe("reissueFederatedUser", () => {
       throw new Error("expected throw");
     } catch (err) {
       expect(err).toBeInstanceOf(ArcNatsCommandError);
+      expect((err as ArcNatsCommandError).code).toBe("USER_NOT_SCOPED");
+    }
+  });
+
+  test("refuses to export when the re-minted user carries OWN permissions (USER_NOT_SCOPED)", () => {
+    // iss is the scoped key (valid), but the user somehow has own perms — a
+    // scoped-key user MUST be permission-free, so the export is refused.
+    const { runner } = fakeStore({ newUserOwnPerms: true });
+    __setNscRunnerForTests(runner);
+    const out = join(tmp, "jc.default.creds");
+    try {
+      reissueFederatedUser(USER, { account: ACCT, output: out, json: true });
+      throw new Error("expected throw");
+    } catch (err) {
       expect((err as ArcNatsCommandError).code).toBe("USER_NOT_SCOPED");
     }
   });

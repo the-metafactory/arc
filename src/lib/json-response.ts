@@ -36,8 +36,15 @@ export const ARC_NATS_OPERATOR_SCHEMA = "arc.nats.operator.v1" as const;
 /**
  * Schema string for the federated-user mint (`arc nats add-federated-user`,
  * cortex#1598). Its own namespace (the `arc.nats.federation.v1` precedent):
- * this is the one verb that mints SCOPED hub-transport users, and the consumer
- * (cortex admit-and-seal) guards on exactly this schema string.
+ * the federated-user FAMILY of verbs (add / reissue / revoke) all emit this
+ * schema, and the consumer guards on exactly this string.
+ *
+ * NOTE — field presence VARIES within this schema version by verb: `add`
+ * (`AddFederatedUserJson`) and `reissue` (`ReissueFederatedUserJson`) carry
+ * creds + pubkeys; `revoke` (`RevokeFederatedUserJson`) is a strict subset
+ * (account/user/revokedPubKey only). A consumer must dispatch on WHICH verb it
+ * invoked, not on the schema string alone, to know which fields to expect — the
+ * cortex adapter does exactly that (one port method per verb).
  */
 export const ARC_NATS_FEDERATED_USER_SCHEMA = "arc.nats.federated-user.v1" as const;
 
