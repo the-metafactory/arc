@@ -766,7 +766,7 @@ export function formatAuthor(manifest: ArcManifest): string | null {
     return names.length > 0 ? names.join(", ") : null;
   }
 
-  return formatAuthorObject(authors[0] as { name?: string; github?: string });
+  return formatAuthorObject(authors[0]);
 }
 
 function formatAuthorObject(

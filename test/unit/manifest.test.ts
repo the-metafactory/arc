@@ -486,6 +486,23 @@ describe("formatAuthor", () => {
     expect(formatAuthor(m)).toBe("Test Author");
   });
 
+  test("object authors[0] with github renders 'name (github)'", () => {
+    const m: ArcManifest = {
+      ...base,
+      authors: [{ name: "Test Author", github: "testauthor" }],
+    };
+    expect(formatAuthor(m)).toBe("Test Author (testauthor)");
+  });
+
+  test("singular author object wins over authors array when both are present", () => {
+    const m: ArcManifest = {
+      ...base,
+      author: { name: "Object Author", github: "objectauthor" },
+      authors: [{ name: "Array Author", github: "arrayauthor" }],
+    };
+    expect(formatAuthor(m)).toBe("Object Author (objectauthor)");
+  });
+
   test("absent author returns null", () => {
     const m: ArcManifest = { ...base };
     expect(formatAuthor(m)).toBeNull();
@@ -511,7 +528,7 @@ describe("formatAuthor", () => {
     ];
     for (const m of cases) {
       const result = formatAuthor(m);
-      expect(result === null || !result.includes("undefined")).toBe(true);
+      expect(!result?.includes("undefined")).toBe(true);
     }
   });
 });
