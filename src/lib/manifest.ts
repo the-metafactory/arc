@@ -102,6 +102,11 @@ async function readManifestFromDir(
         );
       }
 
+      // Fold the deprecated `schema: pai/v1` alias to the canonical `arc/v1`
+      // once, before any type-specific branch returns (arc#280). Runs here so
+      // the warning fires exactly once per manifest load, not per field access.
+      normalizeSchema(parsed, filename);
+
       // Library-specific validation
       if (parsed.type === "library") {
         validateLibraryManifest(parsed, filename);
@@ -166,6 +171,36 @@ async function readManifestFromDir(
     }
   }
   return null;
+}
+
+/** Canonical manifest schema identifier. */
+export const CANONICAL_SCHEMA = "arc/v1";
+
+/** Deprecated manifest schema alias, folded to {@link CANONICAL_SCHEMA} on load. */
+export const DEPRECATED_SCHEMA = "pai/v1";
+
+/**
+ * Fold the deprecated `schema: pai/v1` alias to the canonical `arc/v1` in
+ * place (arc#280). `pai/v1` is residue from when arc was PAI's package
+ * manager; the ecosystem has moved to metafactory naming.
+ *
+ * This is the deprecate step of a deprecate → migrate → remove path: the
+ * loader keeps ACCEPTING `pai/v1` at the boundary (the type union is
+ * unchanged) but normalizes it away so downstream code only ever observes
+ * `arc/v1`. A future major removes `pai/v1` from the union and turns an
+ * unknown schema into a validation error.
+ *
+ * Emits a single one-line stderr warning when a fold happens. No-op for a
+ * manifest that already declares `arc/v1` or omits the field entirely.
+ */
+export function normalizeSchema(manifest: ArcManifest, filename: string): void {
+  if (manifest.schema !== DEPRECATED_SCHEMA) return;
+
+  manifest.schema = CANONICAL_SCHEMA;
+  process.stderr.write(
+    `arc: ${filename} declares schema ${DEPRECATED_SCHEMA} (deprecated) — ` +
+      `folding to ${CANONICAL_SCHEMA}; update the manifest.\n`,
+  );
 }
 
 /**
