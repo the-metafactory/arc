@@ -370,6 +370,40 @@ describe("removeHooks", () => {
     expect(settings.hooks.Stop?.length ?? 0).toBe(0);
   });
 
+  // PR #277 adversarial review: this pins the migrate-before-filter
+  // ordering inside removeHooks as load-bearing safety. An entry hand-edited
+  // (or left over from some future bug) into a dual-tag state — _arc_pkg
+  // owned by one package, legacy _pai_pkg owned by another — is not
+  // reachable via arc's own writes today, but IF it exists, removeHooks
+  // must not let package B's legacy _pai_pkg tag win an ownership check
+  // against package A's current _arc_pkg tag. migrateLegacyTags runs
+  // BEFORE the isOwnedBy filter specifically so that B's stale _pai_pkg is
+  // stripped (via a no-op `_arc_pkg ??= "B"`, since _arc_pkg is already
+  // "A") before the filter ever sees it. Swapping that order would
+  // reintroduce silent cross-package deletion.
+  test("migrate-before-filter ordering: removeHooks(B) never deletes an entry _arc_pkg-owned by A (dual-tag)", async () => {
+    const existing = {
+      hooks: {
+        PostToolUse: [
+          {
+            _arc_pkg: "A",
+            _pai_pkg: "B",
+            hooks: [{ type: "command", command: "/dual-tag/hook.ts" }],
+          },
+        ],
+      },
+    };
+    await Bun.write(settingsPath, JSON.stringify(existing, null, 4));
+
+    await removeHooks("B", settingsPath);
+
+    const settings = JSON.parse(await Bun.file(settingsPath).text());
+    // A's entry survives — package B's removal must not touch it.
+    expect(settings.hooks.PostToolUse).toBeArrayOfSize(1);
+    expect(settings.hooks.PostToolUse[0]._arc_pkg).toBe("A");
+    expect(settings.hooks.PostToolUse[0]._pai_pkg).toBeUndefined();
+  });
+
   test("preserves non-hook settings when removing", async () => {
     const existing = {
       permissions: { allow: ["Read"] },
