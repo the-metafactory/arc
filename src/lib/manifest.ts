@@ -731,3 +731,51 @@ export function formatCapabilities(manifest: ArcManifest): string[] {
 
   return lines;
 }
+
+/**
+ * Human-readable author line, tolerant of both manifest shapes seen in the
+ * wild (arc#275):
+ *   - `authors: ["Name", ...]` — a plain string array (e.g. cortex's
+ *     arc-manifest.yaml) — every entry is joined with ", ".
+ *   - `author` / `authors[0]` as an `{ name, github }` object — rendered as
+ *     `name (github)` when github is present, else just `name`.
+ * Returns null when no usable author info is present (absent, empty array,
+ * or an object without a usable name) — callers must skip the Author line
+ * entirely rather than print "undefined".
+ */
+export function formatAuthor(manifest: ArcManifest): string | null {
+  // Singular `author` object wins when present (matches prior precedence
+  // of `manifest.author ?? manifest.authors?.[0]`).
+  if (manifest.author) {
+    return formatAuthorObject(manifest.author);
+  }
+
+  // ArcManifest declares `authors` as an object array, but the YAML parser
+  // gives no runtime guarantee that shape holds — real manifests declare a
+  // plain string array too (e.g. cortex's arc-manifest.yaml: `authors:
+  // ["Andreas Astrom", "Jens-Christian Fischer"]`). Read defensively.
+  const authors = manifest.authors as unknown as
+    | (string | { name?: string; github?: string })[]
+    | undefined;
+  if (!authors || authors.length === 0) return null;
+
+  if (typeof authors[0] === "string") {
+    const names = authors.filter(
+      (entry): entry is string => typeof entry === "string" && entry.trim().length > 0
+    );
+    return names.length > 0 ? names.join(", ") : null;
+  }
+
+  return formatAuthorObject(authors[0] as { name?: string; github?: string });
+}
+
+function formatAuthorObject(
+  author: { name?: string; github?: string } | undefined
+): string | null {
+  if (!author || typeof author.name !== "string" || author.name.trim().length === 0) {
+    return null;
+  }
+  return typeof author.github === "string" && author.github.trim().length > 0
+    ? `${author.name} (${author.github})`
+    : author.name;
+}
