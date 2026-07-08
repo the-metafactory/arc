@@ -6,6 +6,7 @@ import {
   readManifest,
   readManifestVersionSync,
   assessRisk,
+  formatAuthor,
   formatCapabilities,
   normalizeNetworkEntry,
   normalizeCapabilities,
@@ -442,6 +443,93 @@ describe("formatCapabilities", () => {
     expect(lines.some((l) => l.includes("🔴") && l.includes("unrestricted"))).toBe(
       true
     );
+  });
+});
+
+// Regression tests for https://github.com/the-metafactory/arc/issues/275
+describe("formatAuthor", () => {
+  const base = { name: "Test", version: "1.0.0", type: "skill" as const };
+
+  // ArcManifest declares `authors` as an object array, but real manifests
+  // (e.g. cortex's arc-manifest.yaml) declare it as a plain string array —
+  // the YAML parser gives no runtime guarantee the declared type holds.
+  // `as unknown as ArcManifest` mirrors that real-world shape drift.
+  function withStringAuthors(authors: string[]): ArcManifest {
+    return { ...base, authors } as unknown as ArcManifest;
+  }
+
+  test("string-array authors are joined with ', '", () => {
+    const m = withStringAuthors(["Andreas Astrom", "Jens-Christian Fischer"]);
+    expect(formatAuthor(m)).toBe("Andreas Astrom, Jens-Christian Fischer");
+  });
+
+  test("single string-array author has no parentheses", () => {
+    const m = withStringAuthors(["A B"]);
+    expect(formatAuthor(m)).toBe("A B");
+  });
+
+  test("object author with github renders 'name (github)'", () => {
+    const m: ArcManifest = {
+      ...base,
+      author: { name: "Test Author", github: "testauthor" },
+    };
+    expect(formatAuthor(m)).toBe("Test Author (testauthor)");
+  });
+
+  test("object author without github renders just the name", () => {
+    const m: ArcManifest = { ...base, author: { name: "Test Author", github: "" } };
+    expect(formatAuthor(m)).toBe("Test Author");
+  });
+
+  test("object authors[0] without github renders just the name", () => {
+    const m: ArcManifest = { ...base, authors: [{ name: "Test Author", github: "" }] };
+    expect(formatAuthor(m)).toBe("Test Author");
+  });
+
+  test("object authors[0] with github renders 'name (github)'", () => {
+    const m: ArcManifest = {
+      ...base,
+      authors: [{ name: "Test Author", github: "testauthor" }],
+    };
+    expect(formatAuthor(m)).toBe("Test Author (testauthor)");
+  });
+
+  test("singular author object wins over authors array when both are present", () => {
+    const m: ArcManifest = {
+      ...base,
+      author: { name: "Object Author", github: "objectauthor" },
+      authors: [{ name: "Array Author", github: "arrayauthor" }],
+    };
+    expect(formatAuthor(m)).toBe("Object Author (objectauthor)");
+  });
+
+  test("absent author returns null", () => {
+    const m: ArcManifest = { ...base };
+    expect(formatAuthor(m)).toBeNull();
+  });
+
+  test("empty authors array returns null", () => {
+    const m: ArcManifest = { ...base, authors: [] };
+    expect(formatAuthor(m)).toBeNull();
+  });
+
+  test("object author without a usable name returns null", () => {
+    const m: ArcManifest = { ...base, author: { name: "", github: "handle" } };
+    expect(formatAuthor(m)).toBeNull();
+  });
+
+  test("output never contains the text 'undefined'", () => {
+    const cases: ArcManifest[] = [
+      withStringAuthors(["Andreas Astrom"]),
+      { ...base, author: { name: "Test Author", github: "testauthor" } },
+      { ...base, author: { name: "Test Author", github: "" } },
+      { ...base },
+      { ...base, authors: [] },
+    ];
+    for (const m of cases) {
+      const result = formatAuthor(m);
+      expect(!result?.includes("undefined")).toBe(true);
+    }
   });
 });
 

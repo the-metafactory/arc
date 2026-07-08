@@ -10,7 +10,7 @@ import type {
 } from "../types.js";
 import type { Database } from "bun:sqlite";
 import { errorMessage } from "../lib/errors.js";
-import { readManifest, readLibraryArtifacts, assessRisk, formatCapabilities } from "../lib/manifest.js";
+import { readManifest, readLibraryArtifacts, assessRisk, formatAuthor, formatCapabilities } from "../lib/manifest.js";
 import { getSkill, removeSkill } from "../lib/db.js";
 import { runScript, runLifecycleScripts } from "../lib/scripts.js";
 import {
@@ -442,9 +442,9 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
     }
 
     console.log(`\nInstall: ${manifest.name} v${manifest.version}`);
-    const author = manifest.author ?? manifest.authors?.[0];
-    if (author) {
-      console.log(`Author: ${author.name} (${author.github})`);
+    const authorLine = formatAuthor(manifest);
+    if (authorLine) {
+      console.log(`Author: ${authorLine}`);
     }
     console.log(`Source: ${opts.sourceName ?? "direct URL"} [${tier}]`);
     console.log(`Risk: ${risk.toUpperCase()}`);
@@ -627,9 +627,9 @@ async function installLibrary(
 
   if (!opts.yes) {
     console.log(`\n📚 Library: ${libraryName} v${libraryManifest.version}`);
-    const author = libraryManifest.author ?? libraryManifest.authors?.[0];
-    if (author) {
-      console.log(`Author: ${author.name} (${author.github})`);
+    const authorLine = formatAuthor(libraryManifest);
+    if (authorLine) {
+      console.log(`Author: ${authorLine}`);
     }
   }
 
