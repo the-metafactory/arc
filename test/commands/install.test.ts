@@ -827,7 +827,7 @@ describe("install provides.files (issue #84)", () => {
     if (existsSync(env.host.paths.settingsPath)) {
       const settings = JSON.parse(await Bun.file(env.host.paths.settingsPath).text());
       const stopHooks = settings.hooks?.Stop ?? [];
-      const ghostFound = stopHooks.some((g: { _pai_pkg?: string }) => g._pai_pkg === "GhostHookSkill");
+      const ghostFound = stopHooks.some((g: { _arc_pkg?: string }) => g._arc_pkg === "GhostHookSkill");
       expect(ghostFound).toBe(false);
     }
   });
@@ -851,7 +851,7 @@ describe("install provides.files (issue #84)", () => {
     expect(result.success).toBe(true);
     const settings = JSON.parse(await Bun.file(env.host.paths.settingsPath).text());
     const stopHooks = settings.hooks?.Stop ?? [];
-    const ours = stopHooks.find((g: { _pai_pkg?: string }) => g._pai_pkg === "GoodHookSkill");
+    const ours = stopHooks.find((g: { _arc_pkg?: string }) => g._arc_pkg === "GoodHookSkill");
     expect(ours).toBeDefined();
     expect(ours.hooks[0].command).toContain("hooks/Stop.ts");
     expect(ours.hooks[0].command).not.toContain("${PKG_DIR}");
@@ -1015,7 +1015,7 @@ describe("install provides.files (issue #84)", () => {
     const settings = JSON.parse(await Bun.file(env.host.paths.settingsPath).text());
     const stopHooks = settings.hooks?.Stop ?? [];
     const ours = stopHooks.find(
-      (g: { _pai_pkg?: string }) => g._pai_pkg === "PostinstallRollback",
+      (g: { _arc_pkg?: string }) => g._arc_pkg === "PostinstallRollback",
     );
     expect(ours).toBeUndefined();
 
@@ -1085,7 +1085,7 @@ describe("install provides.files (issue #84)", () => {
     expect(result.success).toBe(true);
     const settings = JSON.parse(await Bun.file(env.host.paths.settingsPath).text());
     const stopHooks = settings.hooks?.Stop ?? [];
-    const ours = stopHooks.find((g: { _pai_pkg?: string }) => g._pai_pkg === "PaiDirLiveHook");
+    const ours = stopHooks.find((g: { _arc_pkg?: string }) => g._arc_pkg === "PaiDirLiveHook");
     expect(ours).toBeDefined();
     // Settings.json should contain the substituted absolute path, not the literal ${PAI_DIR}.
     expect(ours.hooks[0].command).toBe(targetPath);

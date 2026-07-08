@@ -75,8 +75,9 @@ export async function disable(
     }
   }
   // arc#137: same fix as `arc remove` — always invoke removeHooks. The
-  // `_pai_pkg` tag inside removeHooks filters to this package's entries
-  // only, so the call is idempotent when nothing matches. Gating on
+  // `_arc_pkg` tag (or legacy `_pai_pkg`, arc#276) inside removeHooks
+  // filters to this package's entries only, so the call is idempotent
+  // when nothing matches. Gating on
   // `manifest?.provides?.hooks` left orphan settings.json entries when
   // the source repo was deleted out-of-band or the hooks declaration
   // was dropped in a later version.

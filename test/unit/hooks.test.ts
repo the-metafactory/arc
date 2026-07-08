@@ -34,7 +34,9 @@ describe("registerHooks", () => {
     const settings = JSON.parse(await Bun.file(settingsPath).text());
     expect(settings.hooks).toBeDefined();
     expect(settings.hooks.PostToolUse).toBeArrayOfSize(1);
-    expect(settings.hooks.PostToolUse[0]._pai_pkg).toBe("Grove");
+    // arc#276: new registrations write _arc_pkg, never the legacy _pai_pkg.
+    expect(settings.hooks.PostToolUse[0]._arc_pkg).toBe("Grove");
+    expect(settings.hooks.PostToolUse[0]._pai_pkg).toBeUndefined();
     expect(settings.hooks.PostToolUse[0].hooks[0].type).toBe("command");
     expect(settings.hooks.PostToolUse[0].hooks[0].command).toBe(
       "${PAI_DIR}/hooks/EventLogger.hook.ts",
@@ -79,8 +81,12 @@ describe("registerHooks", () => {
 
     const settings = JSON.parse(await Bun.file(settingsPath).text());
     expect(settings.hooks.PostToolUse).toBeArrayOfSize(2);
+    // Untouched: registering "Grove" must not migrate a DIFFERENT
+    // package's legacy tag — only the package being written for is
+    // migrated on-touch (arc#276).
     expect(settings.hooks.PostToolUse[0]._pai_pkg).toBe("OtherPackage");
-    expect(settings.hooks.PostToolUse[1]._pai_pkg).toBe("Grove");
+    expect(settings.hooks.PostToolUse[1]._arc_pkg).toBe("Grove");
+    expect(settings.hooks.PostToolUse[1]._pai_pkg).toBeUndefined();
   });
 
   test("registers multiple hooks across different events", async () => {
@@ -159,14 +165,19 @@ describe("registerHooks", () => {
 
     const settings = JSON.parse(await Bun.file(settingsPath).text());
     const bashCommandGroups = settings.hooks.PreToolUse.filter(
-      (entry: { _pai_pkg?: string; matcher?: string; hooks: { command: string }[] }) =>
+      (entry: { _arc_pkg?: string; _pai_pkg?: string; matcher?: string; hooks: { command: string }[] }) =>
         entry.matcher === "Bash" &&
         entry.hooks.some((hook) => hook.command === command),
     );
 
     expect(bashCommandGroups).toBeArrayOfSize(2);
+    // OtherPkg's legacy tag is untouched (a different package's write does
+    // not migrate it); Cortex's own entry is rewritten to _arc_pkg on this
+    // touch, and the freshly-pushed replacement carries no _pai_pkg.
     expect(bashCommandGroups[0]._pai_pkg).toBe("OtherPkg");
-    expect(bashCommandGroups[1]._pai_pkg).toBe("Cortex");
+    expect(bashCommandGroups[0]._arc_pkg).toBeUndefined();
+    expect(bashCommandGroups[1]._arc_pkg).toBe("Cortex");
+    expect(bashCommandGroups[1]._pai_pkg).toBeUndefined();
     expect(settings.hooks.PreToolUse).toBeArrayOfSize(3);
     expect(settings.hooks.PreToolUse).toContainEqual({
       matcher: "Read",
@@ -183,7 +194,7 @@ describe("registerHooks", () => {
 
     const settings = JSON.parse(await Bun.file(settingsPath).text());
     expect(settings.hooks.PreToolUse[0].matcher).toBe("Bash");
-    expect(settings.hooks.PreToolUse[0]._pai_pkg).toBe("Grove");
+    expect(settings.hooks.PreToolUse[0]._arc_pkg).toBe("Grove");
   });
 
   test("formats JSON with 4-space indentation", async () => {
@@ -199,10 +210,102 @@ describe("registerHooks", () => {
     // Should be parseable
     expect(() => JSON.parse(raw)).not.toThrow();
   });
+
+  // arc#276: hooks.ts's shouldReplaceHookGroup treats an entry with NEITHER
+  // _arc_pkg NOR _pai_pkg as claimable by any package (the "undefined"
+  // ownership branch). This must survive the rename exactly as before.
+  test("claims an untagged existing entry instead of duplicating it (undefined-ownership branch)", async () => {
+    const command = "${PAI_DIR}/hooks/BashGuard.hook.ts";
+    const existing = {
+      hooks: {
+        PreToolUse: [
+          {
+            matcher: "Bash",
+            hooks: [{ type: "command", command }],
+          },
+        ],
+      },
+    };
+    await Bun.write(settingsPath, JSON.stringify(existing, null, 4));
+
+    await registerHooks(
+      "Grove",
+      [{ event: "PreToolUse", matcher: "Bash", command }],
+      settingsPath,
+    );
+
+    const settings = JSON.parse(await Bun.file(settingsPath).text());
+    // No duplication: the untagged entry was claimed and replaced, not
+    // appended alongside.
+    expect(settings.hooks.PreToolUse).toBeArrayOfSize(1);
+    expect(settings.hooks.PreToolUse[0]._arc_pkg).toBe("Grove");
+    expect(settings.hooks.PreToolUse[0]._pai_pkg).toBeUndefined();
+  });
+
+  // arc#276 acceptance criterion: mixed-tag settings (some entries on
+  // _arc_pkg, some still on legacy _pai_pkg, for the SAME package) must
+  // round-trip through registerHooks without duplication, and the
+  // migrate-on-touch pass must not disturb an unrelated package's entry.
+  test("mixed-tag settings round-trip without duplication", async () => {
+    const bashCommand = "${PAI_DIR}/hooks/BashGuard.hook.ts";
+    const stopCommand = "${PAI_DIR}/hooks/Stop.hook.ts";
+    const existing = {
+      hooks: {
+        PreToolUse: [
+          {
+            _pai_pkg: "Grove", // legacy tag, same package, different event group
+            matcher: "Bash",
+            hooks: [{ type: "command", command: bashCommand }],
+          },
+          {
+            _pai_pkg: "OtherPkg", // unrelated package, must be left alone
+            matcher: "Bash",
+            hooks: [{ type: "command", command: bashCommand }],
+          },
+        ],
+        Stop: [
+          {
+            _arc_pkg: "Grove", // already-current tag, same package
+            hooks: [{ type: "command", command: stopCommand }],
+          },
+        ],
+      },
+    };
+    await Bun.write(settingsPath, JSON.stringify(existing, null, 4));
+
+    await registerHooks(
+      "Grove",
+      [{ event: "PreToolUse", matcher: "Bash", command: bashCommand }],
+      settingsPath,
+    );
+
+    const settings = JSON.parse(await Bun.file(settingsPath).text());
+
+    // PreToolUse: Grove's legacy entry is migrated + replaced (no dup),
+    // OtherPkg's legacy entry is untouched.
+    expect(settings.hooks.PreToolUse).toBeArrayOfSize(2);
+    const groveEntry = settings.hooks.PreToolUse.find(
+      (e: { _arc_pkg?: string }) => e._arc_pkg === "Grove",
+    );
+    expect(groveEntry).toBeDefined();
+    expect(groveEntry._pai_pkg).toBeUndefined();
+    const otherEntry = settings.hooks.PreToolUse.find(
+      (e: { _pai_pkg?: string }) => e._pai_pkg === "OtherPkg",
+    );
+    expect(otherEntry).toBeDefined();
+
+    // Stop: already-current _arc_pkg entry for Grove is untouched (not
+    // duplicated, since registerHooks was not called for the Stop event).
+    expect(settings.hooks.Stop).toBeArrayOfSize(1);
+    expect(settings.hooks.Stop[0]._arc_pkg).toBe("Grove");
+  });
 });
 
 describe("removeHooks", () => {
-  test("removes all hooks for a specific package", async () => {
+  // arc#276: this seeds entries with the LEGACY _pai_pkg tag (as a package
+  // installed by a pre-rename arc would have on disk) and asserts removal
+  // still works with no migration command ever having run.
+  test("removes all legacy _pai_pkg-tagged hooks for a specific package", async () => {
     const existing = {
       hooks: {
         PostToolUse: [
@@ -232,6 +335,73 @@ describe("removeHooks", () => {
     expect(settings.hooks.PostToolUse[0]._pai_pkg).toBe("OtherPkg");
     // Stop array should be empty or removed
     expect(settings.hooks.Stop?.length ?? 0).toBe(0);
+  });
+
+  // arc#276: same scenario, but with the CURRENT _arc_pkg tag — this is
+  // the tag registerHooks now writes, so removal must key on it too.
+  test("removes all _arc_pkg-tagged hooks for a specific package", async () => {
+    const existing = {
+      hooks: {
+        PostToolUse: [
+          {
+            _arc_pkg: "Grove",
+            hooks: [{ type: "command", command: "/grove/hook.ts" }],
+          },
+          {
+            _arc_pkg: "OtherPkg",
+            hooks: [{ type: "command", command: "/other/hook.ts" }],
+          },
+        ],
+        Stop: [
+          {
+            _arc_pkg: "Grove",
+            hooks: [{ type: "command", command: "/grove/stop.ts" }],
+          },
+        ],
+      },
+    };
+    await Bun.write(settingsPath, JSON.stringify(existing, null, 4));
+
+    await removeHooks("Grove", settingsPath);
+
+    const settings = JSON.parse(await Bun.file(settingsPath).text());
+    expect(settings.hooks.PostToolUse).toBeArrayOfSize(1);
+    expect(settings.hooks.PostToolUse[0]._arc_pkg).toBe("OtherPkg");
+    expect(settings.hooks.Stop?.length ?? 0).toBe(0);
+  });
+
+  // PR #277 adversarial review: this pins the migrate-before-filter
+  // ordering inside removeHooks as load-bearing safety. An entry hand-edited
+  // (or left over from some future bug) into a dual-tag state — _arc_pkg
+  // owned by one package, legacy _pai_pkg owned by another — is not
+  // reachable via arc's own writes today, but IF it exists, removeHooks
+  // must not let package B's legacy _pai_pkg tag win an ownership check
+  // against package A's current _arc_pkg tag. migrateLegacyTags runs
+  // BEFORE the isOwnedBy filter specifically so that B's stale _pai_pkg is
+  // stripped (via a no-op `_arc_pkg ??= "B"`, since _arc_pkg is already
+  // "A") before the filter ever sees it. Swapping that order would
+  // reintroduce silent cross-package deletion.
+  test("migrate-before-filter ordering: removeHooks(B) never deletes an entry _arc_pkg-owned by A (dual-tag)", async () => {
+    const existing = {
+      hooks: {
+        PostToolUse: [
+          {
+            _arc_pkg: "A",
+            _pai_pkg: "B",
+            hooks: [{ type: "command", command: "/dual-tag/hook.ts" }],
+          },
+        ],
+      },
+    };
+    await Bun.write(settingsPath, JSON.stringify(existing, null, 4));
+
+    await removeHooks("B", settingsPath);
+
+    const settings = JSON.parse(await Bun.file(settingsPath).text());
+    // A's entry survives — package B's removal must not touch it.
+    expect(settings.hooks.PostToolUse).toBeArrayOfSize(1);
+    expect(settings.hooks.PostToolUse[0]._arc_pkg).toBe("A");
+    expect(settings.hooks.PostToolUse[0]._pai_pkg).toBeUndefined();
   });
 
   test("preserves non-hook settings when removing", async () => {
@@ -294,7 +464,7 @@ describe("removeHooks", () => {
 });
 
 describe("listPackageHooks", () => {
-  test("returns hooks for a specific package", async () => {
+  test("returns hooks for a specific package tagged with legacy _pai_pkg", async () => {
     const existing = {
       hooks: {
         PostToolUse: [
@@ -310,6 +480,35 @@ describe("listPackageHooks", () => {
         Stop: [
           {
             _pai_pkg: "Grove",
+            hooks: [{ type: "command", command: "/grove/stop.ts" }],
+          },
+        ],
+      },
+    };
+    await Bun.write(settingsPath, JSON.stringify(existing, null, 4));
+
+    const hooks = listPackageHooks("Grove", settingsPath);
+    expect(hooks).toBeArrayOfSize(2);
+    expect(hooks).toContainEqual({ event: "PostToolUse", command: "/grove/hook.ts" });
+    expect(hooks).toContainEqual({ event: "Stop", command: "/grove/stop.ts" });
+  });
+
+  test("returns hooks for a specific package tagged with current _arc_pkg", async () => {
+    const existing = {
+      hooks: {
+        PostToolUse: [
+          {
+            _arc_pkg: "Grove",
+            hooks: [{ type: "command", command: "/grove/hook.ts" }],
+          },
+          {
+            _arc_pkg: "OtherPkg",
+            hooks: [{ type: "command", command: "/other/hook.ts" }],
+          },
+        ],
+        Stop: [
+          {
+            _arc_pkg: "Grove",
             hooks: [{ type: "command", command: "/grove/stop.ts" }],
           },
         ],
