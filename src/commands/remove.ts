@@ -379,9 +379,10 @@ export async function remove(
   // Remove hooks from settings.json (before deleting repo).
   //
   // arc#137: always invoke removeHooks regardless of manifest state.
-  // The filter inside removeHooks keys on the `_pai_pkg` tag written at
-  // install time, so it's safe (and idempotent) to call when the source
-  // repo was deleted out-of-band and the manifest no longer parses.
+  // The filter inside removeHooks keys on the `_arc_pkg` tag written at
+  // install time (or the legacy `_pai_pkg` tag, arc#276), so it's safe
+  // (and idempotent) to call when the source repo was deleted out-of-band
+  // and the manifest no longer parses.
   // Gating on `manifest?.provides?.hooks` was wrong: a missing or
   // unreadable manifest left settings.json entries pointing at paths
   // that no longer exist, surfacing as "No such file or directory"

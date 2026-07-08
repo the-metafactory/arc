@@ -3,7 +3,13 @@
  *
  * Manages the `hooks` section of ~/.claude/settings.json, allowing
  * arc packages to declaratively register event hooks. Each hook
- * entry is tagged with `_pai_pkg` for provenance tracking and clean removal.
+ * entry is tagged with `_arc_pkg` for provenance tracking and clean removal.
+ *
+ * Legacy compat (arc#276): arc was previously named "paipkg", and entries
+ * written by older versions carry `_pai_pkg` instead. Every ownership check
+ * below accepts EITHER tag, and `registerHooks`/`removeHooks` migrate a
+ * package's legacy `_pai_pkg` entries to `_arc_pkg` in the same write that
+ * touches settings.json for that package (no standalone migration command).
  */
 
 import { existsSync, readFileSync } from "fs";
@@ -14,6 +20,8 @@ import type { HooksDeclaration, InlineHook } from "../types.js";
 
 /** A single hook entry in settings.json's hooks.<event> array */
 interface SettingsHookGroup {
+  _arc_pkg?: string;
+  /** Legacy provenance tag from the "paipkg" era; read-compat only (arc#276). */
   _pai_pkg?: string;
   matcher?: string;
   hooks: { type: string; command: string }[];
@@ -36,6 +44,19 @@ function hookGroupHasCommand(entry: SettingsHookGroup, command: string): boolean
   return entry.hooks.some((hook) => hook.command === command);
 }
 
+/**
+ * True when `entry` is tagged as belonging to `packageName`, under EITHER
+ * the current `_arc_pkg` tag or the legacy `_pai_pkg` tag (arc#276).
+ */
+function isOwnedBy(entry: SettingsHookGroup, packageName: string): boolean {
+  return entry._arc_pkg === packageName || entry._pai_pkg === packageName;
+}
+
+/** True when `entry` carries neither provenance tag (unclaimed). */
+function isUntagged(entry: SettingsHookGroup): boolean {
+  return entry._arc_pkg === undefined && entry._pai_pkg === undefined;
+}
+
 function shouldReplaceHookGroup(
   packageName: string,
   hook: { command: string; matcher?: string },
@@ -44,7 +65,27 @@ function shouldReplaceHookGroup(
   if (matcherKey(entry.matcher) !== matcherKey(hook.matcher)) return false;
   if (!hookGroupHasCommand(entry, hook.command)) return false;
 
-  return entry._pai_pkg === packageName || entry._pai_pkg === undefined;
+  // Preserves the pre-#276 semantics exactly: an entry with no provenance
+  // tag at all (neither _arc_pkg nor _pai_pkg) is still claimable.
+  return isOwnedBy(entry, packageName) || isUntagged(entry);
+}
+
+/**
+ * Rewrite any of `packageName`'s legacy `_pai_pkg` tags to `_arc_pkg`,
+ * across every event in settings.hooks. Called by registerHooks /
+ * removeHooks so a package's tags get migrated the next time arc touches
+ * settings.json for it, without a standalone migration command (arc#276).
+ */
+function migrateLegacyTags(settings: Settings, packageName: string): void {
+  if (!settings.hooks) return;
+  for (const entries of Object.values(settings.hooks)) {
+    for (const entry of entries) {
+      if (entry._pai_pkg === packageName) {
+        entry._arc_pkg ??= packageName;
+        delete entry._pai_pkg;
+      }
+    }
+  }
 }
 
 /**
@@ -228,6 +269,12 @@ export async function registerHooks(
 
   settings.hooks ??= {};
 
+  // Migrate this package's legacy _pai_pkg tags to _arc_pkg before touching
+  // anything else, so any pre-existing entries this package doesn't
+  // currently declare hooks for (e.g. dropped in a later manifest version)
+  // still get their provenance tag updated on this write (arc#276).
+  migrateLegacyTags(settings, packageName);
+
   for (const hook of hooks) {
     // Record<string, T> indexing is typed as always-defined without
     // noUncheckedIndexedAccess; the runtime check is still needed.
@@ -241,7 +288,7 @@ export async function registerHooks(
     );
 
     const group: SettingsHookGroup = {
-      _pai_pkg: packageName,
+      _arc_pkg: packageName,
       ...(hook.matcher ? { matcher: hook.matcher } : {}),
       hooks: [{ type: "command", command: hook.command }],
     };
@@ -263,9 +310,15 @@ export async function removeHooks(
 
   if (!settings.hooks) return;
 
+  // Migrate any surviving legacy tags for this package first (defensive;
+  // entries actually owned by packageName are removed below regardless of
+  // which tag they carry — see isOwnedBy — so this mainly keeps behavior
+  // consistent with registerHooks' migrate-on-touch policy, arc#276).
+  migrateLegacyTags(settings, packageName);
+
   for (const event of Object.keys(settings.hooks)) {
     settings.hooks[event] = settings.hooks[event].filter(
-      (entry) => entry._pai_pkg !== packageName,
+      (entry) => !isOwnedBy(entry, packageName),
     );
   }
 
@@ -296,7 +349,7 @@ export function listPackageHooks(
 
   for (const [event, entries] of Object.entries(settings.hooks)) {
     for (const entry of entries) {
-      if (entry._pai_pkg === packageName) {
+      if (isOwnedBy(entry, packageName)) {
         for (const hook of entry.hooks) {
           results.push({ event, command: hook.command });
         }
