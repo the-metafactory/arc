@@ -127,6 +127,12 @@ export async function createMockSkillRepo(
     };
     /** Runtime broker requirements (arc#152). e.g. `{ nats: true }`. */
     requires?: { nats?: boolean };
+    /**
+     * Instance-state opt-in (arc#281). type:agent only. When set, the manifest
+     * declares `state: { blueprint, version }`, opting the agent into the
+     * instance-state scaffold at install. Omit for a stateless agent.
+     */
+    state?: { blueprint: string; version: string };
   }
 ): Promise<MockSkillRepo> {
   const repoDir = join(root, `mock-${opts.name}`);
@@ -254,6 +260,7 @@ export async function createMockSkillRepo(
         ),
       } : {}),
       ...(opts.requires ? { requires: opts.requires } : {}),
+      ...(opts.state ? { state: opts.state } : {}),
     };
 
     // Write as YAML manually (avoid dependency on yaml in test helper)
@@ -483,8 +490,15 @@ function buildYaml(obj: any, indent = 0): string {
     } else if (typeof val === "object") {
       out += `${pad}${key}:\n`;
       out += buildYaml(val, indent + 1);
-    } else if (typeof val === "boolean" || typeof val === "number" || typeof val === "string") {
+    } else if (typeof val === "boolean" || typeof val === "number") {
       out += `${pad}${key}: ${val}\n`;
+    } else if (typeof val === "string") {
+      // Quote strings that begin with a YAML-significant indicator (e.g. a
+      // version range like ">=0.1.0", which YAML would otherwise read as a
+      // block-scalar header). JSON.stringify gives a safe double-quoted form;
+      // plain strings pass through unquoted to keep existing fixtures readable.
+      const needsQuote = /^[>|&*!%@`"'#\-?:,[\]{}]/.test(val) || /[:#]\s/.test(val);
+      out += `${pad}${key}: ${needsQuote ? JSON.stringify(val) : val}\n`;
     } else {
       // Fallback for unexpected types (bigint, symbol, function); JSON.stringify
       // gives a sensible "null"/quoted representation.

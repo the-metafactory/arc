@@ -75,6 +75,12 @@ async function createBotPackLibraryRepo(opts: {
   libraryName: string;
   members: { name: string; id: string }[];
   logPath: string;
+  /**
+   * arc#281: when true, each member manifest declares `state: { blueprint,
+   * version }`, opting the agent into the instance-state scaffold. Omit for a
+   * stateless bot-pack (identity still provisioned, no instance dir).
+   */
+  withState?: boolean;
 }): Promise<string> {
   const repoDir = join(env.root, `mock-lib-${opts.libraryName}`);
   await mkdir(repoDir, { recursive: true });
@@ -133,7 +139,7 @@ type: agent
 tier: custom
 description: ${m.name} bot-pack fixture
 targets: [cortex]
-lifecycle:
+${opts.withState ? `state:\n  blueprint: AgentState\n  version: ">=0.1.0"\n` : ""}lifecycle:
   postinstall:
     - scripts/reload.sh
 `,
@@ -207,26 +213,31 @@ describe("library fan-out of cortex bot-packs (--config-dir)", () => {
     }
   });
 
-  test("scaffolds per-agent identity (agent-state) for each member", async () => {
+  test("scaffolds per-agent identity + instance state for a member WITH state (arc#281)", async () => {
     const stackDir = await scaffoldSplitStack("scratch2");
     const logPath = join(env.root, "postinstall2.log");
-    // Redirect agent-state + nats seeds into the test env via the documented
-    // MF_INSTANCE_DIR / MF_NATS_DIR contract so the real ~/.config/cortex
-    // location isn't touched. (Single member so the one MF_INSTANCE_DIR maps
-    // unambiguously; the multi-member drop is proven in the test above.)
+    // Redirect agent-state + nats seeds + provisioning sidecar into the test env
+    // via the documented MF_INSTANCE_DIR / MF_NATS_DIR / MF_SIDECAR_DIR contract
+    // so the real ~/.config location isn't touched. (Single member so the one
+    // MF_INSTANCE_DIR maps unambiguously; the multi-member drop is proven above.)
     const instanceDir = join(env.root, "agent-state", "dev");
     const natsDir = join(env.root, ".config", "nats");
+    const sidecarDir = join(env.root, ".config", "metafactory", "agents");
 
+    // withState → the member opts into the instance-state scaffold (arc#281).
     const repo = await createBotPackLibraryRepo({
       libraryName: "dev-loop2",
       members: [{ name: "Dev", id: "dev" }],
       logPath,
+      withState: true,
     });
 
     const prevNats = process.env.MF_NATS_DIR;
     const prevInstance = process.env.MF_INSTANCE_DIR;
+    const prevSidecar = process.env.MF_SIDECAR_DIR;
     process.env.MF_NATS_DIR = natsDir;
     process.env.MF_INSTANCE_DIR = instanceDir;
+    process.env.MF_SIDECAR_DIR = sidecarDir;
     try {
       const result = await install({
         arc: env.arc,
@@ -244,11 +255,63 @@ describe("library fan-out of cortex bot-packs (--config-dir)", () => {
       // Instance state dir scaffolded (state.sqlite written inside it).
       expect(existsSync(instanceDir)).toBe(true);
       expect(existsSync(join(instanceDir, "state.sqlite"))).toBe(true);
+      // Sidecar (canonical provisioning record) written for the member too.
+      expect(existsSync(join(sidecarDir, "dev.provision.json"))).toBe(true);
     } finally {
       if (prevNats === undefined) delete process.env.MF_NATS_DIR;
       else process.env.MF_NATS_DIR = prevNats;
       if (prevInstance === undefined) delete process.env.MF_INSTANCE_DIR;
       else process.env.MF_INSTANCE_DIR = prevInstance;
+      if (prevSidecar === undefined) delete process.env.MF_SIDECAR_DIR;
+      else process.env.MF_SIDECAR_DIR = prevSidecar;
+    }
+  });
+
+  test("STATELESS member (no state): identity + sidecar, but NO instance dir (arc#281 fan-out gate)", async () => {
+    const stackDir = await scaffoldSplitStack("scratch3");
+    const logPath = join(env.root, "postinstall3.log");
+    const instanceDir = join(env.root, "agent-state-stateless", "dev");
+    const natsDir = join(env.root, ".config", "nats-stateless");
+    const sidecarDir = join(env.root, ".config", "metafactory-stateless", "agents");
+
+    // No withState → the member is stateless; the fan-out must gate the scaffold.
+    const repo = await createBotPackLibraryRepo({
+      libraryName: "dev-loop3",
+      members: [{ name: "Dev", id: "dev" }],
+      logPath,
+    });
+
+    const prevNats = process.env.MF_NATS_DIR;
+    const prevInstance = process.env.MF_INSTANCE_DIR;
+    const prevSidecar = process.env.MF_SIDECAR_DIR;
+    process.env.MF_NATS_DIR = natsDir;
+    process.env.MF_INSTANCE_DIR = instanceDir;
+    process.env.MF_SIDECAR_DIR = sidecarDir;
+    try {
+      const result = await install({
+        arc: env.arc,
+        host: env.host,
+        db: env.db,
+        repoUrl: repo,
+        yes: true,
+        hostOverrides: cortexOverrides(stackDir),
+        cortexConfigEnv: { CORTEX_CONFIG: stackDir },
+      });
+      expect(result.success).toBe(true);
+
+      // Identity still provisioned for the stateless member.
+      expect(existsSync(join(natsDir, "dev.nk"))).toBe(true);
+      // Sidecar (canonical record) still written.
+      expect(existsSync(join(sidecarDir, "dev.provision.json"))).toBe(true);
+      // …but NO instance-state dir was scaffolded (the fan-out gates on state).
+      expect(existsSync(instanceDir)).toBe(false);
+    } finally {
+      if (prevNats === undefined) delete process.env.MF_NATS_DIR;
+      else process.env.MF_NATS_DIR = prevNats;
+      if (prevInstance === undefined) delete process.env.MF_INSTANCE_DIR;
+      else process.env.MF_INSTANCE_DIR = prevInstance;
+      if (prevSidecar === undefined) delete process.env.MF_SIDECAR_DIR;
+      else process.env.MF_SIDECAR_DIR = prevSidecar;
     }
   });
 });

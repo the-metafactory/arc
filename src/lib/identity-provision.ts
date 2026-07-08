@@ -1,14 +1,24 @@
 /**
- * identity-provision.ts — agent identity provisioning at install (arc#228, F-6b).
+ * identity-provision.ts — agent identity provisioning at install (arc#228, F-6b;
+ * opt-in state arc#281).
  *
  * When an `arc install` lands a `type: agent` package, the agent instance needs
- * three things provisioned without manual post-install steps:
+ * its identity provisioned without manual post-install steps:
  *
  *   1. an NKey seed at the canonical NATS path (`~/.config/nats/<agent-id>.nk`,
  *      chmod 600) — the signing identity the agent's daemon binds to;
- *   2. a DID (`did:mf:<agent-id>`) — the agent's stable wire address; and
- *   3. a scaffolded instance-state directory (`~/.config/cortex/agents/<agent-id>/`)
- *      holding `state.sqlite`, `dashboard.md`, `CLAUDE.md`, `context/`, `retros/`.
+ *   2. a DID (`did:mf:<agent-id>`) — the agent's stable wire address.
+ *
+ * Identity (1 + 2) is provisioned for EVERY agent, unconditionally.
+ *
+ * A third artifact — a scaffolded instance-state directory
+ * (`~/.config/cortex/agents/<agent-id>/` holding `state.sqlite`, `dashboard.md`,
+ * `CLAUDE.md`, `context/`, `retros/`) — is now OPT-IN (arc#281). The platform
+ * contract is stateless-by-default (`forge/design/agent-platform.md` §state):
+ * only agents whose manifest declares `state: { blueprint, version }` get the
+ * scaffold. Stateless agents take zero state code paths (matches cortex#1720/
+ * #1721, which made the same default cortex-side). The caller signals opt-in via
+ * `ProvisionIdentityOptions.scaffoldState`.
  *
  * This module is the SINGLE dedicated home for that logic (per the F-6b merge-
  * coordination note: identity lives here; secrets — F-6e — live in their own
@@ -16,13 +26,23 @@
  * wires it in as ONE clearly-commented hook call at the identity step, so the
  * concurrent arc install lanes touch non-adjacent insertion points.
  *
+ * Idempotency record (arc#281, option (a)): provisioning was previously recorded
+ * ONLY in `state.sqlite` metadata (`provisioned=1`), which a stateless agent
+ * never has. It is now recorded in an arc-owned sidecar JSON at
+ * `~/.config/metafactory/agents/<agent-id>.provision.json`, written for ALL
+ * agents. The sidecar is the CANONICAL provisioning record and idempotency
+ * anchor. Stateful agents ALSO keep the `state.sqlite` metadata record (least
+ * churn — downstream tooling that reads it keeps working), but the sidecar is
+ * the source of truth.
+ *
  * Grounding precedents:
  *   - cortex `scripts/lib/stack-identity-provision.sh` (cortex#324, cortex#563):
  *     canonical NKey path under `~/.config/nats/`, idempotent re-runs, and the
  *     cortex#563 fail-closed lesson — NEVER wire identity into a skeletal config
  *     that can't use it (there, a `nkey_seed_path` without a `stack.id` Zod-
  *     rejected at boot and crash-looped the service). Here the analogue is: never
- *     wire identity without an instance-state skeleton to anchor it.
+ *     wire identity without a place to ANCHOR the provisioning record — which is
+ *     now the arc-owned sidecar dir, not the (now-optional) state skeleton.
  *   - `cortex stack create`'s born-aligned pattern: identity is generated AT
  *     install and wired idempotently, so drift can't form.
  *   - agent-state `skill/scripts/scaffold.ts` (`ScaffoldFolders`): the four-folder
@@ -79,6 +99,17 @@ export function instanceDirForAgent(agentId: string, agentsBaseDir?: string): st
   return join(base, agentId);
 }
 
+/**
+ * Resolve the arc-owned provisioning-sidecar path for an agent id (arc#281,
+ * option (a)). Canonical location `~/.config/metafactory/agents/<id>.provision.json`
+ * — an arc-owned dir, so it exists for stateless agents that never get a cortex
+ * instance dir. Honors an override base (tests + the `MF_SIDECAR_DIR` contract).
+ */
+export function provisionSidecarPathForAgent(agentId: string, sidecarDir?: string): string {
+  const base = sidecarDir ?? join(homedir(), ".config", "metafactory", "agents");
+  return join(base, `${agentId}.provision.json`);
+}
+
 export interface ProvisionAction {
   kind: "created" | "skipped" | "warn";
   what: string;
@@ -89,12 +120,26 @@ export interface ProvisionIdentityOptions {
   /** Canonical agent identifier (manifest.identity.id or derived package slug). */
   agentId: string;
   /**
+   * Whether to scaffold the instance-state directory (arc#281). Opt-in: true
+   * ONLY when the manifest declares `state: { blueprint, version }`. When false
+   * (the default), the agent is stateless — identity is still provisioned and
+   * the provisioning sidecar is written, but NO instance dir / state.sqlite /
+   * dashboard/context/retros are created.
+   */
+  scaffoldState?: boolean;
+  /**
    * Absolute path to the instance-state directory. When omitted, defaults to
    * `~/.config/cortex/agents/<agentId>`. Mirrors the `MF_INSTANCE_DIR` contract.
+   * Only used when `scaffoldState` is true.
    */
   instanceDir?: string;
   /** Override the `~/.config/nats` base (tests sandbox this). */
   natsDir?: string;
+  /**
+   * Override the `~/.config/metafactory/agents` sidecar base (tests sandbox this).
+   * Mirrors the `MF_SIDECAR_DIR` contract.
+   */
+  sidecarDir?: string;
   /** Optional human-readable display name for templates (else derived from id). */
   displayName?: string;
   /** Optional principal id — logged for correlation only; NOT used for identity. */
@@ -104,16 +149,28 @@ export interface ProvisionIdentityOptions {
 }
 
 export interface ProvisionIdentityResult {
-  /** True iff identity (NKey + DID) was wired AND state was scaffolded. */
+  /**
+   * True iff identity (NKey + DID) was wired and the provisioning sidecar was
+   * written. Does NOT imply a state scaffold ran — a stateless agent (no
+   * manifest `state`) provisions successfully with `provisioned: true` and
+   * `stateScaffolded: false`.
+   */
   provisioned: boolean;
+  /** True iff the opt-in instance-state directory was scaffolded (arc#281). */
+  stateScaffolded: boolean;
   agentId: string;
   did: string;
   /** Path the NKey seed lives at (canonical), whether created or reused. */
   nkeySeedPath: string;
   /** Best-effort U-prefixed public key; empty when derivation isn't available. */
   nkeyPub: string;
-  /** The instance-state directory operated on. */
+  /**
+   * The instance-state directory. Populated only when `stateScaffolded` is true;
+   * empty string for a stateless agent (no dir was created).
+   */
   instanceDir: string;
+  /** Path to the arc-owned provisioning sidecar JSON (the canonical record). */
+  sidecarPath: string;
   /** Per-action log, in order. */
   actions: ProvisionAction[];
   /** Set when a fail-closed guard fired; carries operator guidance. */
@@ -121,29 +178,40 @@ export interface ProvisionIdentityResult {
 }
 
 /**
- * Provision an agent's identity + state at install time. Idempotent and fail-
- * closed: safe to call on every install/upgrade.
+ * Provision an agent's identity (+ optionally its instance state) at install
+ * time. Idempotent and fail-closed: safe to call on every install/upgrade.
  *
- * Flow (mirrors arc#228 §Specification step 3–4):
+ * Flow (mirrors arc#228 §Specification step 3–4, revised for arc#281 opt-in state):
  *   1. Validate the agent id grammar (refuse rather than write a bad path).
- *   2. Fail-closed Rule 1 — instance-state skeleton must exist OR be creatable.
- *      arc owns the default instance dir, so "missing" means "we create it"; the
- *      guard fires only when creation itself fails (e.g. permission denied),
- *      where we WARN + skip identity wiring rather than orphan a seed.
- *   3. Generate the NKey seed if absent (nsc → nkeys.js → guidance), chmod 600.
+ *   2. Fail-closed Rule 1 (arc#281 revision) — the arc-owned SIDECAR dir must
+ *      exist or be creatable. cortex#563 analogue: don't wire identity without a
+ *      place to anchor the provisioning record. That anchor USED to be the
+ *      instance-state skeleton, but state is now opt-in (stateless agents have
+ *      no instance dir), so identity anchors to the arc-owned sidecar dir
+ *      instead — which arc always owns and creates for every agent. The guard
+ *      fires only when creating the sidecar dir itself fails (e.g. EACCES).
+ *   3. Generate the NKey seed if absent (self-contained codec), chmod 600.
  *      Idempotency Rule 2: an existing seed is reused, never regenerated.
  *   4. Best-effort derive the pubkey (empty is acceptable; cortex logs at boot).
- *   5. Scaffold the instance-state layout (operator-edited files never clobbered).
- *   6. Record provisioning in `state.sqlite` metadata (provisioned=1 + ts + DID).
+ *   5. OPT-IN (arc#281): when `scaffoldState` is true, scaffold the instance-
+ *      state layout (operator-edited files never clobbered) and record
+ *      provisioning in `state.sqlite` metadata. Skipped entirely for stateless
+ *      agents — no instance dir is created.
+ *   6. Write the arc-owned provisioning sidecar (the CANONICAL record + the
+ *      idempotency anchor) for ALL agents, stateful or stateless.
  */
 export async function provisionAgentIdentity(
   opts: ProvisionIdentityOptions,
 ): Promise<ProvisionIdentityResult> {
   const { agentId } = opts;
   const did = agentDidFromId(agentId);
-  const instanceDir = opts.instanceDir ?? instanceDirForAgent(agentId);
+  const scaffoldState = opts.scaffoldState === true;
   const nkeySeedPath = nkeyPathForAgent(agentId, opts.natsDir);
+  const sidecarPath = provisionSidecarPathForAgent(agentId, opts.sidecarDir);
   const actions: ProvisionAction[] = [];
+  // instanceDir is only meaningful for stateful agents; empty otherwise so the
+  // result never implies a dir was created when it wasn't.
+  let instanceDir = "";
 
   const record = (kind: ProvisionAction["kind"], what: string, reason?: string): void => {
     actions.push(reason ? { kind, what, reason } : { kind, what });
@@ -158,17 +226,19 @@ export async function provisionAgentIdentity(
     record("warn", "identity", warning);
     return {
       provisioned: false,
+      stateScaffolded: false,
       agentId,
       did,
       nkeySeedPath,
       nkeyPub,
       instanceDir,
+      sidecarPath,
       actions,
       warning,
     };
   };
 
-  // 1. Grammar guard — never write a seed/state path from a malformed id.
+  // 1. Grammar guard — never write a seed/state/sidecar path from a malformed id.
   if (!AGENT_ID_RE.test(agentId)) {
     return fail(
       `invalid agent id "${agentId}" — expected lowercase alphanumeric + single ` +
@@ -176,30 +246,33 @@ export async function provisionAgentIdentity(
     );
   }
 
-  // 2. Fail-closed Rule 1 — instance-state skeleton must exist or be creatable.
-  //    cortex#563 analogue: don't wire identity into a config/state that can't
-  //    anchor it. arc owns the default dir, so we attempt creation; only a
-  //    creation FAILURE (e.g. EACCES) trips the guard.
-  if (!existsSync(instanceDir)) {
+  // 2. Fail-closed Rule 1 (arc#281 revision) — the arc-owned SIDECAR dir must
+  //    exist or be creatable. Previously this guard anchored identity to the
+  //    instance-state skeleton; but instance state is now opt-in (arc#281), so a
+  //    stateless agent has no instance dir to anchor to. Identity therefore
+  //    anchors to the arc-owned sidecar dir (`~/.config/metafactory/agents/`),
+  //    which arc owns for EVERY agent. cortex#563 posture is preserved: we
+  //    refuse to wire identity when we can't record that we did so — the guard
+  //    trips only when creating the sidecar dir itself fails (e.g. EACCES).
+  const sidecarDir = dirOf(sidecarPath);
+  if (!existsSync(sidecarDir)) {
     try {
-      // 0o700: the instance dir holds state.sqlite, which records the
-      // nkey_seed_path + nkey_pub. Keep it owner-only (mirrors identity.ts's
-      // ensureKeysDir pattern) so sibling-readable defaults don't leak the
-      // location of the signing seed. (Security review nit (2).)
-      mkdirSync(instanceDir, { recursive: true, mode: 0o700 });
-      chmodSync(instanceDir, 0o700); // recursive:true only modes the leaf; be explicit
-      record("created", "instance-dir");
+      // 0o700: the sidecar records nkey_seed_path + nkey_pub. Keep it owner-only
+      // (mirrors identity.ts's ensureKeysDir pattern) so sibling-readable
+      // defaults don't leak the location of the signing seed.
+      mkdirSync(sidecarDir, { recursive: true, mode: 0o700 });
+      chmodSync(sidecarDir, 0o700); // recursive:true only modes the leaf; be explicit
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       return fail(
-        `cannot create agent instance dir at ${instanceDir} (${msg}); ` +
-          `refusing to wire identity without a state skeleton — set MF_INSTANCE_DIR ` +
+        `cannot create agent provisioning dir at ${sidecarDir} (${msg}); ` +
+          `refusing to wire identity without a place to record it — set MF_SIDECAR_DIR ` +
           `to a writable path or fix permissions, then re-run`,
       );
     }
   } else {
     // Existing dir (upgrade path): re-assert owner-only perms defensively.
-    chmodSync(instanceDir, 0o700);
+    chmodSync(sidecarDir, 0o700);
   }
 
   // 3. NKey seed — generate if missing (idempotency Rule 2: reuse if present).
@@ -226,19 +299,58 @@ export async function provisionAgentIdentity(
   // 4. Best-effort pubkey derivation (empty acceptable — cortex logs at boot).
   const nkeyPub = (await derivePubkeyFromSeed(nkeySeedPath)) ?? "";
 
-  // 5. Scaffold instance-state layout (operator-edited files never overwritten).
-  scaffoldInstanceState(instanceDir, agentId, opts.displayName ?? formatDisplayName(agentId), record);
+  // 5. OPT-IN instance-state scaffold (arc#281). Only when the manifest declared
+  //    `state`. Stateless agents skip this entirely — no instance dir is created.
+  if (scaffoldState) {
+    instanceDir = opts.instanceDir ?? instanceDirForAgent(agentId);
+    if (!existsSync(instanceDir)) {
+      try {
+        mkdirSync(instanceDir, { recursive: true, mode: 0o700 });
+        chmodSync(instanceDir, 0o700);
+        record("created", "instance-dir");
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        // Fail-closed: the manifest OPTED IN to state but we can't create the
+        // dir. Identity is already wired; refuse the (impossible) scaffold with
+        // actionable guidance rather than silently dropping declared state.
+        return fail(
+          `cannot create agent instance dir at ${instanceDir} (${msg}); ` +
+            `the manifest declares 'state' but the scaffold could not be laid down — ` +
+            `set MF_INSTANCE_DIR to a writable path or fix permissions, then re-run`,
+          nkeyPub,
+        );
+      }
+    } else {
+      // Existing dir (upgrade path): re-assert owner-only perms defensively.
+      chmodSync(instanceDir, 0o700);
+    }
 
-  // 6. Record provisioning in state.sqlite metadata.
-  recordProvisioningMetadata(instanceDir, { did, nkeySeedPath, nkeyPub }, record);
+    scaffoldInstanceState(instanceDir, agentId, opts.displayName ?? formatDisplayName(agentId), record);
+    // Keep the state.sqlite metadata record for stateful agents (least churn —
+    // downstream tooling that reads it keeps working). The sidecar (step 6) is
+    // the canonical record; this is a redundant convenience copy.
+    recordProvisioningMetadata(instanceDir, { did, nkeySeedPath, nkeyPub }, record);
+  } else {
+    record("skipped", "instance-state", "stateless (no manifest state)");
+  }
+
+  // 6. Write the arc-owned provisioning sidecar — CANONICAL record + idempotency
+  //    anchor, for ALL agents (stateful or stateless).
+  writeProvisionSidecar(
+    sidecarPath,
+    { agentId, did, nkeySeedPath, nkeyPub, stateScaffolded: scaffoldState, instanceDir },
+    record,
+  );
 
   return {
     provisioned: true,
+    stateScaffolded: scaffoldState,
     agentId,
     did,
     nkeySeedPath,
     nkeyPub,
     instanceDir,
+    sidecarPath,
     actions,
   };
 }
@@ -251,6 +363,13 @@ export interface AgentManifestLike {
   type: string;
   name: string;
   identity?: { id?: string; displayName?: string };
+  /**
+   * Instance-state opt-in (arc#281). When present (with both subfields), the
+   * agent gets an instance-state scaffold; when absent, the agent is stateless.
+   * Only its PRESENCE gates the scaffold here — shape validation happens at
+   * manifest load (`validateAgentState` in manifest.ts).
+   */
+  state?: { blueprint?: string; version?: string };
 }
 
 /**
@@ -258,11 +377,18 @@ export interface AgentManifestLike {
  * step. No-op for non-agent packages. For `type: agent`, resolves the canonical
  * agent id and invokes {@link provisionAgentIdentity}.
  *
- * Environment contract (arc#228 §Environment contract):
+ * Opt-in state (arc#281): the instance-state scaffold runs ONLY when the
+ * manifest declares `state`. Identity (NKey/DID) + the provisioning sidecar are
+ * provisioned for every agent regardless.
+ *
+ * Environment contract (arc#228 §Environment contract, extended arc#281):
  *   - `MF_AGENT_ID`     overrides the manifest-derived agent id.
- *   - `MF_INSTANCE_DIR` overrides the default `~/.config/cortex/agents/<id>`.
+ *   - `MF_INSTANCE_DIR` overrides the default `~/.config/cortex/agents/<id>`
+ *                       (only consulted when the manifest opts into state).
  *   - `MF_NATS_DIR`     overrides the default `~/.config/nats` seed base (lets
  *                       a host/test redirect NKey storage; production leaves it).
+ *   - `MF_SIDECAR_DIR`  overrides the default `~/.config/metafactory/agents`
+ *                       provisioning-sidecar base (tests redirect it).
  *   - `MF_PRINCIPAL`    logged for correlation only; never used for identity.
  *
  * Agent id resolution order: `MF_AGENT_ID` env → `manifest.identity.id` →
@@ -280,10 +406,17 @@ export async function maybeProvisionAgentIdentity(
   const agentId =
     envOrUndefined("MF_AGENT_ID") ?? manifest.identity?.id ?? slugify(manifest.name);
 
+  // Opt-in gate (arc#281): scaffold state only when the manifest declares it.
+  // Presence gates here; the manifest loader (validateAgentState) has already
+  // rejected a malformed shape, so a present `state` is a well-formed opt-in.
+  const scaffoldState = manifest.state !== undefined;
+
   return provisionAgentIdentity({
     agentId,
+    scaffoldState,
     instanceDir: envOrUndefined("MF_INSTANCE_DIR"),
     natsDir: envOrUndefined("MF_NATS_DIR"),
+    sidecarDir: envOrUndefined("MF_SIDECAR_DIR"),
     displayName: manifest.identity?.displayName,
     principal: envOrUndefined("MF_PRINCIPAL"),
     quiet: opts.quiet,
@@ -574,6 +707,49 @@ function recordProvisioningMetadata(
     db.close();
   }
   record("created", "provisioning-metadata");
+}
+
+/**
+ * Write the arc-owned provisioning sidecar (arc#281, option (a)) — the CANONICAL
+ * provisioning record + idempotency anchor for EVERY agent (stateful or not).
+ *
+ * A small JSON file at `~/.config/metafactory/agents/<id>.provision.json`, chmod
+ * 600 (it names the nkey_seed_path + nkey_pub, same sensitivity as the
+ * state.sqlite metadata it supersedes). Written unconditionally on every run
+ * (idempotent: the content is a pure function of the inputs, so a re-run is a
+ * byte-stable overwrite carrying the freshest `provisioned_at`). Downstream
+ * idempotency checks key off this file's existence rather than state.sqlite,
+ * which a stateless agent never has.
+ */
+function writeProvisionSidecar(
+  sidecarPath: string,
+  facts: {
+    agentId: string;
+    did: string;
+    nkeySeedPath: string;
+    nkeyPub: string;
+    stateScaffolded: boolean;
+    instanceDir: string;
+  },
+  record: (kind: ProvisionAction["kind"], what: string, reason?: string) => void,
+): void {
+  const existed = existsSync(sidecarPath);
+  const payload = {
+    schema: "arc/provision/v1",
+    agent_id: facts.agentId,
+    did: facts.did,
+    provisioned: true,
+    provisioned_at: new Date().toISOString(),
+    nkey_seed_path: facts.nkeySeedPath,
+    // Omit an empty pubkey rather than record "" — matches the state.sqlite
+    // metadata's "only write nkey_pub when derivable" posture.
+    ...(facts.nkeyPub ? { nkey_pub: facts.nkeyPub } : {}),
+    state_scaffolded: facts.stateScaffolded,
+    ...(facts.stateScaffolded && facts.instanceDir ? { instance_dir: facts.instanceDir } : {}),
+  };
+  writeFileSync(sidecarPath, JSON.stringify(payload, null, 2) + "\n", { mode: 0o600 });
+  chmodSync(sidecarPath, 0o600); // re-assert on the overwrite path (umask on existing file)
+  record(existed ? "skipped" : "created", "provision-sidecar", existed ? "updated" : undefined);
 }
 
 function writeIfAbsent(
