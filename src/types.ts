@@ -194,6 +194,27 @@ export interface AgentIdentity {
 }
 
 /**
+ * Instance-state opt-in declaration for type:agent packages.
+ *
+ * The platform contract is STATELESS BY DEFAULT (bring your own grounding) —
+ * `forge/design/agent-platform.md` §state. An agent that wants a persisted
+ * instance-state directory (state.sqlite + dashboard/context/retros) opts in by
+ * declaring this field; omitting it makes the agent stateless and skips the
+ * scaffold entirely (cortex#1720/#1721 landed the same opt-in default cortex-
+ * side, so arc and cortex now agree). Identity (NKey/DID) is provisioned
+ * unconditionally regardless of this field.
+ *
+ * - `blueprint` — names the AgentState bundle that owns the on-disk schema
+ *   (`state.sqlite` migrations). See github.com/the-metafactory/agent-state.
+ * - `version`   — the semver range the agent needs that bundle to satisfy
+ *   (e.g. ">=0.1.0"). Both subfields are required non-empty strings.
+ */
+export interface AgentState {
+  blueprint: string;
+  version: string;
+}
+
+/**
  * Ordered lifecycle script arrays for `type: agent` packages.
  *
  * Sister field to the existing `scripts.{preinstall,postinstall,…}` single-
@@ -390,6 +411,13 @@ export interface ArcManifest {
    * agent fragment. See AgentIdentity.
    */
   identity?: AgentIdentity;
+  /**
+   * Instance-state opt-in — type:agent only (forge/design/agent-platform.md
+   * §state). When present, install scaffolds the agent's instance-state
+   * directory; when absent, the agent is stateless and no dir is created.
+   * Identity (NKey/DID) is provisioned regardless. See AgentState.
+   */
+  state?: AgentState;
   tier?: PackageTier;
   author?: {
     name: string;

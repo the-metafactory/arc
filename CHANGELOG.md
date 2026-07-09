@@ -4,7 +4,16 @@
 
 ### Added
 
+- **Opt-in agent instance state via the manifest `state` field** ([#281](https://github.com/the-metafactory/arc/issues/281)). A `type: agent` package now declares `state: { blueprint, version }` to opt into an instance-state scaffold at install; both subfields are validated (non-empty strings) at manifest load. The field is typed on the agent manifest (`AgentState` in `src/types.ts`).
 - **`arc nats add-federated-user <name> --account <A>` — scoped hub-transport user mint** (cortex#1598). Ensures ONE `federated`-role scoped signing key per account (subject-templated `federated.{{name()}}.>` sub scope + `federated.>` pub, hardwired — no permission flags), mints the user signed by it with no own permissions, exports 0600 creds. Probe-first idempotent on both halves; refuses to export a user signed by any other key (`USER_NOT_SCOPED`). New schema `arc.nats.federated-user.v1`; new error codes `SIGNING_KEY_FAILED`, `USER_NOT_SCOPED`. Documented in `docs/integrations/cortex-creds.md`.
+
+### Changed
+
+- **Instance-state scaffold is now stateless-by-default** ([#281](https://github.com/the-metafactory/arc/issues/281)). Previously every `type: agent` install scaffolded `~/.config/cortex/agents/<id>/` + `state.sqlite`; now the scaffold runs **only** when the manifest declares `state`. Identity (NKey seed + DID) is still provisioned unconditionally for every agent. Aligns arc with cortex#1720/#1721 and `forge/design/agent-platform.md` §state. The provisioning record moved from `state.sqlite` metadata (which stateless agents lack) to an arc-owned sidecar at `~/.config/metafactory/agents/<id>.provision.json`, written for all agents; stateful agents retain the `state.sqlite` metadata copy too. New `MF_SIDECAR_DIR` env override redirects the sidecar base for hosts/tests.
+
+  **Migration reality (read before rolling this out):**
+  - **Existing installed agents are untouched.** `arc upgrade` does **not** re-run identity/state provisioning, so an already-installed agent keeps its current directory and gains a sidecar only on an explicit **re-install** (`arc install`). On such a re-install, if a pre-#281 instance dir is already on disk for a manifest that does *not* yet declare `state`, the sidecar reflects that reality honestly (`state_scaffolded: true` + `instance_dir` + `legacy_instance_state: true`) rather than claiming the agent is stateless.
+  - **Fresh installs of bundles that don't yet declare `state` become stateless.** Bundles whose manifests predate this change (e.g. `luna`, the `dev-loop` members) will install **without** an instance dir until their manifests add the `state` field. That manifest sweep is a **merge-ordering prerequisite** for those bundles — land the per-bundle `state` declarations before (or together with) rolling this out, or those agents ship stateless.
 
 ### Fixed
 

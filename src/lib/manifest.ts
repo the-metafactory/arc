@@ -163,6 +163,7 @@ async function readManifestFromDir(
       validateTargets(parsed, filename);
       validateLifecycle(parsed, filename);
       validateCortexConfig(parsed, filename);
+      validateAgentState(parsed, filename);
 
       return parsed;
     } catch (err) {
@@ -469,6 +470,56 @@ export function validateCortexConfig(manifest: ArcManifest, filename: string): v
     throw new Error(
       `Invalid ${filename}: 'cortex_config.policy' must be an object with 'principals'/'roles' arrays.`,
     );
+  }
+}
+
+/**
+ * Validate `state:` on the manifest (arc#281, forge/design/agent-platform.md §state).
+ *
+ * The field is OPTIONAL and opts a `type: agent` package into an instance-state
+ * scaffold at install (stateless by default — omit the field to stay stateless).
+ * When present it must be an object declaring BOTH `blueprint` and `version` as
+ * non-empty strings; a malformed shape rejects at manifest load so a typo
+ * surfaces on read rather than silently skipping (or half-running) the scaffold.
+ *
+ * arc does not resolve the blueprint or check the version range here — that is
+ * the install-time bundle-satisfaction concern; this is the structural guard at
+ * the manifest edge (mirrors validateCortexConfig's trust-edge posture).
+ *
+ * A bare `state:` key parses to `null` in YAML — the most likely typo for
+ * someone half-declaring the field. That is rejected explicitly (rather than
+ * treated as "absent"), because the install-time gate opts into the scaffold on
+ * PRESENCE and a null slip-through would opt in an agent with no blueprint.
+ */
+export function validateAgentState(manifest: ArcManifest, filename: string): void {
+  const state = manifest.state as unknown;
+  // Field absent → stateless, nothing to validate.
+  if (state === undefined) return;
+
+  // Bare `state:` (→ null) is a half-declaration, not "stateless". Reject it so
+  // the typo surfaces at load rather than opting the agent into an empty scaffold.
+  if (state === null) {
+    throw new Error(
+      `Invalid ${filename}: 'state' is empty (a bare 'state:' key) — declare ` +
+        `'state: { blueprint: <AgentState bundle>, version: ">=x.y.z" }', or remove the ` +
+        `'state' key entirely to make the agent stateless.`,
+    );
+  }
+
+  if (!isRecord(state)) {
+    throw new Error(
+      `Invalid ${filename}: 'state' must be an object with 'blueprint' and 'version' string fields (got ${Array.isArray(state) ? "array" : typeof state})`,
+    );
+  }
+
+  for (const field of ["blueprint", "version"] as const) {
+    const value = state[field];
+    if (typeof value !== "string" || value.length === 0) {
+      throw new Error(
+        `Invalid ${filename}: 'state.${field}' must be a non-empty string ` +
+          `(declare 'state: { blueprint: <AgentState bundle>, version: ">=x.y.z" }', or omit 'state' to make the agent stateless).`,
+      );
+    }
   }
 }
 
