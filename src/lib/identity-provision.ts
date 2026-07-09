@@ -111,7 +111,7 @@ export function provisionSidecarPathForAgent(agentId: string, sidecarDir?: strin
 }
 
 export interface ProvisionAction {
-  kind: "created" | "skipped" | "warn";
+  kind: "created" | "updated" | "skipped" | "warn";
   what: string;
   reason?: string;
 }
@@ -246,41 +246,52 @@ export async function provisionAgentIdentity(
     );
   }
 
-  // 2. Fail-closed Rule 1 (arc#281 revision) — the arc-owned SIDECAR dir must
-  //    exist or be creatable. Previously this guard anchored identity to the
-  //    instance-state skeleton; but instance state is now opt-in (arc#281), so a
-  //    stateless agent has no instance dir to anchor to. Identity therefore
-  //    anchors to the arc-owned sidecar dir (`~/.config/metafactory/agents/`),
-  //    which arc owns for EVERY agent. cortex#563 posture is preserved: we
-  //    refuse to wire identity when we can't record that we did so — the guard
-  //    trips only when creating the sidecar dir itself fails (e.g. EACCES).
+  // 2. Fail-closed Rule 1 (arc#281 revision) — pre-flight EVERY directory we will
+  //    write into BEFORE generating the seed. This restores main's ordering
+  //    guarantee (cortex#563 orphan-prevention): no NKey seed lands on disk until
+  //    we know every record we owe can be written. The anchor moved from the
+  //    instance-state skeleton (now opt-in) to the arc-owned sidecar dir
+  //    (`~/.config/metafactory/agents/`), which arc owns for EVERY agent; when
+  //    the manifest opts into state, the instance dir is pre-flighted too, so a
+  //    stateful agent whose instance dir is unwritable ALSO fails before the
+  //    seed exists — never leaving a seed with no record anywhere.
   const sidecarDir = dirOf(sidecarPath);
-  if (!existsSync(sidecarDir)) {
-    try {
-      // 0o700: the sidecar records nkey_seed_path + nkey_pub. Keep it owner-only
-      // (mirrors identity.ts's ensureKeysDir pattern) so sibling-readable
-      // defaults don't leak the location of the signing seed.
-      mkdirSync(sidecarDir, { recursive: true, mode: 0o700 });
-      chmodSync(sidecarDir, 0o700); // recursive:true only modes the leaf; be explicit
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      return fail(
-        `cannot create agent provisioning dir at ${sidecarDir} (${msg}); ` +
-          `refusing to wire identity without a place to record it — set MF_SIDECAR_DIR ` +
-          `to a writable path or fix permissions, then re-run`,
-      );
-    }
-  } else {
-    // Existing dir (upgrade path): re-assert owner-only perms defensively.
-    chmodSync(sidecarDir, 0o700);
+  const sidecarGuard = ensureOwnerOnlyDir(
+    sidecarDir,
+    `cannot create agent provisioning dir at ${sidecarDir}`,
+    "refusing to wire identity without a place to record it — set MF_SIDECAR_DIR " +
+      "to a writable path or fix permissions, then re-run",
+  );
+  if (sidecarGuard) return fail(sidecarGuard);
+
+  if (scaffoldState) {
+    instanceDir = opts.instanceDir ?? instanceDirForAgent(agentId);
+    const created = !existsSync(instanceDir);
+    const instanceGuard = ensureOwnerOnlyDir(
+      instanceDir,
+      `cannot create agent instance dir at ${instanceDir}`,
+      "the manifest declares 'state' but the scaffold could not be laid down — " +
+        "set MF_INSTANCE_DIR to a writable path or fix permissions, then re-run",
+    );
+    if (instanceGuard) return fail(instanceGuard);
+    if (created) record("created", "instance-dir");
   }
 
   // 3. NKey seed — generate if missing (idempotency Rule 2: reuse if present).
+  //    Only reached once every target dir above is confirmed writable.
   if (existsSync(nkeySeedPath)) {
     // Defensively re-assert 0o600 on the upgrade path: a pre-existing seed that
     // was created (or copied) with looser perms must not silently stay
     // world/group-readable just because we're skipping generation. (Nit (3).)
-    chmodSync(nkeySeedPath, 0o600);
+    try {
+      chmodSync(nkeySeedPath, 0o600);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return fail(
+        `cannot re-assert 0o600 on the existing NKey seed at ${nkeySeedPath} (${msg}); ` +
+          `fix ownership/permissions on the seed file, then re-run`,
+      );
+    }
     record("skipped", "nkey-seed", "exists");
   } else {
     const gen = generateNkeySeed(nkeySeedPath);
@@ -301,30 +312,8 @@ export async function provisionAgentIdentity(
 
   // 5. OPT-IN instance-state scaffold (arc#281). Only when the manifest declared
   //    `state`. Stateless agents skip this entirely — no instance dir is created.
+  //    The dir was already pre-flighted in step 2, so this only lays down files.
   if (scaffoldState) {
-    instanceDir = opts.instanceDir ?? instanceDirForAgent(agentId);
-    if (!existsSync(instanceDir)) {
-      try {
-        mkdirSync(instanceDir, { recursive: true, mode: 0o700 });
-        chmodSync(instanceDir, 0o700);
-        record("created", "instance-dir");
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        // Fail-closed: the manifest OPTED IN to state but we can't create the
-        // dir. Identity is already wired; refuse the (impossible) scaffold with
-        // actionable guidance rather than silently dropping declared state.
-        return fail(
-          `cannot create agent instance dir at ${instanceDir} (${msg}); ` +
-            `the manifest declares 'state' but the scaffold could not be laid down — ` +
-            `set MF_INSTANCE_DIR to a writable path or fix permissions, then re-run`,
-          nkeyPub,
-        );
-      }
-    } else {
-      // Existing dir (upgrade path): re-assert owner-only perms defensively.
-      chmodSync(instanceDir, 0o700);
-    }
-
     scaffoldInstanceState(instanceDir, agentId, opts.displayName ?? formatDisplayName(agentId), record);
     // Keep the state.sqlite metadata record for stateful agents (least churn —
     // downstream tooling that reads it keeps working). The sidecar (step 6) is
@@ -335,12 +324,31 @@ export async function provisionAgentIdentity(
   }
 
   // 6. Write the arc-owned provisioning sidecar — CANONICAL record + idempotency
-  //    anchor, for ALL agents (stateful or stateless).
-  writeProvisionSidecar(
+  //    anchor, for ALL agents (stateful or stateless). For a legacy pre-#281
+  //    stateful agent re-installed WITHOUT a manifest `state` field, an existing
+  //    instance dir on disk is reflected honestly (state_scaffolded from reality,
+  //    not from the absent opt-in).
+  const legacyInstanceDir =
+    !scaffoldState ? existingLegacyInstanceDir(agentId, opts.instanceDir) : "";
+  const sidecarErr = writeProvisionSidecar(
     sidecarPath,
-    { agentId, did, nkeySeedPath, nkeyPub, stateScaffolded: scaffoldState, instanceDir },
+    {
+      agentId,
+      did,
+      nkeySeedPath,
+      nkeyPub,
+      stateScaffolded: scaffoldState || legacyInstanceDir !== "",
+      instanceDir: scaffoldState ? instanceDir : legacyInstanceDir,
+      legacy: !scaffoldState && legacyInstanceDir !== "",
+    },
     record,
   );
+  if (sidecarErr) {
+    // The sidecar is the canonical record; if we cannot write it we have no
+    // durable proof of provisioning. Fail closed with guidance rather than
+    // returning success with an unrecorded provision.
+    return fail(sidecarErr, nkeyPub);
+  }
 
   return {
     provisioned: true,
@@ -367,9 +375,11 @@ export interface AgentManifestLike {
    * Instance-state opt-in (arc#281). When present (with both subfields), the
    * agent gets an instance-state scaffold; when absent, the agent is stateless.
    * Only its PRESENCE gates the scaffold here — shape validation happens at
-   * manifest load (`validateAgentState` in manifest.ts).
+   * manifest load (`validateAgentState` in manifest.ts). Typed as possibly
+   * `null` because a bare `state:` YAML key parses to null; the gate treats
+   * null as "no opt-in" (`!= null`).
    */
-  state?: { blueprint?: string; version?: string };
+  state?: { blueprint?: string; version?: string } | null;
 }
 
 /**
@@ -408,8 +418,11 @@ export async function maybeProvisionAgentIdentity(
 
   // Opt-in gate (arc#281): scaffold state only when the manifest declares it.
   // Presence gates here; the manifest loader (validateAgentState) has already
-  // rejected a malformed shape, so a present `state` is a well-formed opt-in.
-  const scaffoldState = manifest.state !== undefined;
+  // rejected a malformed shape (including a bare `state:` → null), so a present,
+  // non-null `state` is a well-formed opt-in. Use `!= null` so a YAML null that
+  // somehow reaches this path (e.g. a caller bypassing the loader) is treated as
+  // "no opt-in" rather than opting an agent into an empty scaffold.
+  const scaffoldState = manifest.state != null;
 
   return provisionAgentIdentity({
     agentId,
@@ -711,15 +724,20 @@ function recordProvisioningMetadata(
 
 /**
  * Write the arc-owned provisioning sidecar (arc#281, option (a)) — the CANONICAL
- * provisioning record + idempotency anchor for EVERY agent (stateful or not).
+ * provisioning record for EVERY agent (stateful or not).
  *
  * A small JSON file at `~/.config/metafactory/agents/<id>.provision.json`, chmod
  * 600 (it names the nkey_seed_path + nkey_pub, same sensitivity as the
- * state.sqlite metadata it supersedes). Written unconditionally on every run
- * (idempotent: the content is a pure function of the inputs, so a re-run is a
- * byte-stable overwrite carrying the freshest `provisioned_at`). Downstream
- * idempotency checks key off this file's existence rather than state.sqlite,
- * which a stateless agent never has.
+ * state.sqlite metadata it duplicates). Written on every run; `provisioned_at`
+ * refreshes each time, so the file is NOT byte-stable across runs (only its
+ * identity-bearing fields are stable). arc does not yet read the sidecar back —
+ * it is a durable, human-inspectable record of what was provisioned; a future
+ * idempotency check can key off it (it exists for stateless agents, which have
+ * no state.sqlite).
+ *
+ * Fail-closed: returns a warning string on ANY IO error (ENOSPC, foreign-owned
+ * file, …) instead of throwing, so the module's "never throws" contract holds
+ * for both install.ts call sites. Returns null on success.
  */
 function writeProvisionSidecar(
   sidecarPath: string,
@@ -730,9 +748,12 @@ function writeProvisionSidecar(
     nkeyPub: string;
     stateScaffolded: boolean;
     instanceDir: string;
+    /** True when state_scaffolded reflects a pre-#281 dir found on disk, not a
+     *  manifest opt-in this run — recorded so the file is self-describing. */
+    legacy: boolean;
   },
   record: (kind: ProvisionAction["kind"], what: string, reason?: string) => void,
-): void {
+): string | null {
   const existed = existsSync(sidecarPath);
   const payload = {
     schema: "arc/provision/v1",
@@ -746,10 +767,25 @@ function writeProvisionSidecar(
     ...(facts.nkeyPub ? { nkey_pub: facts.nkeyPub } : {}),
     state_scaffolded: facts.stateScaffolded,
     ...(facts.stateScaffolded && facts.instanceDir ? { instance_dir: facts.instanceDir } : {}),
+    // Mark a legacy reflection so a reader can tell "arc scaffolded this dir this
+    // run" apart from "a pre-#281 dir was found already on disk".
+    ...(facts.legacy ? { legacy_instance_state: true } : {}),
   };
-  writeFileSync(sidecarPath, JSON.stringify(payload, null, 2) + "\n", { mode: 0o600 });
-  chmodSync(sidecarPath, 0o600); // re-assert on the overwrite path (umask on existing file)
-  record(existed ? "skipped" : "created", "provision-sidecar", existed ? "updated" : undefined);
+  try {
+    writeFileSync(sidecarPath, JSON.stringify(payload, null, 2) + "\n", { mode: 0o600 });
+    chmodSync(sidecarPath, 0o600); // re-assert on the overwrite path (umask on existing file)
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return (
+      `could not write the provisioning sidecar at ${sidecarPath} (${msg}); ` +
+      `identity is wired but unrecorded — set MF_SIDECAR_DIR to a writable path or ` +
+      `fix permissions/space, then re-run`
+    );
+  }
+  // Overwrite of an existing sidecar refreshes provisioned_at, so it is an
+  // update, not a skip — record it honestly.
+  record(existed ? "updated" : "created", "provision-sidecar", existed ? "refreshed" : undefined);
+  return null;
 }
 
 function writeIfAbsent(
@@ -773,6 +809,42 @@ function writeIfAbsent(
 function dirOf(p: string): string {
   const idx = p.lastIndexOf("/");
   return idx <= 0 ? "/" : p.slice(0, idx);
+}
+
+/**
+ * Ensure `dir` exists and is owner-only (0o700), creating it if absent.
+ *
+ * Every filesystem op is wrapped: a missing dir is created; an existing dir has
+ * its perms re-asserted. On ANY failure (EACCES, ENOSPC, foreign-owned dir …)
+ * returns a composed warning string; on success returns null. The caller turns a
+ * non-null return into a fail-closed result — this is what keeps the module's
+ * documented "never throws" contract true for both install.ts call sites.
+ */
+function ensureOwnerOnlyDir(dir: string, whatFailed: string, guidance: string): string | null {
+  try {
+    if (!existsSync(dir)) {
+      // 0o700: these dirs hold state.sqlite / the sidecar, which name the
+      // nkey_seed_path + nkey_pub. Keep them owner-only (mirrors identity.ts's
+      // ensureKeysDir) so sibling-readable defaults don't leak the seed location.
+      mkdirSync(dir, { recursive: true, mode: 0o700 });
+    }
+    chmodSync(dir, 0o700); // recursive:true only modes the leaf; be explicit + re-assert on the upgrade path
+    return null;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return `${whatFailed} (${msg}); ${guidance}`;
+  }
+}
+
+/**
+ * For a STATELESS install (no manifest `state`), detect a pre-#281 instance-state
+ * dir already on disk. A legacy stateful agent re-installed without the (new)
+ * `state` field must not have its existing `state.sqlite` + dir misrepresented as
+ * absent in the sidecar. Returns the dir path when it exists, else "".
+ */
+function existingLegacyInstanceDir(agentId: string, instanceDirOverride?: string): string {
+  const dir = instanceDirOverride ?? instanceDirForAgent(agentId);
+  return existsSync(dir) ? dir : "";
 }
 
 function dashboardTemplate(displayName: string, agentId: string): string {

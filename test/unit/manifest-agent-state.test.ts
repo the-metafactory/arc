@@ -49,6 +49,15 @@ describe("readManifest — agent state opt-in (arc#281)", () => {
     expect(manifest!.state).toBeUndefined();
   });
 
+  test("rejects a bare `state:` key (YAML null — a half-declaration typo)", async () => {
+    // `state:` with no value parses to null. It must NOT be treated as "absent"
+    // (which would opt the agent into an empty scaffold via the presence gate).
+    await writeAgentManifest(`state:\n`);
+    await expect(readManifest(tempDir)).rejects.toThrow(
+      "'state' is empty (a bare 'state:' key)",
+    );
+  });
+
   test("rejects state missing blueprint", async () => {
     await writeAgentManifest(`state:\n  version: ">=0.1.0"\n`);
     await expect(readManifest(tempDir)).rejects.toThrow("'state.blueprint' must be a non-empty string");

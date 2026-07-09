@@ -167,7 +167,7 @@ describe("install() — F-6b agent identity provisioning", () => {
     expect(await readFile(seedPath, "utf-8")).toBe(seedBefore);
     expect(second?.actions.find((a) => a.what === "nkey-seed")?.kind).toBe("skipped");
     // Sidecar re-write is idempotent (reports as skipped/updated on re-run).
-    expect(second?.actions.find((a) => a.what === "provision-sidecar")?.kind).toBe("skipped");
+    expect(second?.actions.find((a) => a.what === "provision-sidecar")?.kind).toBe("updated");
   });
 
   test("re-install reuses the existing seed — idempotent (stateless)", async () => {
@@ -190,7 +190,7 @@ describe("install() — F-6b agent identity provisioning", () => {
     expect(existsSync(instanceDir)).toBe(false);
     expect(await readFile(seedPath, "utf-8")).toBe(seedBefore);
     expect(second?.actions.find((a) => a.what === "nkey-seed")?.kind).toBe("skipped");
-    expect(second?.actions.find((a) => a.what === "provision-sidecar")?.kind).toBe("skipped");
+    expect(second?.actions.find((a) => a.what === "provision-sidecar")?.kind).toBe("updated");
   });
 
   test("non-interactive install (yes=true) STILL surfaces a provisioning failure on stderr", async () => {

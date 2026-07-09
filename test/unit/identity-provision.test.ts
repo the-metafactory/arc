@@ -205,7 +205,7 @@ describe("provisionAgentIdentity — stateless (default, no opt-in)", () => {
     expect(second.stateScaffolded).toBe(false);
     expect(await readFile(second.nkeySeedPath, "utf-8")).toBe(seedBefore);
     expect(second.actions.find((a) => a.what === "nkey-seed")?.kind).toBe("skipped");
-    expect(second.actions.find((a) => a.what === "provision-sidecar")?.kind).toBe("skipped");
+    expect(second.actions.find((a) => a.what === "provision-sidecar")?.kind).toBe("updated");
     expect(existsSync(instanceDir)).toBe(false);
   });
 });
@@ -278,9 +278,10 @@ describe("provisionAgentIdentity — fail-closed (Rule 1, arc#281 sidecar anchor
     }
   });
 
-  test("opted-in state but uncreatable instance dir warns (identity already wired)", async () => {
-    // When the manifest opts into state but the instance dir can't be created,
-    // identity + seed are already wired; the scaffold fails closed with guidance.
+  test("opted-in state but uncreatable instance dir fails closed — NO orphan seed", async () => {
+    // arc#281 fix: the instance dir is pre-flighted BEFORE seed generation, so a
+    // stateful agent whose instance dir is unwritable fails closed with NO seed,
+    // NO state.sqlite, and NO sidecar left orphaned (cortex#563 orphan-prevention).
     const { natsDir, sidecarDir, root } = await sandbox();
     const lockedParent = join(root, "locked");
     await Bun.write(join(lockedParent, ".keep"), "");
@@ -297,11 +298,36 @@ describe("provisionAgentIdentity — fail-closed (Rule 1, arc#281 sidecar anchor
       });
       expect(result.provisioned).toBe(false);
       expect(result.warning).toMatch(/cannot create agent instance dir|scaffold could not be laid down/);
-      // Identity WAS wired before the scaffold failed — the seed exists.
-      expect(existsSync(join(natsDir, "forge.nk"))).toBe(true);
+      // Fail-closed: nothing written anywhere — no seed, no state, no sidecar.
+      expect(existsSync(join(natsDir, "forge.nk"))).toBe(false);
+      expect(existsSync(join(instanceDir, "state.sqlite"))).toBe(false);
+      expect(existsSync(join(sidecarDir, "forge.provision.json"))).toBe(false);
     } finally {
       await chmod(lockedParent, 0o700);
     }
+  });
+
+  test("legacy stateful dir on disk + stateless re-install records legacy reality", async () => {
+    // A pre-#281 stateful agent re-installed WITHOUT a manifest `state` field:
+    // its existing instance dir + state.sqlite must be reflected in the sidecar
+    // (state_scaffolded true + legacy marker), not misrepresented as absent.
+    const { natsDir, agentsDir, sidecarDir } = await sandbox();
+    const instanceDir = join(agentsDir, "forge");
+
+    // First: a stateful provision lays down the instance dir + state.sqlite.
+    await provisionAgentIdentity({ agentId: "forge", scaffoldState: true, instanceDir, natsDir, sidecarDir, quiet: true });
+    expect(existsSync(join(instanceDir, "state.sqlite"))).toBe(true);
+
+    // Then: a stateless re-install (no scaffoldState) with the SAME instance dir.
+    const second = await provisionAgentIdentity({ agentId: "forge", instanceDir, natsDir, sidecarDir, quiet: true });
+    expect(second.provisioned).toBe(true);
+    // Result still reports stateScaffolded false (no opt-in this run)…
+    expect(second.stateScaffolded).toBe(false);
+    // …but the sidecar reflects the legacy dir honestly.
+    const sidecar = readSidecar(sidecarDir, "forge");
+    expect(sidecar.state_scaffolded).toBe(true);
+    expect(sidecar.instance_dir).toBe(instanceDir);
+    expect(sidecar.legacy_instance_state).toBe(true);
   });
 });
 
@@ -381,6 +407,21 @@ describe("maybeProvisionAgentIdentity — install.ts hook", () => {
       // Identity + sidecar still provisioned.
       expect(existsSync(join(natsDir, "forge.nk"))).toBe(true);
       expect(readSidecar(sidecarDir, "forge").state_scaffolded).toBe(false);
+    });
+  });
+
+  test("state: null (bare `state:` YAML) does NOT opt into the scaffold", async () => {
+    // Defense-in-depth against the gate: even if a null `state` reaches the hook
+    // (e.g. a caller bypassing the manifest loader), `!= null` keeps it stateless.
+    const { natsDir, agentsDir, sidecarDir } = await sandbox();
+    const instanceDir = join(agentsDir, "forge");
+    await withSandboxEnv({ natsDir, instanceDir, sidecarDir }, async () => {
+      const result = await maybeProvisionAgentIdentity(
+        { type: "agent", name: "Forge Bot", identity: { id: "forge" }, state: null },
+        { quiet: true },
+      );
+      expect(result!.stateScaffolded).toBe(false);
+      expect(existsSync(instanceDir)).toBe(false);
     });
   });
 

@@ -450,10 +450,26 @@ export function validateCortexConfig(manifest: ArcManifest, filename: string): v
  * arc does not resolve the blueprint or check the version range here — that is
  * the install-time bundle-satisfaction concern; this is the structural guard at
  * the manifest edge (mirrors validateCortexConfig's trust-edge posture).
+ *
+ * A bare `state:` key parses to `null` in YAML — the most likely typo for
+ * someone half-declaring the field. That is rejected explicitly (rather than
+ * treated as "absent"), because the install-time gate opts into the scaffold on
+ * PRESENCE and a null slip-through would opt in an agent with no blueprint.
  */
 export function validateAgentState(manifest: ArcManifest, filename: string): void {
   const state = manifest.state as unknown;
-  if (state === undefined || state === null) return;
+  // Field absent → stateless, nothing to validate.
+  if (state === undefined) return;
+
+  // Bare `state:` (→ null) is a half-declaration, not "stateless". Reject it so
+  // the typo surfaces at load rather than opting the agent into an empty scaffold.
+  if (state === null) {
+    throw new Error(
+      `Invalid ${filename}: 'state' is empty (a bare 'state:' key) — declare ` +
+        `'state: { blueprint: <AgentState bundle>, version: ">=x.y.z" }', or remove the ` +
+        `'state' key entirely to make the agent stateless.`,
+    );
+  }
 
   if (!isRecord(state)) {
     throw new Error(
