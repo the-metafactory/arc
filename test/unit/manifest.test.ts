@@ -10,6 +10,7 @@ import {
   formatCapabilities,
   normalizeNetworkEntry,
   normalizeCapabilities,
+  normalizeSchema,
   MANIFEST_FILENAME,
   LEGACY_MANIFEST_FILENAME,
 } from "../../src/lib/manifest.js";
@@ -219,9 +220,12 @@ author:
   // authority via `guardrails`, not `capabilities`, so the capabilities
   // block is optional. Install must NOT reject these manifests.
   test("type: agent allows missing capabilities (persona-driven shape)", async () => {
-    await Bun.write(
-      join(tempDir, MANIFEST_FILENAME),
-      `schema: pai/v1
+    const orig = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((_chunk: any) => true) as any;
+    try {
+      await Bun.write(
+        join(tempDir, MANIFEST_FILENAME),
+        `schema: pai/v1
 name: PersonaAgent
 version: 0.1.0
 type: agent
@@ -235,12 +239,15 @@ guardrails:
   allowedDirs: ["~/Developer/scope"]
   disallowedTools: ["Edit"]
 `,
-    );
+      );
 
-    const manifest = await readManifest(tempDir);
-    expect(manifest).not.toBeNull();
-    expect(manifest!.type).toBe("agent");
-    expect(manifest!.capabilities).toBeUndefined();
+      const manifest = await readManifest(tempDir);
+      expect(manifest).not.toBeNull();
+      expect(manifest!.type).toBe("agent");
+      expect(manifest!.capabilities).toBeUndefined();
+    } finally {
+      process.stderr.write = orig;
+    }
   });
 
   // arc#102 — fallback search into agent/ for persona-driven-agent source
@@ -710,5 +717,126 @@ capabilities:
     } finally {
       process.stderr.write = orig;
     }
+  });
+});
+
+// arc#280 — deprecated `schema: pai/v1` alias is folded to the canonical
+// `arc/v1` on load with a one-line stderr warning. The type union still
+// ACCEPTS both at the boundary (removal is a future major); this only
+// normalizes the parsed result so downstream code observes one value.
+describe("readManifest — schema fold (arc#280)", () => {
+  /** Run `fn`, capturing everything written to process.stderr. */
+  async function captureStderr(fn: () => Promise<void>): Promise<string> {
+    const captured: string[] = [];
+    const orig = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((chunk: any) => {
+      captured.push(String(chunk));
+      return true;
+    }) as any;
+    try {
+      await fn();
+    } finally {
+      process.stderr.write = orig;
+    }
+    return captured.join("");
+  }
+
+  test("pai/v1 loads, is normalized to arc/v1, and warns once", async () => {
+    let manifest: ArcManifest | null = null;
+    const stderr = await captureStderr(async () => {
+      await Bun.write(
+        join(tempDir, MANIFEST_FILENAME),
+        `schema: pai/v1
+name: legacy-skill
+version: 0.1.0
+type: skill
+capabilities:
+  filesystem:
+    read: []
+    write: []
+`,
+      );
+      manifest = await readManifest(tempDir);
+    });
+
+    // Loads successfully (deprecation, not removal).
+    expect(manifest).not.toBeNull();
+    // Normalized to the canonical value in the parsed result.
+    expect(manifest!.schema).toBe("arc/v1");
+    // One-line deprecation warning fired, naming both the deprecated and
+    // canonical values so the publisher knows exactly what to change.
+    expect(stderr).toContain("pai/v1");
+    expect(stderr).toContain("deprecated");
+    expect(stderr).toContain("arc/v1");
+    // Exactly one warning line — not per field access.
+    expect(stderr.trim().split("\n").length).toBe(1);
+  });
+
+  test("arc/v1 loads with no warning and is left unchanged", async () => {
+    let manifest: ArcManifest | null = null;
+    const stderr = await captureStderr(async () => {
+      await Bun.write(
+        join(tempDir, MANIFEST_FILENAME),
+        `schema: arc/v1
+name: canonical-skill
+version: 0.1.0
+type: skill
+capabilities:
+  filesystem:
+    read: []
+    write: []
+`,
+      );
+      manifest = await readManifest(tempDir);
+    });
+
+    expect(manifest).not.toBeNull();
+    expect(manifest!.schema).toBe("arc/v1");
+    expect(stderr).toBe("");
+  });
+
+  test("omitted schema field loads with no warning", async () => {
+    let manifest: ArcManifest | null = null;
+    const stderr = await captureStderr(async () => {
+      await Bun.write(
+        join(tempDir, MANIFEST_FILENAME),
+        `name: no-schema-skill
+version: 0.1.0
+type: skill
+capabilities:
+  filesystem:
+    read: []
+    write: []
+`,
+      );
+      manifest = await readManifest(tempDir);
+    });
+
+    expect(manifest).not.toBeNull();
+    expect(manifest!.schema).toBeUndefined();
+    expect(stderr).toBe("");
+  });
+
+  test("normalizeSchema folds pai/v1 in place and warns", () => {
+    const captured: string[] = [];
+    const orig = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((chunk: any) => {
+      captured.push(String(chunk));
+      return true;
+    }) as any;
+    try {
+      const m: ArcManifest = {
+        schema: "pai/v1",
+        name: "t",
+        version: "1.0.0",
+        type: "skill",
+      };
+      normalizeSchema(m, "arc-manifest.yaml");
+      expect(m.schema).toBe("arc/v1");
+    } finally {
+      process.stderr.write = orig;
+    }
+    expect(captured.join("")).toContain("pai/v1");
+    expect(captured.join("")).toContain("arc/v1");
   });
 });
