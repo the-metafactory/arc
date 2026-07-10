@@ -1093,6 +1093,93 @@ describe("install provides.files (issue #84)", () => {
   });
 });
 
+describe("install command — depends_on.skills compat WARN (arc#284)", () => {
+  /** Run `fn`, capturing everything written to process.stderr. */
+  async function captureStderr(fn: () => Promise<void>): Promise<string> {
+    const captured: string[] = [];
+    const orig = process.stderr.write.bind(process.stderr);
+    process.stderr.write = (chunk: unknown) => {
+      captured.push(String(chunk));
+      return true;
+    };
+    try {
+      await fn();
+    } finally {
+      process.stderr.write = orig;
+    }
+    return captured.join("");
+  }
+
+  test("warns (does not fail) when an installed dependency violates the declared range", async () => {
+    const upstream = await createMockSkillRepo(env.root, {
+      name: "cortex",
+      version: "5.9.0",
+    });
+    const upstreamResult = await install({
+      arc: env.arc, host: env.host, db: env.db, repoUrl: upstream.url, yes: true,
+    });
+    expect(upstreamResult.success).toBe(true);
+
+    const downstream = await createMockSkillRepo(env.root, {
+      name: "DiscordPlugin",
+      dependsOnSkills: [{ name: "cortex", version: ">=6.0.0", reason: "needs SURFACE_SDK_VERSION 2" }],
+    });
+
+    let result;
+    const stderr = await captureStderr(async () => {
+      result = await install({
+        arc: env.arc, host: env.host, db: env.db, repoUrl: downstream.url, yes: true,
+      });
+    });
+
+    // WARN, not hard-fail (burn-in posture) — the install still succeeds.
+    expect(result!.success).toBe(true);
+    expect(stderr).toContain("depends_on.skills: cortex@>=6.0.0");
+    expect(stderr).toContain("installed cortex is v5.9.0");
+    expect(stderr).toContain("needs SURFACE_SDK_VERSION 2");
+  });
+
+  test("stays silent when the installed dependency satisfies the declared range", async () => {
+    const upstream = await createMockSkillRepo(env.root, {
+      name: "cortex",
+      version: "6.3.0",
+    });
+    await install({ arc: env.arc, host: env.host, db: env.db, repoUrl: upstream.url, yes: true });
+
+    const downstream = await createMockSkillRepo(env.root, {
+      name: "SlackPlugin",
+      dependsOnSkills: [{ name: "cortex", version: ">=6.0.0" }],
+    });
+
+    let result;
+    const stderr = await captureStderr(async () => {
+      result = await install({
+        arc: env.arc, host: env.host, db: env.db, repoUrl: downstream.url, yes: true,
+      });
+    });
+
+    expect(result!.success).toBe(true);
+    expect(stderr).not.toContain("depends_on.skills");
+  });
+
+  test("stays silent when the declared dependency isn't installed at all (not this check's job)", async () => {
+    const downstream = await createMockSkillRepo(env.root, {
+      name: "OrphanPlugin",
+      dependsOnSkills: [{ name: "cortex", version: ">=6.0.0" }],
+    });
+
+    let result;
+    const stderr = await captureStderr(async () => {
+      result = await install({
+        arc: env.arc, host: env.host, db: env.db, repoUrl: downstream.url, yes: true,
+      });
+    });
+
+    expect(result!.success).toBe(true);
+    expect(stderr).not.toContain("depends_on.skills");
+  });
+});
+
 describe("parseNameVersion", () => {
   test("parses name@version", () => {
     expect(parseNameVersion("MySkill@1.2.0")).toEqual({ name: "MySkill", version: "1.2.0" });

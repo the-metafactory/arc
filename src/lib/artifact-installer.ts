@@ -1,5 +1,5 @@
 import { join, dirname } from "path";
-import { existsSync } from "fs";
+import { existsSync, readdirSync } from "fs";
 import { mkdir } from "fs/promises";
 import { homedir } from "os";
 import { readFileSync } from "fs";
@@ -522,17 +522,186 @@ export async function rollbackArtifactSymlinks(record: ArtifactSymlinkRecord): P
   }
 }
 
+export interface NodeDependencyInstallResult {
+  /** false when there was no package.json — nothing to install, not an error. */
+  ran: boolean;
+  success: boolean;
+  /** Best-effort top-level node_modules entry count, for the summary line. */
+  packageCount?: number;
+  usedFrozenLockfile: boolean;
+  /**
+   * true when a `--frozen-lockfile` install failed because the committed
+   * lockfile had drifted from `package.json`, and an unfrozen retry
+   * recovered it. `success` is still `true` in that case — this flag exists
+   * so `reportNodeDependencyResult` can WARN that reproducibility was lost,
+   * without treating the install itself as failed.
+   */
+  staleLockfileRecovered?: boolean;
+  /** Tail of stderr when `success` is false. */
+  error?: string;
+}
+
+/** Tail of a spawnSync stderr buffer, for a short error summary. */
+function stderrTail(result: { stderr?: Buffer }, exitCode: number | null): string {
+  const tail = (result.stderr ?? Buffer.alloc(0))
+    .toString()
+    .trim()
+    .split("\n")
+    .slice(-5)
+    .join("\n");
+  return tail || `bun install exited ${exitCode}`;
+}
+
+function runBunInstall(dir: string, extraArgs: string[]) {
+  return Bun.spawnSync(["bun", "install", ...extraArgs], {
+    cwd: dir,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+}
+
 /**
- * Run bun install if package.json exists in the given directory.
+ * Run `bun install` if `package.json` exists in the given directory — so a
+ * package's (or plugin bundle's, arc#284) declared npm dependencies resolve
+ * into `node_modules` before symlinks/postinstall run (this is what makes
+ * cortex's dynamic `import()` of a bundle entry resolve its deps).
+ *
+ * NOTE: this deliberately does NOT pass `--production`. It did briefly
+ * during arc#284 development, but `runPostinstallPhase` runs immediately
+ * after this step and ROLLS BACK the whole install on failure — a package
+ * whose `postinstall` shells into a devDependency-provided binary (`tsc`,
+ * `esbuild`, `prisma generate`, …) would abort, not warn. arc installs
+ * skills and CLIs broadly; "the runtime never resolves a devDependency" is
+ * too strong an assumption for that population. See the follow-up issue
+ * linked from the arc#284/#289 PR for a scoped `--production` re-add with a
+ * manifest opt-out.
+ *
+ * A lockfile (`bun.lock` / legacy `bun.lockb`) present in the directory gets
+ * `--frozen-lockfile` first — reproducible, and matches what a well-behaved
+ * repo expects. If that frozen install fails, it almost always means the
+ * lockfile drifted from `package.json` (not that the dependency itself is
+ * unresolvable) — bun's `--frozen-lockfile` hard-errors on ANY lockfile
+ * change, including a harmless one. Silently downgrading that hard error to
+ * a WARN-and-proceed would leave `node_modules` incomplete while the
+ * install still records success (the exact bug class arc#284/#289 exists to
+ * kill), so we retry once WITHOUT `--frozen-lockfile` — recovering the
+ * common case (a plugin bundle whose lockfile just wasn't regenerated) while
+ * still surfacing a WARN that reproducibility was lost
+ * (`staleLockfileRecovered`). Only a failure that survives the unfrozen
+ * retry is treated as a genuine dependency-resolution failure — see
+ * `success: false` handling in `completeInstallTransaction` /
+ * `upgradePackage`, which roll the install back rather than record success.
+ *
+ * Idempotent by construction: `bun install` re-run against an
+ * already-satisfied `node_modules` is a fast no-op (arc#284 acceptance
+ * criterion — re-install must be idempotent).
  */
-export function installNodeDependencies(dir: string): void {
+export function installNodeDependencies(dir: string): NodeDependencyInstallResult {
   const packageJsonPath = join(dir, "package.json");
-  if (existsSync(packageJsonPath)) {
-    Bun.spawnSync(["bun", "install"], {
-      cwd: dir,
-      stdout: "pipe",
-      stderr: "pipe",
-    });
+  if (!existsSync(packageJsonPath)) {
+    return { ran: false, success: true, usedFrozenLockfile: false };
+  }
+
+  const hasLockfile =
+    existsSync(join(dir, "bun.lock")) || existsSync(join(dir, "bun.lockb"));
+
+  if (hasLockfile) {
+    const frozen = runBunInstall(dir, ["--frozen-lockfile"]);
+    if (frozen.exitCode === 0) {
+      return {
+        ran: true,
+        success: true,
+        usedFrozenLockfile: true,
+        packageCount: countTopLevelNodeModules(dir),
+      };
+    }
+
+    // Frozen install failed — most likely a stale lockfile, not a genuine
+    // dependency failure. Retry unfrozen so a drifted lockfile doesn't brick
+    // the install (arc#289 blocker).
+    const unfrozen = runBunInstall(dir, []);
+    if (unfrozen.exitCode === 0) {
+      return {
+        ran: true,
+        success: true,
+        usedFrozenLockfile: false,
+        staleLockfileRecovered: true,
+        packageCount: countTopLevelNodeModules(dir),
+      };
+    }
+
+    // Both attempts failed — a genuine dependency-resolution failure
+    // (network, unresolvable dep), not a lockfile drift.
+    return {
+      ran: true,
+      success: false,
+      usedFrozenLockfile: false,
+      error: stderrTail(unfrozen, unfrozen.exitCode),
+    };
+  }
+
+  const result = runBunInstall(dir, []);
+  if (result.exitCode !== 0) {
+    return {
+      ran: true,
+      success: false,
+      usedFrozenLockfile: false,
+      error: stderrTail(result, result.exitCode),
+    };
+  }
+
+  return {
+    ran: true,
+    success: true,
+    usedFrozenLockfile: false,
+    packageCount: countTopLevelNodeModules(dir),
+  };
+}
+
+/** Best-effort count of top-level node_modules entries (not the full
+ * resolved dependency-tree size, but enough for a one-line summary). */
+function countTopLevelNodeModules(dir: string): number | undefined {
+  try {
+    const nodeModulesDir = join(dir, "node_modules");
+    if (!existsSync(nodeModulesDir)) return undefined;
+    return readdirSync(nodeModulesDir).filter((name) => !name.startsWith(".")).length;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Surface a `bun install` result on the install log. Mirrors
+ * `reportProvisioningResult` (identity-provision.ts): a FAILURE is written
+ * to stderr unconditionally (even under `--yes`/quiet) so a bundle never
+ * silently ships with an unresolved `node_modules`; a success respects
+ * `quiet`. No-op when nothing ran (no package.json).
+ */
+export function reportNodeDependencyResult(
+  result: NodeDependencyInstallResult,
+  packageLabel: string,
+  quiet: boolean,
+): void {
+  if (!result.ran) return;
+  if (!result.success) {
+    process.stderr.write(
+      `arc: bun install failed for ${packageLabel} (node_modules may be incomplete):\n${result.error}\n`,
+    );
+    return;
+  }
+  if (result.staleLockfileRecovered) {
+    // Unconditional (like the failure branch above): a stale lockfile is a
+    // real signal the package needs `bun install` re-run + committed, even
+    // though the install itself recovered.
+    process.stderr.write(
+      `arc: WARN — ${packageLabel} has a stale bun.lock (frozen install failed; recovered via unfrozen retry). ` +
+        `Re-run \`bun install\` in the package and commit the updated lockfile.\n`,
+    );
+  }
+  if (!quiet) {
+    const count = result.packageCount != null ? `${result.packageCount} package(s)` : "dependencies";
+    const mode = result.usedFrozenLockfile ? "--frozen-lockfile" : "no lockfile";
+    console.log(`  ✓ bun install: ${count} for ${packageLabel} (${mode})`);
   }
 }
 

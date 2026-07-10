@@ -22,6 +22,7 @@ import { generateRules } from "../lib/rules.js";
 import { wireExtensions } from "../lib/extensions.js";
 import { requireBrokerForManifest } from "../lib/nats-broker.js";
 import { runSomaSkillProjection } from "../lib/soma-projection.js";
+import { installNodeDependencies, reportNodeDependencyResult } from "../lib/artifact-installer.js";
 
 export interface UpgradeCheckResult {
   name: string;
@@ -375,14 +376,26 @@ export async function upgradePackage(
     }
   }
 
-  // Run bun install if package.json exists (dependencies may have changed)
-  const packageJsonPath = join(installPath, "package.json");
-  if (existsSync(packageJsonPath)) {
-    Bun.spawnSync(["bun", "install"], {
-      cwd: installPath,
-      stdout: "pipe",
-      stderr: "pipe",
-    });
+  // Run bun install if package.json exists (dependencies may have changed).
+  // Shared with the fresh-install path (installNodeDependencies,
+  // install-transaction.ts) so upgrade gets the same --frozen-lockfile /
+  // stale-lockfile-retry handling and failure surfacing (arc#284/#289)
+  // instead of a second, drifted inline copy.
+  const nodeDepsResult = installNodeDependencies(installPath);
+  reportNodeDependencyResult(nodeDepsResult, name, false);
+  if (nodeDepsResult.ran && !nodeDepsResult.success) {
+    // Same posture as completeInstallTransaction (install-transaction.ts):
+    // a genuine dependency-install failure (survived the frozen->unfrozen
+    // retry) must not be recorded as a successful upgrade — this is in fact
+    // the PRIMARY blast radius the arc#289 blocker named (cortex ships a
+    // committed bun.lock, so every `arc upgrade cortex` takes this path).
+    const note = rollback();
+    return {
+      success: false,
+      name,
+      oldVersion,
+      error: `bun install failed for ${name} (node_modules incomplete): ${nodeDepsResult.error ?? "unknown error"}` + note,
+    };
   }
 
   // Re-register hooks (remove old, add new) — no consent prompt on upgrade.

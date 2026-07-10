@@ -1,5 +1,10 @@
 import type { ArtifactSymlinkRecord } from "./artifact-installer.js";
-import { installNodeDependencies, resolveArtifactSourceDir, rollbackArtifactSymlinks } from "./artifact-installer.js";
+import {
+  installNodeDependencies,
+  reportNodeDependencyResult,
+  resolveArtifactSourceDir,
+  rollbackArtifactSymlinks,
+} from "./artifact-installer.js";
 import type { LaunchdInstallRecord } from "./hosts/launchd-install.js";
 import { rollbackLaunchdArtifacts } from "./hosts/launchd-install.js";
 import {
@@ -438,7 +443,23 @@ export async function completeInstallTransaction(
     }
   }
 
-  installNodeDependencies(installPath);
+  const nodeDepsResult = installNodeDependencies(installPath);
+  reportNodeDependencyResult(nodeDepsResult, manifest.name, opts.quiet ?? false);
+  if (nodeDepsResult.ran && !nodeDepsResult.success) {
+    // A genuine dependency-install failure (survived the frozen->unfrozen
+    // retry in installNodeDependencies — see its doc comment) must not
+    // record the install as successful: node_modules is incomplete, and
+    // cortex's dynamic import() of the package's entry point WILL fail at
+    // runtime, just later and further from the cause. Same posture as
+    // runPostinstallPhase failure below — roll back rather than WARN and
+    // continue.
+    const evidence = await tx.rollback();
+    return {
+      success: false,
+      evidence,
+      error: `bun install failed for ${manifest.name} (node_modules incomplete): ${nodeDepsResult.error ?? "unknown error"}`,
+    };
+  }
 
   const postinstallResult = runPostinstallPhase(
     installPath,
