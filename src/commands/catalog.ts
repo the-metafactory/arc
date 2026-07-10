@@ -650,6 +650,13 @@ async function installSkillEntry(
     const nodeDepsResult = installNodeDependencies(installDir);
     reportNodeDependencyResult(nodeDepsResult, entry.name, false);
     if (nodeDepsResult.ran && !nodeDepsResult.success) {
+      // installSkillEntry has no transactional rollback (unlike the
+      // install-transaction / upgrade paths), so clean up the symlink we
+      // created above before bailing — otherwise a failed dep install
+      // leaves a dangling skillLinkDir until the next sync (arc#289 re-review nit).
+      if (existsSync(skillLinkDir)) {
+        await rm(skillLinkDir, { recursive: true, force: true });
+      }
       return {
         success: false,
         error: `bun install failed for ${entry.name} (node_modules incomplete): ${nodeDepsResult.error ?? "unknown error"}`,
