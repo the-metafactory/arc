@@ -138,6 +138,14 @@ describe("binDir", () => {
     expect(dir).toBe(`${HOME}/.local/bin`);
   });
 
+  test("falls back to the second candidate ~/bin when only ~/bin is on PATH", () => {
+    const dir = binDir({
+      home: HOME,
+      env: { PATH: `${HOME}/bin:/usr/bin` },
+    });
+    expect(dir).toBe(`${HOME}/bin`);
+  });
+
   test("matches PATH entries with trailing slashes", () => {
     const dir = binDir({ home: HOME, env: { PATH: `${HOME}/.local/bin/:/usr/bin` } });
     expect(dir).toBe(`${HOME}/.local/bin`);

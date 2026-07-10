@@ -57,7 +57,16 @@ function expandHome(path: string, home: string): string {
   return path.replace(/^~(?=[\/\\])/, home);
 }
 
-/** Expand `~` and drop trailing separators (but never collapse `/` itself). */
+/**
+ * Expand `~` and drop trailing separators (but never collapse `/` itself).
+ *
+ * NOT byte-equivalent to `paths.ts`'s helper: these regexes also accept `\`,
+ * so `~\foo` expands here (paths.ts leaves it) and a trailing `\` is stripped
+ * here (paths.ts keeps it). This is a deliberate Windows-aware SUPERSET —
+ * identical for realistic POSIX input. P2 (#287) must reconcile consciously:
+ * simply deleting the paths.ts copy and importing this one would CHANGE win32
+ * `~\`-override behaviour.
+ */
 function normalizePath(path: string, home: string): string {
   const expanded = expandHome(path, home);
   return expanded === "/" ? expanded : expanded.replace(/[\/\\]+$/, "");
