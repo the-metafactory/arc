@@ -344,6 +344,62 @@ capabilities:
 
 ---
 
+## Adapter / Renderer Plugin Bundles
+
+Some packages (e.g. a [cortex](https://github.com/the-metafactory/cortex) surface
+adapter or renderer, per
+[ADR-0024](https://github.com/the-metafactory/cortex/blob/main/docs/adr/0024-pluggable-surface-adapters.md))
+ship their own npm dependencies (`discord.js`, `@slack/*`, …) alongside the usual
+`arc-manifest.yaml` + `package.json`. arc handles the dependency-install and
+compat-surfacing mechanics for any package that looks like this — there's no
+separate "bundle" artifact type or install verb.
+
+### npm dependency install
+
+If a package's repo root has a `package.json` with `dependencies`, `arc install`
+(and `arc upgrade`) run `bun install --production` in it after landing symlinks —
+`--frozen-lockfile` is added automatically when the repo ships a committed
+`bun.lock` / `bun.lockb`, and dropped when it doesn't (nothing to freeze against).
+This is what makes a dynamic `import()` of the package's entry point (e.g.
+cortex's plugin loader) resolve its `node_modules`. The step is idempotent —
+safe to run on every install/upgrade — and best-effort: a resolution failure
+prints a WARN (visible even under `--yes`) rather than aborting the install,
+since not every `package.json` is load-bearing at runtime.
+
+### Version-compat surfacing
+
+`arc list --json` exposes every installed package's `version`
+(`{ name, version, type, status, tier, repoUrl, installPath, ... }`) — this is
+how a consumer (e.g. cortex's plugin loader) reads the installed version of a
+dependency it cares about (its own version, another package's) without parsing
+`arc-manifest.yaml` itself.
+
+A package can also declare a compat range against another arc-managed package
+via `depends_on.skills[].version` (standard semver range syntax: `>=1.0.0`,
+`^1`, `~1.2.0`, or a space-separated AND range like `>=1.0.0 <2.0.0`). At
+install time, if the range names an installed dependency whose version doesn't
+satisfy it, `arc install` prints a WARN naming both versions — again WARN, not
+hard-fail, consistent with the confidentiality-gate burn-in posture:
+
+```yaml
+depends_on:
+  skills:
+    - name: cortex
+      version: ">=6.0.0"
+      reason: "needs SURFACE_SDK_VERSION 2"
+```
+
+Per ADR-0024, this is *advisory* only — the authoritative compat gate for a
+cortex surface plugin is cortex's own loader, which checks the running
+`SURFACE_SDK_VERSION` against the plugin's declared `sdkRange` at `import()`
+time. arc's `depends_on.skills` check is a separate, general mechanism (works
+between any two arc packages, not just cortex+plugin) that surfaces a likely
+problem earlier, at install time. `depends_on.tools[].version` (e.g. `bun`) is
+NOT checked — those generally name system binaries, not arc-managed packages,
+and verifying them needs a different (per-tool `--version`-parsing) mechanism.
+
+---
+
 ## Running Tests
 
 ```bash

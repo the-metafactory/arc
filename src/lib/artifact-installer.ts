@@ -1,5 +1,5 @@
 import { join, dirname } from "path";
-import { existsSync } from "fs";
+import { existsSync, readdirSync } from "fs";
 import { mkdir } from "fs/promises";
 import { homedir } from "os";
 import { readFileSync } from "fs";
@@ -522,17 +522,111 @@ export async function rollbackArtifactSymlinks(record: ArtifactSymlinkRecord): P
   }
 }
 
+export interface NodeDependencyInstallResult {
+  /** false when there was no package.json — nothing to install, not an error. */
+  ran: boolean;
+  success: boolean;
+  /** Best-effort top-level node_modules entry count, for the summary line. */
+  packageCount?: number;
+  usedFrozenLockfile: boolean;
+  /** Tail of stderr when `success` is false. */
+  error?: string;
+}
+
 /**
- * Run bun install if package.json exists in the given directory.
+ * Run `bun install` if `package.json` exists in the given directory — so a
+ * package's (or plugin bundle's, arc#284) declared npm dependencies resolve
+ * into `node_modules` before symlinks/postinstall run (this is what makes
+ * cortex's dynamic `import()` of a bundle entry resolve its deps).
+ *
+ * `--production` skips devDependencies (not needed at runtime). A lockfile
+ * (`bun.lock` / legacy `bun.lockb`) present in the directory gets
+ * `--frozen-lockfile` — reproducible, matches what the author tested; its
+ * absence drops the flag (nothing committed to freeze against, e.g. a repo
+ * cloned without a checked-in lockfile).
+ *
+ * Idempotent by construction: `bun install` re-run against an
+ * already-satisfied `node_modules` is a fast no-op (arc#284 acceptance
+ * criterion — re-install must be idempotent).
+ *
+ * Best-effort: a failure here does NOT throw or abort the caller's install —
+ * many packages ship a `package.json` for dev tooling that's never imported
+ * at runtime, so a resolution failure isn't necessarily fatal to the
+ * package overall (same WARN-not-hard-fail posture as the confidentiality
+ * gate during its burn-in window). Callers MUST surface a failed result via
+ * `reportNodeDependencyResult` — silently discarding it would hide a bundle
+ * whose adapter/renderer entry can never resolve its deps.
  */
-export function installNodeDependencies(dir: string): void {
+export function installNodeDependencies(dir: string): NodeDependencyInstallResult {
   const packageJsonPath = join(dir, "package.json");
-  if (existsSync(packageJsonPath)) {
-    Bun.spawnSync(["bun", "install"], {
-      cwd: dir,
-      stdout: "pipe",
-      stderr: "pipe",
-    });
+  if (!existsSync(packageJsonPath)) {
+    return { ran: false, success: true, usedFrozenLockfile: false };
+  }
+
+  const hasLockfile =
+    existsSync(join(dir, "bun.lock")) || existsSync(join(dir, "bun.lockb"));
+  const args = ["bun", "install", "--production", ...(hasLockfile ? ["--frozen-lockfile"] : [])];
+
+  const result = Bun.spawnSync(args, { cwd: dir, stdout: "pipe", stderr: "pipe" });
+
+  if (result.exitCode !== 0) {
+    const stderrTail = result.stderr
+      .toString()
+      .trim()
+      .split("\n")
+      .slice(-5)
+      .join("\n");
+    return {
+      ran: true,
+      success: false,
+      usedFrozenLockfile: hasLockfile,
+      error: stderrTail || `bun install exited ${result.exitCode}`,
+    };
+  }
+
+  return {
+    ran: true,
+    success: true,
+    usedFrozenLockfile: hasLockfile,
+    packageCount: countTopLevelNodeModules(dir),
+  };
+}
+
+/** Best-effort count of top-level node_modules entries (not the full
+ * resolved dependency-tree size, but enough for a one-line summary). */
+function countTopLevelNodeModules(dir: string): number | undefined {
+  try {
+    const nodeModulesDir = join(dir, "node_modules");
+    if (!existsSync(nodeModulesDir)) return undefined;
+    return readdirSync(nodeModulesDir).filter((name) => !name.startsWith(".")).length;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Surface a `bun install` result on the install log. Mirrors
+ * `reportProvisioningResult` (identity-provision.ts): a FAILURE is written
+ * to stderr unconditionally (even under `--yes`/quiet) so a bundle never
+ * silently ships with an unresolved `node_modules`; a success respects
+ * `quiet`. No-op when nothing ran (no package.json).
+ */
+export function reportNodeDependencyResult(
+  result: NodeDependencyInstallResult,
+  packageLabel: string,
+  quiet = false,
+): void {
+  if (!result.ran) return;
+  if (!result.success) {
+    process.stderr.write(
+      `arc: bun install failed for ${packageLabel} (node_modules may be incomplete):\n${result.error}\n`,
+    );
+    return;
+  }
+  if (!quiet) {
+    const count = result.packageCount != null ? `${result.packageCount} package(s)` : "dependencies";
+    const mode = result.usedFrozenLockfile ? "--frozen-lockfile" : "no lockfile";
+    console.log(`  ✓ bun install: ${count} for ${packageLabel} (${mode})`);
   }
 }
 

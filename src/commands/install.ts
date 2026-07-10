@@ -13,6 +13,7 @@ import { errorMessage } from "../lib/errors.js";
 import { readManifest, readLibraryArtifacts, assessRisk, formatAuthor, formatCapabilities } from "../lib/manifest.js";
 import { getSkill, removeSkill } from "../lib/db.js";
 import { runScript, runLifecycleScripts } from "../lib/scripts.js";
+import { satisfiesRange } from "../lib/semver.js";
 import {
   type ArtifactSymlinkRecord,
   artifactDropPresent,
@@ -424,6 +425,41 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
 
       if (!opts.yes) {
         console.log(`  ✓ ${dep.name} v${depResult.version}`);
+      }
+    }
+  }
+
+  // 2c. Compat surfacing (arc#284) — WARN, not hard-fail (burn-in posture,
+  // consistent with the confidentiality-gate precedent) when a declared
+  // `depends_on.skills[].version` range is violated by what's installed.
+  // This is the general mechanism for one arc package to declare a compat
+  // range against another — e.g. a cortex plugin bundle declaring
+  // `depends_on.skills: [{ name: "cortex", version: ">=6.0.0" }]` — so the
+  // dependency's installed version (already exposed via `arc list --json`,
+  // InstalledSkill.version) gets checked against the declared range at
+  // install time. Unconditional (not gated on opts.yes): same "always
+  // visible" posture as reportProvisioningResult's failure path — a
+  // silently-incompatible install shouldn't hide behind --yes.
+  //
+  // A MISSING dependency (declared but not installed) is a separate,
+  // pre-existing gap — depends_on.skills has never auto-installed its
+  // targets (unlike depends_on.packages above) — so it's not this check's
+  // job; only a VIOLATED range warns here. depends_on.tools is intentionally
+  // NOT checked: tool deps (e.g. `bun`) generally name system binaries, not
+  // arc-managed packages, and verifying those needs a per-tool
+  // `--version`-parsing mechanism this slice doesn't build (see arc#284
+  // comment).
+  if (manifest.depends_on?.skills?.length) {
+    for (const dep of manifest.depends_on.skills) {
+      if (!dep.version) continue;
+      const installedDep = getSkill(db, dep.name);
+      if (!installedDep) continue;
+      if (!satisfiesRange(installedDep.version, dep.version)) {
+        process.stderr.write(
+          `arc: WARN — ${manifest.name} declares depends_on.skills: ${dep.name}@${dep.version}, ` +
+            `but installed ${dep.name} is v${installedDep.version} (range not satisfied)` +
+            `${dep.reason ? ` — ${dep.reason}` : ""}\n`,
+        );
       }
     }
   }

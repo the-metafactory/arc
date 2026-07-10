@@ -133,6 +133,12 @@ export async function createMockSkillRepo(
      * instance-state scaffold at install. Omit for a stateless agent.
      */
     state?: { blueprint: string; version: string };
+    /**
+     * depends_on.skills entries (arc#284 compat-surfacing WARN). Additive to
+     * the fixed `depends_on.tools: [{ name: "bun", ... }]` this helper
+     * always renders.
+     */
+    dependsOnSkills?: { name: string; version?: string; reason?: string }[];
   }
 ): Promise<MockSkillRepo> {
   const repoDir = join(root, `mock-${opts.name}`);
@@ -240,7 +246,10 @@ export async function createMockSkillRepo(
           ? { files: opts.files.map((f) => ({ source: f.source, target: f.target })) }
           : {}),
       },
-      depends_on: { tools: [{ name: "bun", version: ">=1.0.0" }] },
+      depends_on: {
+        tools: [{ name: "bun", version: ">=1.0.0" }],
+        ...(opts.dependsOnSkills?.length ? { skills: opts.dependsOnSkills } : {}),
+      },
       capabilities: {
         filesystem: caps.filesystem ?? { read: [], write: [] },
         network: caps.network ?? [],

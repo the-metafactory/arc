@@ -22,6 +22,7 @@ import { generateRules } from "../lib/rules.js";
 import { wireExtensions } from "../lib/extensions.js";
 import { requireBrokerForManifest } from "../lib/nats-broker.js";
 import { runSomaSkillProjection } from "../lib/soma-projection.js";
+import { installNodeDependencies, reportNodeDependencyResult } from "../lib/artifact-installer.js";
 
 export interface UpgradeCheckResult {
   name: string;
@@ -375,15 +376,13 @@ export async function upgradePackage(
     }
   }
 
-  // Run bun install if package.json exists (dependencies may have changed)
-  const packageJsonPath = join(installPath, "package.json");
-  if (existsSync(packageJsonPath)) {
-    Bun.spawnSync(["bun", "install"], {
-      cwd: installPath,
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-  }
+  // Run bun install if package.json exists (dependencies may have changed).
+  // Shared with the fresh-install path (installNodeDependencies,
+  // install-transaction.ts) so upgrade gets the same --production /
+  // --frozen-lockfile handling and failure surfacing (arc#284) instead of a
+  // second, drifted inline copy.
+  const nodeDepsResult = installNodeDependencies(installPath);
+  reportNodeDependencyResult(nodeDepsResult, name);
 
   // Re-register hooks (remove old, add new) — no consent prompt on upgrade.
   // host.paths.root is threaded as $PAI_DIR expansion target — see install.ts.

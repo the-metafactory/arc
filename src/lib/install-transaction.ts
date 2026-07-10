@@ -1,5 +1,10 @@
 import type { ArtifactSymlinkRecord } from "./artifact-installer.js";
-import { installNodeDependencies, resolveArtifactSourceDir, rollbackArtifactSymlinks } from "./artifact-installer.js";
+import {
+  installNodeDependencies,
+  reportNodeDependencyResult,
+  resolveArtifactSourceDir,
+  rollbackArtifactSymlinks,
+} from "./artifact-installer.js";
 import type { LaunchdInstallRecord } from "./hosts/launchd-install.js";
 import { rollbackLaunchdArtifacts } from "./hosts/launchd-install.js";
 import {
@@ -438,7 +443,8 @@ export async function completeInstallTransaction(
     }
   }
 
-  installNodeDependencies(installPath);
+  const nodeDepsResult = installNodeDependencies(installPath);
+  reportNodeDependencyResult(nodeDepsResult, manifest.name, opts.quiet);
 
   const postinstallResult = runPostinstallPhase(
     installPath,
