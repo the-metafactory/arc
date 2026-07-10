@@ -21,6 +21,7 @@ import { resolveSource } from "../lib/source-resolver.js";
 import { readManifest } from "../lib/manifest.js";
 import { recordInstall, getSkill } from "../lib/db.js";
 import { createSymlink, createCliShim } from "../lib/symlinks.js";
+import { installNodeDependencies, reportNodeDependencyResult } from "../lib/artifact-installer.js";
 
 // ── Source-string normalisation (arc#170 review) ───────────────
 //
@@ -640,15 +641,19 @@ async function installSkillEntry(
   const manifestDir = isCli ? installDir : skillLinkDir;
   const manifest = await readManifest(manifestDir);
 
-  // CLI tooling: bun install + shims
+  // CLI tooling: bun install + shims. Shared with the fresh-install
+  // (install-transaction.ts) and upgrade (upgrade.ts) paths so `arc catalog
+  // sync` gets the same lockfile handling, failure surfacing, and
+  // node_modules shape (arc#284/#289) instead of a third, drifted inline
+  // copy that both discarded the exit code and installed devDependencies.
   if (isCli) {
-    const packageJsonPath = join(installDir, "package.json");
-    if (existsSync(packageJsonPath)) {
-      Bun.spawnSync(["bun", "install"], {
-        cwd: installDir,
-        stdout: "pipe",
-        stderr: "pipe",
-      });
+    const nodeDepsResult = installNodeDependencies(installDir);
+    reportNodeDependencyResult(nodeDepsResult, entry.name, false);
+    if (nodeDepsResult.ran && !nodeDepsResult.success) {
+      return {
+        success: false,
+        error: `bun install failed for ${entry.name} (node_modules incomplete): ${nodeDepsResult.error ?? "unknown error"}`,
+      };
     }
     if (manifest) {
       await createCliShim(arc.shimDir, host.paths.binDir, manifest);

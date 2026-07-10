@@ -266,6 +266,64 @@ describe("catalogUse", () => {
     expect(dbRecord!.repo_url).toContain("mock-skills/Research/SKILL.md");
   });
 
+  test(
+    "surfaces a genuine bun install failure for a CLI/bundle entry instead of silently succeeding (arc#289)",
+    async () => {
+      // A "CLI tooling" catalog entry (has_cli: true) takes the isCli branch
+      // of installSkillEntry, which used to shell out to `bun install`
+      // directly with the exit code discarded (arc#289 review finding).
+      // Consolidated onto installNodeDependencies/reportNodeDependencyResult
+      // — this pins that a genuine dependency failure is now surfaced as a
+      // failed catalogUse, not recorded as a successful install.
+      const repoDir = join(env.root, "mock-skills", "CliTool");
+      await mkdir(repoDir, { recursive: true });
+      await writeFile(join(repoDir, "SKILL.md"), "---\nname: CliTool\n---\n\n# CliTool\n");
+      await writeFile(
+        join(repoDir, "arc-manifest.yaml"),
+        YAML.stringify({
+          name: "CliTool",
+          version: "1.0.0",
+          type: "skill",
+          author: { name: "testuser", github: "testuser" },
+          capabilities: {
+            filesystem: { read: [], write: [] },
+            network: [],
+            bash: { allowed: false },
+            secrets: [],
+          },
+        }),
+      );
+      await writeFile(
+        join(repoDir, "package.json"),
+        JSON.stringify({
+          name: "cli-tool",
+          version: "1.0.0",
+          dependencies: { "arc-284-fixture-does-not-exist-xyz": "^1.0.0" },
+        }),
+      );
+
+      const catalog = sampleCatalog(env.root);
+      catalog.catalog.skills.push({
+        name: "CliTool",
+        description: "A CLI tool with an unresolvable dependency",
+        source: join(repoDir, "SKILL.md"),
+        type: "community",
+        has_cli: true,
+      });
+      await saveCatalog(env.arc.catalogPath, catalog);
+
+      const result = await catalogUse(env.arc, env.host, env.db, "CliTool");
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("Failed to install CliTool");
+      expect(result.error).toContain("bun install failed for CliTool");
+
+      // Must NOT be recorded as installed.
+      expect(getSkill(env.db, "CliTool")).toBeNull();
+    },
+    30_000,
+  );
+
   test("installs local agent entry", async () => {
     await createMockAgentFile(env.root, "mock-agents", "Architect");
     await saveCatalog(env.arc.catalogPath, sampleCatalog(env.root));

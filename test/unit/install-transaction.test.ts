@@ -135,6 +135,77 @@ describe("InstallTransaction", () => {
     }
   });
 
+  test(
+    "genuine bun install failure rolls back Landed Artifacts before DB commit (arc#289)",
+    async () => {
+      const env = await createTestEnv();
+      try {
+        const installPath = join(env.root, "tx-nodedeps");
+        const skillDir = join(installPath, "skill");
+        await mkdir(skillDir, { recursive: true });
+        await writeFile(join(skillDir, "SKILL.md"), "# TxNodeDeps\n");
+        // A package.json at the install root with an unresolvable dependency
+        // — installNodeDependencies runs against installPath (not skillDir),
+        // and a genuine failure here (network/unresolvable dep, not a stale
+        // lockfile — see node-dependencies.test.ts for that case) must roll
+        // the whole transaction back rather than record success with an
+        // incomplete node_modules.
+        await writeFile(
+          join(installPath, "package.json"),
+          JSON.stringify({
+            name: "tx-nodedeps",
+            version: "1.0.0",
+            dependencies: { "arc-284-fixture-does-not-exist-xyz": "^1.0.0" },
+          }),
+        );
+
+        const skillLink = join(env.host.paths.skillsDir, "TxNodeDeps");
+        await symlink(skillDir, skillLink);
+
+        const manifest: ArcManifest = {
+          name: "TxNodeDeps",
+          version: "1.0.0",
+          type: "skill",
+          tier: "custom",
+          provides: {
+            skill: [{ trigger: "txnodedeps" }],
+          },
+          capabilities: {
+            filesystem: { read: [], write: [] },
+            network: [],
+            bash: { allowed: false },
+            secrets: [],
+          },
+        };
+
+        const result = await completeInstallTransaction({
+          host: env.host,
+          db: env.db,
+          repoUrl: "file://tx-nodedeps",
+          installPath,
+          manifest,
+          authorization: { approved: true },
+          symlinks: {
+            symlinks: [skillLink],
+            shims: { dir: env.arc.shimDir, names: [] },
+          },
+          quiet: true,
+          sourceTier: "custom",
+        });
+
+        expect(result.success).toBe(false);
+        expect(result.error).toContain("bun install failed for TxNodeDeps");
+        expect(result.evidence?.rollback.attempted).toBe(true);
+        expect(result.evidence?.dbCommitted).toBe(false);
+        expect(existsSync(skillLink)).toBe(false);
+        expect(getSkill(env.db, "TxNodeDeps")).toBeNull();
+      } finally {
+        await env.cleanup();
+      }
+    },
+    30_000,
+  );
+
   test("successful Install Transaction commits DB row and Transaction Evidence", async () => {
     const env = await createTestEnv();
     try {

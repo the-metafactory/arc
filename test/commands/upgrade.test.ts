@@ -162,6 +162,51 @@ describe("upgradePackage", () => {
     expect(result.error).toContain("not installed");
   });
 
+  test(
+    "genuine bun install failure during upgrade does not record success (arc#289)",
+    async () => {
+      const repo = await createMockSkillRepo(env.root, {
+        name: "NodeDepsUpgrade",
+        version: "1.0.0",
+      });
+      await install({ arc: env.arc, host: env.host, db: env.db, repoUrl: repo.url, yes: true });
+
+      // Bump the version AND add a package.json with an unresolvable
+      // dependency at the repo root — installNodeDependencies runs at the
+      // git-root install path during upgrade, same as a real bundle repo.
+      const manifestPath = join(repo.path, "arc-manifest.yaml");
+      const content = await Bun.file(manifestPath).text();
+      await writeFile(manifestPath, content.replace("version: 1.0.0", "version: 1.1.0"));
+      await writeFile(
+        join(repo.path, "package.json"),
+        JSON.stringify({
+          name: "node-deps-upgrade",
+          version: "1.1.0",
+          dependencies: { "arc-284-fixture-does-not-exist-xyz": "^1.0.0" },
+        }),
+      );
+
+      Bun.spawnSync(["git", "add", "."], { cwd: repo.path, stdout: "pipe", stderr: "pipe" });
+      Bun.spawnSync(
+        ["git", "-c", "user.name=Test", "-c", "user.email=test@test.com", "commit", "-m", "bump + unresolvable dep"],
+        { cwd: repo.path, stdout: "pipe", stderr: "pipe" },
+      );
+
+      const result = await upgradePackage(env.db, env.arc, env.host, "NodeDepsUpgrade");
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("bun install failed for NodeDepsUpgrade");
+
+      // The DB row must still read the OLD version — the upgrade did not
+      // silently record success on a broken node_modules.
+      const skill = env.db
+        .prepare("SELECT version FROM skills WHERE name = ?")
+        .get("NodeDepsUpgrade") as { version: string };
+      expect(skill.version).toBe("1.0.0");
+    },
+    30_000,
+  );
+
   test("with force flag, re-runs upgrade pipeline and updates DB", async () => {
     const repo = await createMockSkillRepo(env.root, {
       name: "ForceUpgrade",

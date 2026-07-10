@@ -357,14 +357,27 @@ separate "bundle" artifact type or install verb.
 ### npm dependency install
 
 If a package's repo root has a `package.json` with `dependencies`, `arc install`
-(and `arc upgrade`) run `bun install --production` in it after landing symlinks —
-`--frozen-lockfile` is added automatically when the repo ships a committed
-`bun.lock` / `bun.lockb`, and dropped when it doesn't (nothing to freeze against).
-This is what makes a dynamic `import()` of the package's entry point (e.g.
-cortex's plugin loader) resolve its `node_modules`. The step is idempotent —
-safe to run on every install/upgrade — and best-effort: a resolution failure
-prints a WARN (visible even under `--yes`) rather than aborting the install,
-since not every `package.json` is load-bearing at runtime.
+(and `arc upgrade`, and `arc catalog sync`) run `bun install` in it after landing
+symlinks — `--frozen-lockfile` is added automatically when the repo ships a
+committed `bun.lock` / `bun.lockb`, and dropped when it doesn't (nothing to
+freeze against). This is what makes a dynamic `import()` of the package's entry
+point (e.g. cortex's plugin loader) resolve its `node_modules`. The step is
+idempotent — safe to run on every install/upgrade.
+
+If the frozen attempt fails (the lockfile drifted from `package.json` — the
+common case for a third-party plugin bundle), arc retries once WITHOUT
+`--frozen-lockfile` and prints a WARN naming the package, rather than leaving
+an installed-but-broken package behind a silent warning. Only a failure that
+survives that retry — a genuine dependency-resolution failure (network,
+unresolvable dependency) — fails the install/upgrade and rolls it back;
+`node_modules` never ends up silently incomplete behind a recorded success.
+Devdependencies ARE installed (no `--production`): a package whose
+`postinstall` script shells into a dev-only binary (`tsc`, `esbuild`, `prisma
+generate`, …) would otherwise abort the whole install rather than warn, since
+postinstall failure rolls back the install — too strong an assumption for the
+skills/CLIs arc installs generally. A scoped `--production` re-add with a
+manifest opt-out is tracked in
+[arc#290](https://github.com/the-metafactory/arc/issues/290).
 
 ### Version-compat surfacing
 
@@ -376,10 +389,16 @@ dependency it cares about (its own version, another package's) without parsing
 
 A package can also declare a compat range against another arc-managed package
 via `depends_on.skills[].version` (standard semver range syntax: `>=1.0.0`,
-`^1`, `~1.2.0`, or a space-separated AND range like `>=1.0.0 <2.0.0`). At
-install time, if the range names an installed dependency whose version doesn't
-satisfy it, `arc install` prints a WARN naming both versions — again WARN, not
-hard-fail, consistent with the confidentiality-gate burn-in posture:
+`^1`, `~1.2.0`, `*` / `1.x` X-ranges, a space-separated AND range like
+`>=1.0.0 <2.0.0`, or an OR range joined with `||`). At install time, if the
+range names an installed dependency whose version doesn't satisfy it, `arc
+install` prints a WARN naming both versions — again WARN, not hard-fail,
+consistent with the confidentiality-gate burn-in posture. This check is
+fail-open by design: a range clause it can't parse is treated as satisfied
+(no spurious WARN) rather than blocking a compatible install — see
+`src/lib/semver.ts` for the full posture, including the one deliberate
+exception (pre-release versions are excluded unless the range itself names a
+pre-release on the same tuple):
 
 ```yaml
 depends_on:
@@ -397,6 +416,17 @@ between any two arc packages, not just cortex+plugin) that surfaces a likely
 problem earlier, at install time. `depends_on.tools[].version` (e.g. `bun`) is
 NOT checked — those generally name system binaries, not arc-managed packages,
 and verifying them needs a different (per-tool `--version`-parsing) mechanism.
+
+This only covers a narrow slice of "compat surfacing": it fires when
+installing the *downstream* package against an *already-installed* dependency
+whose version happens to violate the range. A declared dependency that is
+**not installed at all** produces no warning — `depends_on.skills` does not
+auto-install its targets, and absence is out of scope for this check. And it
+never fires in the direction that most realistically breaks things: nothing
+re-checks a package's installed dependents when the dependency itself is
+upgraded (e.g. `arc upgrade cortex` 6.x -> 7.0.0 does not warn the plugins it
+just orphaned) — tracked in
+[arc#291](https://github.com/the-metafactory/arc/issues/291).
 
 ---
 
