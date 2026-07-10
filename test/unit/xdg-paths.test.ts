@@ -30,9 +30,9 @@ describe("configDir / dataDir / stateDir / cacheDir — suite namespacing", () =
     );
   });
 
-  test("cacheDir falls back to ~/.local/cache/metafactory/<app> when $XDG_CACHE_HOME is unset (frozen P0 default, not the upstream ~/.cache)", () => {
+  test("cacheDir falls back to ~/.cache/metafactory/<app> when $XDG_CACHE_HOME is unset (XDG spec: cache is the ~/.local/* exception)", () => {
     expect(cacheDir("arc", { home: HOME, env: {} })).toBe(
-      join(HOME, ".local", "cache", "metafactory", "arc"),
+      join(HOME, ".cache", "metafactory", "arc"),
     );
   });
 

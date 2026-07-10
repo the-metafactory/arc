@@ -139,13 +139,14 @@ export function stateDir(app: string, seam?: XdgSeam): string {
 }
 
 /**
- * `$XDG_CACHE_HOME` ?? `~/.local/cache` → `<base>/metafactory/<app>`.
+ * `$XDG_CACHE_HOME` ?? `~/.cache` → `<base>/metafactory/<app>`.
  *
- * Note: this deliberately follows the frozen P0 fallback (`~/.local/cache`),
- * not the upstream XDG spec's `~/.cache` — see #1868.
+ * Note: cache is the XDG spec's one exception to the `~/.local/*` pattern —
+ * the fallback is `~/.cache`, not `~/.local/cache`. (Corrected from the initial
+ * frozen P0 value; see cortex#1868.)
  */
 export function cacheDir(app: string, seam?: XdgSeam): string {
-  return suiteDir("XDG_CACHE_HOME", [".local", "cache"], app, seam);
+  return suiteDir("XDG_CACHE_HOME", [".cache"], app, seam);
 }
 
 /**
