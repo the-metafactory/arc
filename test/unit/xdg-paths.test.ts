@@ -47,11 +47,11 @@ describe("configDir / dataDir / stateDir / cacheDir — suite namespacing", () =
 });
 
 describe("$XDG_* env var matrix — each function honors its own var, ignores the others", () => {
-  const cases: Array<{
+  const cases: {
     fn: (app: string, seam?: Parameters<typeof configDir>[1]) => string;
     envVar: string;
     label: string;
-  }> = [
+  }[] = [
     { fn: configDir, envVar: "XDG_CONFIG_HOME", label: "configDir" },
     { fn: dataDir, envVar: "XDG_DATA_HOME", label: "dataDir" },
     { fn: stateDir, envVar: "XDG_STATE_HOME", label: "stateDir" },

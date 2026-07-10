@@ -54,7 +54,7 @@ const SUITE = "metafactory";
 /** Expand a leading `~` (and only a leading `~`) to `home`. */
 function expandHome(path: string, home: string): string {
   if (path === "~") return home;
-  return path.replace(/^~(?=[\/\\])/, home);
+  return path.replace(/^~(?=[/\\])/, home);
 }
 
 /**
@@ -69,7 +69,7 @@ function expandHome(path: string, home: string): string {
  */
 function normalizePath(path: string, home: string): string {
   const expanded = expandHome(path, home);
-  return expanded === "/" ? expanded : expanded.replace(/[\/\\]+$/, "");
+  return expanded === "/" ? expanded : expanded.replace(/[/\\]+$/, "");
 }
 
 /**
