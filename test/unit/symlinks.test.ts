@@ -6,7 +6,6 @@ import { tmpdir } from "os";
 import {
   createSymlink,
   removeSymlink,
-  SymlinkConflictError,
   createCliShim,
   removeCliShim,
 } from "../../src/lib/symlinks.js";
@@ -71,30 +70,46 @@ describe("createSymlink", () => {
     expect(existsSync(join(backupDir, "operator-data.txt"))).toBe(true);
   });
 
-  // arc#163: install must not silently destroy a regular file at the link path
-  // (uninstall treats non-symlinks as operator-owned state — install needs to
-  // be symmetric).
-  test("arc#163: refuses to overwrite a regular file (typed SymlinkConflictError)", async () => {
+  // arc#293 (XDG wave 3): occupied-destination preflight. A regular file in the
+  // way (e.g. the live `~/.local/bin/{cldyo-live,lucid}` files that predate the
+  // bin cutover) must NOT abort the install — it is backed up to a `.pre-arc`
+  // sidecar (preserving operator data, arc#163's core guarantee) and the symlink
+  // is created over the vacated path so the cutover completes.
+  test("arc#293: backs up an occupying regular file to .pre-arc, then links", async () => {
     const target = join(root, "real");
     const link = join(root, "link");
     await writeFile(target, "package data");
     await writeFile(link, "operator data");
 
-    let err: unknown;
-    try {
-      await createSymlink(target, link);
-    } catch (e) {
-      err = e;
-    }
-    expect(err).toBeInstanceOf(SymlinkConflictError);
-    expect((err as SymlinkConflictError).code).toBe("ARC_SYMLINK_CONFLICT");
-    expect((err as SymlinkConflictError).linkPath).toBe(link);
-    expect((err as SymlinkConflictError).message).toContain("regular file");
+    await createSymlink(target, link);
 
-    // The operator's file must still be there, unmodified.
-    expect(existsSync(link)).toBe(true);
-    expect((await lstat(link)).isSymbolicLink()).toBe(false);
-    expect(await Bun.file(link).text()).toBe("operator data");
+    // The link now points at the package target.
+    expect((await lstat(link)).isSymbolicLink()).toBe(true);
+    expect(await readlink(link)).toBe(target);
+
+    // The operator's original file survives, unmodified, at the sidecar.
+    const sidecar = link + ".pre-arc";
+    expect(existsSync(sidecar)).toBe(true);
+    expect((await lstat(sidecar)).isFile()).toBe(true);
+    expect(await Bun.file(sidecar).text()).toBe("operator data");
+  });
+
+  test("arc#293: replaces a stale arc-managed symlink in place (no sidecar)", async () => {
+    const stale = join(root, "stale");
+    const fresh = join(root, "fresh");
+    const link = join(root, "link");
+    await writeFile(stale, "old target");
+    await writeFile(fresh, "new target");
+
+    // Pre-existing arc symlink pointing at the stale target.
+    await createSymlink(stale, link);
+    // Re-point it (the cutover case: ~/bin symlink → ~/.local/bin).
+    await createSymlink(fresh, link);
+
+    expect((await lstat(link)).isSymbolicLink()).toBe(true);
+    expect(await readlink(link)).toBe(fresh);
+    // A symlink is replaced, never backed up — no sidecar is left behind.
+    expect(existsSync(link + ".pre-arc")).toBe(false);
   });
 });
 
