@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdir, writeFile, rm, lstat, readlink } from "fs/promises";
+import { mkdir, writeFile, rm, lstat, readlink, unlink, readdir } from "fs/promises";
 import { existsSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
@@ -110,6 +110,37 @@ describe("createSymlink", () => {
     expect(await readlink(link)).toBe(fresh);
     // A symlink is replaced, never backed up — no sidecar is left behind.
     expect(existsSync(link + ".pre-arc")).toBe(false);
+  });
+
+  // wave-3 hardening: a SECOND occupied-destination event must not clobber the
+  // FIRST operator file already preserved at `<dest>.pre-arc`. The new backup
+  // lands at a timestamped `<dest>.pre-arc.<epoch>` sidecar.
+  test("arc#293: a second occupying file does not clobber the first .pre-arc backup", async () => {
+    const target = join(root, "real");
+    const link = join(root, "link");
+    await writeFile(target, "package data");
+
+    // First conflict: operator file #1 → `.pre-arc`.
+    await writeFile(link, "operator data ONE");
+    await createSymlink(target, link);
+    expect(await Bun.file(link + ".pre-arc").text()).toBe("operator data ONE");
+
+    // Remove the arc symlink and drop a SECOND operator file at the same path.
+    await unlink(link);
+    await writeFile(link, "operator data TWO");
+    await createSymlink(target, link);
+
+    // The original backup is intact — never overwritten.
+    expect(await Bun.file(link + ".pre-arc").text()).toBe("operator data ONE");
+
+    // The second file was preserved at a distinct, timestamped sidecar.
+    const extras = (await readdir(root)).filter(
+      (n) => n.startsWith("link.pre-arc.") && n !== "link.pre-arc",
+    );
+    expect(extras.length).toBe(1);
+    expect(await Bun.file(join(root, extras[0])).text()).toBe("operator data TWO");
+    // And the link itself is the arc symlink.
+    expect((await lstat(link)).isSymbolicLink()).toBe(true);
   });
 });
 
