@@ -816,6 +816,22 @@ export const KNOWN_HOST_IDS: readonly HostId[] = [
 export interface ArcPaths {
   /** Config root (~/.config/metafactory/) */
   configRoot: string;
+  /**
+   * Data class root — durable app data (packages.db, repos, sources).
+   * #287 wave-1 seam: today collapses onto `configRoot` (no XDG split yet;
+   * future `$XDG_DATA_HOME`).
+   */
+  dataRoot: string;
+  /**
+   * State class root — mutable runtime state. #287 wave-1 seam: today collapses
+   * onto `configRoot` (future `$XDG_STATE_HOME`).
+   */
+  stateRoot: string;
+  /**
+   * Cache class root — regenerable data (remote-registry index cache).
+   * #287 wave-1 seam: today collapses onto `configRoot` (future `$XDG_CACHE_HOME`).
+   */
+  cacheRoot: string;
   /** Package repos (~/.config/metafactory/pkg/repos/) */
   reposDir: string;
   /** Remote registry cache directory (~/.config/metafactory/pkg/cache/) */

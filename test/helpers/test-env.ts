@@ -39,10 +39,15 @@ export async function createTestEnv(): Promise<TestEnv> {
   const root = await mkdtemp(join(tmpdir(), "arc-test-"));
 
   const claudeRoot = join(root, ".claude");
-  const configRoot = join(root, ".config", "pai");
+  const configRoot = join(root, ".config", "metafactory");
 
   const arc = createArcPaths({
     configRoot,
+    // XDG class roots (#287 wave-1). Today all three collapse onto configRoot —
+    // no separate dirs are created (see ensureDirectories).
+    dataRoot: configRoot,
+    stateRoot: configRoot,
+    cacheRoot: configRoot,
     reposDir: join(configRoot, "pkg", "repos"),
     cachePath: join(configRoot, "pkg", "cache"),
     dbPath: join(configRoot, "packages.db"),

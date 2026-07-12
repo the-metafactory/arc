@@ -28,17 +28,58 @@ export function migrateConfigIfNeeded(oldPath: string, newPath: string): void {
 }
 
 /**
- * Resolve the config root from override → env var → default. Triggers the
- * one-time ~/.config/arc/ → ~/.config/metafactory/ migration when no override
- * or env var is in play.
+ * Injectable host seam for path resolution. Both fields default to the real
+ * process values (`homedir()` / `process.env`) when omitted, so existing
+ * callers are unaffected. Tests inject a scratch `$HOME` and a synthetic env
+ * bag to resolve paths with zero real-home access.
  */
-function resolveConfigRoot(override?: string): string {
-  const home = homedir();
-  const usingEnvVar = !!process.env.ARC_CONFIG_ROOT;
+export interface PathSeam {
+  /** Home directory. Defaults to `homedir()`. */
+  home?: string;
+  /** Environment bag. Defaults to `process.env`. */
+  env?: Record<string, string | undefined>;
+}
+
+/**
+ * Config-root override precedence — arc's OWN state tree (the
+ * `~/.config/metafactory/` directory that `createArcPaths` derives db / repos /
+ * cache / sources / secrets from). Ranked most-authoritative first; this
+ * documents current reality and does not change behavior:
+ *
+ *   1. `overrides.configRoot` — programmatic override passed to `createArcPaths`
+ *      (how `test/helpers/test-env.ts` isolates a suite). Beats everything below.
+ *   2. `ARC_CONFIG_ROOT` — env override for the whole arc config tree. A leading
+ *      `~` is expanded. This is the ONE knob that relocates arc's own state.
+ *   3. Default `~/.config/metafactory/`.
+ *
+ * Three OTHER env vars look related but are INDEPENDENT — none composes with
+ * `ARC_CONFIG_ROOT`; each governs only its own narrow subtree and bypasses this
+ * resolver entirely:
+ *
+ *   - `METAFACTORY_CONFIG_DIR` (`src/commands/identity.ts`) — the identity
+ *     command's keystore base (`keys/`, `principals.json`) ONLY. Because it
+ *     bypasses this resolver, setting `ARC_CONFIG_ROOT` alone does NOT move the
+ *     identity keystore. No `~` expansion.
+ *   - `MF_SIDECAR_DIR` (`src/lib/identity-provision.ts`) — the agent
+ *     provisioning-sidecar base (`<...>/agents/<id>.provision.json`) ONLY,
+ *     default `~/.config/metafactory/agents`. Independent of both roots above.
+ *   - `$XDG_*` — NOT honored for arc's own config tree today. (nats.ts reads
+ *     `$XDG_CONFIG_HOME` / `$XDG_DATA_HOME` for the unrelated NATS/nsc subsystem;
+ *     that is not arc state.) The XDG split of arc's data/state/cache roots is
+ *     deferred to wave 5 (#287); until then `dataRoot`/`stateRoot`/`cacheRoot`
+ *     collapse onto `configRoot` and `$XDG_*` has no effect here.
+ *
+ * Triggers the one-time `~/.config/arc/` → `~/.config/metafactory/` migration
+ * when no override or env var is in play.
+ */
+export function resolveConfigRoot(override?: string, seam?: PathSeam): string {
+  const home = seam?.home ?? homedir();
+  const env = seam?.env ?? process.env;
+  const usingEnvVar = !!env.ARC_CONFIG_ROOT;
   const usingOverride = !!override;
   const defaultConfigRoot = join(home, ".config", "metafactory");
 
-  const envConfigRoot = process.env.ARC_CONFIG_ROOT;
+  const envConfigRoot = env.ARC_CONFIG_ROOT;
   const configRoot =
     override ??
     (envConfigRoot
@@ -118,19 +159,34 @@ export function resolveDefaultShimDir(opts?: {
 
 /**
  * Create ArcPaths — arc's host-independent state directories. Override any
- * field for testing.
+ * field for testing. The optional `seam` injects `{home, env}` (defaults:
+ * `homedir()` / `process.env`) so a test can resolve every path against a
+ * scratch `$HOME` with zero real-home access; existing callers pass nothing and
+ * behavior is unchanged.
  */
-export function createArcPaths(overrides?: Partial<ArcPaths>): ArcPaths {
-  const home = homedir();
-  const configRoot = resolveConfigRoot(overrides?.configRoot);
+export function createArcPaths(
+  overrides?: Partial<ArcPaths>,
+  seam?: PathSeam,
+): ArcPaths {
+  const home = seam?.home ?? homedir();
+  const env = seam?.env ?? process.env;
+  const configRoot = resolveConfigRoot(overrides?.configRoot, { home, env });
   const userConfig = loadUserConfigSync(configRoot, home);
   const configuredShimDir =
-    process.env.ARC_BIN_DIR ??
-    process.env.ARC_SHIM_DIR ??
+    env.ARC_BIN_DIR ??
+    env.ARC_SHIM_DIR ??
     userConfig.binDir;
 
   return {
     configRoot,
+    // XDG class roots (#287 wave-1 seam). Today arc keeps durable data, mutable
+    // state, and regenerable cache all under the single config tree, so each
+    // root collapses onto configRoot — no new directories are created here.
+    // Wave 5 (#287) repoints these at $XDG_DATA_HOME / $XDG_STATE_HOME /
+    // $XDG_CACHE_HOME without touching the call sites that read them.
+    dataRoot: overrides?.dataRoot ?? configRoot,
+    stateRoot: overrides?.stateRoot ?? configRoot,
+    cacheRoot: overrides?.cacheRoot ?? configRoot,
     reposDir: overrides?.reposDir ?? join(configRoot, "pkg", "repos"),
     cachePath: overrides?.cachePath ?? join(configRoot, "pkg", "cache"),
     dbPath: overrides?.dbPath ?? join(configRoot, "packages.db"),
@@ -141,7 +197,7 @@ export function createArcPaths(overrides?: Partial<ArcPaths>): ArcPaths {
     actionsDir: overrides?.actionsDir ?? join(configRoot, "actions"),
     shimDir: overrides?.shimDir ?? resolveDefaultShimDir({
       home,
-      pathEnv: process.env.PATH,
+      pathEnv: env.PATH,
       configuredBinDir: configuredShimDir,
     }),
     catalogPath:
