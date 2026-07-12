@@ -3,6 +3,7 @@ import {
   createArcPaths,
   getDefaultHost,
   migrateConfigIfNeeded,
+  resolveConfigRoot,
   resolveDefaultShimDir,
   isDirOnPath,
 } from "../../src/lib/paths.js";
@@ -36,6 +37,81 @@ describe("createArcPaths env-var handling", () => {
       if (original === undefined) delete process.env.ARC_CONFIG_ROOT;
       else process.env.ARC_CONFIG_ROOT = original;
     }
+  });
+});
+
+describe("resolveConfigRoot seam (scratch $HOME, zero real-home access)", () => {
+  test("defaults to <scratchHome>/.config/metafactory with an empty injected env", () => {
+    const home = mkdtempSync(join(tmpdir(), "arc-scratch-home-"));
+    try {
+      const root = resolveConfigRoot(undefined, { home, env: {} });
+      expect(root).toBe(join(home, ".config", "metafactory"));
+      // Resolved entirely under the injected home — the real home is untouched.
+      expect(root.startsWith(home)).toBe(true);
+      expect(root).not.toContain(homedir());
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("ARC_CONFIG_ROOT from the injected env wins over the default, ~ expanded against the injected home", () => {
+    const home = "/scratch/home";
+    const root = resolveConfigRoot(undefined, {
+      home,
+      env: { ARC_CONFIG_ROOT: "~/somewhere/arc" },
+    });
+    expect(root).toBe(join(home, "somewhere", "arc"));
+  });
+
+  test("explicit override beats ARC_CONFIG_ROOT (precedence rank 1 > 2)", () => {
+    const root = resolveConfigRoot("/explicit/override", {
+      home: "/scratch/home",
+      env: { ARC_CONFIG_ROOT: "/env/override" },
+    });
+    expect(root).toBe("/explicit/override");
+  });
+
+  test("METAFACTORY_CONFIG_DIR and MF_SIDECAR_DIR are independent — they do NOT move arc's config root", () => {
+    const home = "/scratch/home";
+    const root = resolveConfigRoot(undefined, {
+      home,
+      env: {
+        METAFACTORY_CONFIG_DIR: "/identity/keystore",
+        MF_SIDECAR_DIR: "/sidecar/agents",
+      },
+    });
+    // Neither knob composes with the config-root resolver — it stays at default.
+    expect(root).toBe(join(home, ".config", "metafactory"));
+  });
+});
+
+describe("createArcPaths seam", () => {
+  test("resolves every path under a scratch $HOME with zero real-home access", () => {
+    const home = mkdtempSync(join(tmpdir(), "arc-scratch-home-"));
+    try {
+      const paths = createArcPaths(undefined, { home, env: { PATH: "" } });
+      const expectedRoot = join(home, ".config", "metafactory");
+      expect(paths.configRoot).toBe(expectedRoot);
+      expect(paths.dbPath).toBe(join(expectedRoot, "packages.db"));
+      expect(paths.shimDir).toBe(join(home, ".local", "bin"));
+      // XDG class roots collapse onto configRoot today (#287 wave-1 seam).
+      expect(paths.dataRoot).toBe(expectedRoot);
+      expect(paths.stateRoot).toBe(expectedRoot);
+      expect(paths.cacheRoot).toBe(expectedRoot);
+      // No real-home leakage into any resolved arc path.
+      expect(paths.configRoot).not.toContain(homedir());
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("honors ARC_BIN_DIR from the injected env, ~ expanded against the injected home", () => {
+    const home = "/scratch/home";
+    const paths = createArcPaths(
+      { configRoot: "/scratch/cfg" },
+      { home, env: { ARC_BIN_DIR: "~/tools/bin", PATH: "" } },
+    );
+    expect(paths.shimDir).toBe(join(home, "tools", "bin"));
   });
 });
 
