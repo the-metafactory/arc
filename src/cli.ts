@@ -3,7 +3,7 @@
 import { Command } from "commander";
 import { createArcPaths, ensureDirectories, getDefaultHost, isDirOnPath } from "./lib/paths.js";
 import { openDatabase, getSkill } from "./lib/db.js";
-import { extractAllCliInfo, SymlinkConflictError } from "./lib/symlinks.js";
+import { extractAllCliInfo } from "./lib/symlinks.js";
 import { install, parseNameVersion } from "./commands/install.js";
 import { buildCortexInstallSteering } from "./lib/hosts/cortex-config-split.js";
 import {
@@ -2161,16 +2161,5 @@ identity
   .action((file: string) => {
     importPrincipals(file);
   });
-
-// arc#163: Commander surfaces async-action rejections as unhandled rejections.
-// Catch SymlinkConflictError specifically so the user sees the actionable
-// message rather than a stack trace. Other errors keep their current behavior.
-process.on("unhandledRejection", (err) => {
-  if (err instanceof SymlinkConflictError) {
-    console.error(`Error: ${err.message}`);
-    process.exit(1);
-  }
-  throw err;
-});
 
 program.parse();

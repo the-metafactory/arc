@@ -1,6 +1,7 @@
 import { existsSync } from "fs";
 import { homedir, platform } from "os";
 import { join } from "path";
+import { binDir as resolveSharedBinDir } from "../xdg-paths.js";
 import type {
   ArtifactType,
   HostAdapter,
@@ -44,7 +45,7 @@ import type {
 export interface LinuxSystemdHostOptions {
   /** Override `~/.config/systemd/user` (test isolation). */
   unitDir?: string;
-  /** Override `~/bin` (test isolation; shared shim dir). */
+  /** Override the shared bin dir (test isolation; shared shim dir). */
   binDir?: string;
   /**
    * Override the platform check. Lets non-linux CI exercise the
@@ -60,7 +61,9 @@ export function linuxSystemdPaths(
 ): LinuxSystemdHostPaths {
   const home = homedir();
   const unitDir = opts?.unitDir ?? join(home, ".config", "systemd", "user");
-  const binDir = opts?.binDir ?? join(home, "bin");
+  const binDir =
+    opts?.binDir ??
+    resolveSharedBinDir({ home, platform: opts?.forcePlatform });
   return {
     root: unitDir,
     skillsDir: "",

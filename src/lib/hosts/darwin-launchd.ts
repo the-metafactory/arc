@@ -1,6 +1,7 @@
 import { existsSync } from "fs";
 import { homedir, platform } from "os";
 import { join } from "path";
+import { binDir as resolveSharedBinDir } from "../xdg-paths.js";
 import type {
   ArtifactType,
   DarwinLaunchdHostPaths,
@@ -39,9 +40,11 @@ import type {
  *
  * Path semantics:
  *
- *   - `binDir`     → `~/bin` (shared with claude-code's binDir by
- *                    convention — both are ultimately a single PATH-
- *                    accessible shim directory)
+ *   - `binDir`     → shared bin resolution (prefer `~/.local/bin`, else
+ *                    `~/bin` when it's the one already on PATH; see
+ *                    xdg-paths `binDir`). Shared with claude-code's binDir
+ *                    by convention — both are ultimately a single PATH-
+ *                    accessible shim directory. (XDG wave 3, arc#293.)
  *   - `plistDir`   → `~/Library/LaunchAgents` (extension field)
  *   - `settingsPath` → set to `plistDir` so `host.paths.settingsPath`
  *                      points at the directory whose presence proves the
@@ -55,7 +58,7 @@ import type {
 export interface DarwinLaunchdHostOptions {
   /** Override `~/Library/LaunchAgents` (test isolation). */
   plistDir?: string;
-  /** Override `~/bin` (test isolation; shared shim dir with claude-code). */
+  /** Override the shared bin dir (test isolation; shared shim dir with claude-code). */
   binDir?: string;
   /**
    * Override the platform check (test isolation — lets non-darwin CI
@@ -70,7 +73,9 @@ export function darwinLaunchdPaths(
 ): DarwinLaunchdHostPaths {
   const home = homedir();
   const plistDir = opts?.plistDir ?? join(home, "Library", "LaunchAgents");
-  const binDir = opts?.binDir ?? join(home, "bin");
+  const binDir =
+    opts?.binDir ??
+    resolveSharedBinDir({ home, platform: opts?.forcePlatform });
   return {
     root: plistDir,
     skillsDir: "",

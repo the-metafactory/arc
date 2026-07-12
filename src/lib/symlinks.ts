@@ -3,34 +3,53 @@ import { join, dirname, basename } from "path";
 import type { ArcManifest } from "../types.js";
 import { isErrno } from "./errors.js";
 
-/**
- * Thrown by {@link createSymlink} (arc#163) when a regular file already
- * occupies the link target. Distinct from `ErrnoException` so callers can
- * `instanceof`-discriminate to print a friendly hint without grep-matching
- * the message.
- */
-export class SymlinkConflictError extends Error {
-  readonly code = "ARC_SYMLINK_CONFLICT" as const;
-  readonly linkPath: string;
-  constructor(linkPath: string) {
-    super(
-      `Refusing to symlink over existing regular file at ${linkPath}. ` +
-        `Move or delete this file manually, then re-run the install.`,
-    );
-    this.name = "SymlinkConflictError";
-    this.linkPath = linkPath;
+/** True if any filesystem entry (incl. a dangling symlink) exists at `p`. */
+async function pathExists(p: string): Promise<boolean> {
+  try {
+    await lstat(p);
+    return true;
+  } catch (err) {
+    if (isErrno(err) && err.code === "ENOENT") return false;
+    throw err;
   }
 }
 
 /**
+ * First non-colliding backup path for `dest`. Prefers `<dest>.pre-arc`; if a
+ * prior backup already occupies it, falls back to `<dest>.pre-arc.<epoch>` and
+ * then `<dest>.pre-arc.<epoch>.<n>` — so a second occupied-destination event
+ * never clobbers the FIRST operator file we preserved (data-loss nit, wave-3
+ * hardening). Mirrors cortex `forward_link_legacy_bin`'s sidecar scheme.
+ */
+async function resolveBackupPath(dest: string): Promise<string> {
+  const base = `${dest}.pre-arc`;
+  if (!(await pathExists(base))) return base;
+  const stamped = `${base}.${Date.now()}`;
+  let candidate = stamped;
+  let n = 1;
+  while (await pathExists(candidate)) {
+    candidate = `${stamped}.${n++}`;
+  }
+  return candidate;
+}
+
+/**
  * Create a symlink, ensuring the parent directory exists.
- * If a symlink already exists at the target, removes it first. If a regular
- * file is in the way, refuses (arc#163) — uninstall treats non-symlinks as
- * operator-owned state, so install must too. Directories are renamed aside
- * (`.pre-arc`) so a manually-installed skill being replaced by arc isn't
- * destroyed silently.
+ * If a symlink already exists at the target, removes it first. A regular file
+ * or a directory in the way is renamed aside to a `<dest>.pre-arc` sidecar
+ * (never deleted, never clobbered — a second conflict lands at
+ * `<dest>.pre-arc.<epoch>`) so operator-owned state is preserved, then the
+ * symlink is created over the now-vacant path.
  *
- * Throws {@link SymlinkConflictError} on regular-file conflict.
+ * Occupied-destination preflight (arc#293, XDG wave 3): the earlier arc#163
+ * behavior *threw* {@link SymlinkConflictError} on a regular-file conflict.
+ * That aborts a real install mid-way — e.g. the live `~/.local/bin/cldyo-live`
+ * and `~/.local/bin/lucid` regular files that predate the bin cutover would
+ * halt the whole cutover on the principal's machine. Backing up to a sidecar
+ * preserves arc#163's core guarantee (never silently destroy a non-symlink)
+ * while letting the cutover complete. Regular files and directories are now
+ * symmetric — both are renamed aside, matching the directory branch that
+ * already existed.
  */
 export async function createSymlink(
   target: string,
@@ -42,11 +61,12 @@ export async function createSymlink(
     const stat = await lstat(linkPath);
     if (stat.isSymbolicLink()) {
       await unlink(linkPath);
-    } else if (stat.isDirectory()) {
-      // Back up existing directory (e.g., manually-installed skill being replaced by arc)
-      await rename(linkPath, linkPath + ".pre-arc");
-    } else if (stat.isFile()) {
-      throw new SymlinkConflictError(linkPath);
+    } else if (stat.isDirectory() || stat.isFile()) {
+      // Back up existing non-symlink (manually-installed skill, or a regular
+      // file occupying a bin destination) to a `.pre-arc` sidecar rather than
+      // destroying it or aborting the install. resolveBackupPath never clobbers
+      // an earlier backup — a second conflict lands at `.pre-arc.<epoch>`.
+      await rename(linkPath, await resolveBackupPath(linkPath));
     }
   } catch (err) {
     if (!isErrno(err) || err.code !== "ENOENT") throw err;
