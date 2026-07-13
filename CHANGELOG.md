@@ -2,8 +2,11 @@
 
 ## Unreleased
 
+## 0.38.0 — 2026-07-13
+
 ### Added
 
+- **XDG Base Directory adoption — phase 1: resolver, seams, bin cutover** (epic cortex#1867). Shared vendorable `xdg-paths` resolver ([#288](https://github.com/the-metafactory/arc/pull/288)); injectable `{home,env}` seam + `data`/`state`/`cache` class roots on `ArcPaths` ([#292](https://github.com/the-metafactory/arc/pull/294)); host-adapter `binDir` now defaults to `~/.local/bin` (Linux PATH), and the symlink installer backs an occupying regular file aside to a timestamped `.pre-arc` sidecar instead of throwing `SymlinkConflictError` ([#293](https://github.com/the-metafactory/arc/pull/295)). Additive — no directory moves yet; existing installs unaffected.
 - **Opt-in agent instance state via the manifest `state` field** ([#281](https://github.com/the-metafactory/arc/issues/281)). A `type: agent` package now declares `state: { blueprint, version }` to opt into an instance-state scaffold at install; both subfields are validated (non-empty strings) at manifest load. The field is typed on the agent manifest (`AgentState` in `src/types.ts`).
 - **`arc nats add-federated-user <name> --account <A>` — scoped hub-transport user mint** (cortex#1598). Ensures ONE `federated`-role scoped signing key per account (subject-templated `federated.{{name()}}.>` sub scope + `federated.>` pub, hardwired — no permission flags), mints the user signed by it with no own permissions, exports 0600 creds. Probe-first idempotent on both halves; refuses to export a user signed by any other key (`USER_NOT_SCOPED`). New schema `arc.nats.federated-user.v1`; new error codes `SIGNING_KEY_FAILED`, `USER_NOT_SCOPED`. Documented in `docs/integrations/cortex-creds.md`.
 
