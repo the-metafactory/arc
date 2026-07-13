@@ -2171,11 +2171,11 @@ identity
 // Gated to the default layout: a relocated (ARC_CONFIG_ROOT) or test-overridden
 // tree keeps the legacy single-tree layout and this is a no-op. Never blocks the
 // command — on any failure the legacy tree is intact and still in use.
-program.hook("preAction", async () => {
+program.hook("preAction", () => {
   try {
     if (!isArcDefaultLayout()) return;
     const arc = createArcPaths();
-    await migrateArcDirsIfNeeded({
+    migrateArcDirsIfNeeded({
       legacy: legacyArcLayout(),
       next: toArcDirLayout(arc),
       host: getDefaultHost(),

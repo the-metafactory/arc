@@ -117,12 +117,12 @@ describe("#287 createArcPaths — XDG honored + ARC_CONFIG_ROOT single-tree", ()
 });
 
 describe("#287 migrateArcDirsIfNeeded — migration-on-touch WITH relink", () => {
-  test("moves repos, rewrites db rows, re-points the symlink, keeps legacy, idempotent", async () => {
+  test("moves repos, rewrites db rows, re-points the symlink, keeps legacy, idempotent", () => {
     const home = mkdtempSync(join(tmpdir(), "arc-xdg-mig-"));
     try {
       const { legacy, next, host, legacySkillDir, link } = seedLegacyInstall(home);
 
-      const result = await migrateArcDirsIfNeeded({ legacy, next, host, quiet: true });
+      const result = migrateArcDirsIfNeeded({ legacy, next, host, quiet: true });
 
       // (a) repos copied to the new data root; legacy KEPT (copy-keep-source).
       const nextSkillDir = join(next.reposDir, "mypkg", "skill");
@@ -156,7 +156,7 @@ describe("#287 migrateArcDirsIfNeeded — migration-on-touch WITH relink", () =>
       expect(existsSync(join(next.dataRoot, XDG_MIGRATION_MARKER))).toBe(true);
 
       // Idempotent: a second run short-circuits, leaves everything intact.
-      const second = await migrateArcDirsIfNeeded({ legacy, next, host, quiet: true });
+      const second = migrateArcDirsIfNeeded({ legacy, next, host, quiet: true });
       expect(second.migrated).toBe(false);
       expect(second.skipped).toBe("already-complete");
       expect(readlinkSync(link)).toBe(nextSkillDir);
@@ -165,14 +165,14 @@ describe("#287 migrateArcDirsIfNeeded — migration-on-touch WITH relink", () =>
     }
   });
 
-  test("fresh install (no legacy tree) is a no-op", async () => {
+  test("fresh install (no legacy tree) is a no-op", () => {
     const home = mkdtempSync(join(tmpdir(), "arc-xdg-fresh-"));
     try {
       const legacy = legacyArcLayout({ home });
       const next = toArcDirLayout(createArcPaths(undefined, { home, env: { PATH: "" } }));
       const host = getDefaultHost({ root: join(home, ".claude") });
 
-      const result = await migrateArcDirsIfNeeded({ legacy, next, host, quiet: true });
+      const result = migrateArcDirsIfNeeded({ legacy, next, host, quiet: true });
       expect(result.migrated).toBe(false);
       expect(result.skipped).toBe("no-legacy");
     } finally {
@@ -180,7 +180,7 @@ describe("#287 migrateArcDirsIfNeeded — migration-on-touch WITH relink", () =>
     }
   });
 
-  test("same-layout (override / ARC_CONFIG_ROOT) is a no-op", async () => {
+  test("same-layout (override / ARC_CONFIG_ROOT) is a no-op", () => {
     const home = mkdtempSync(join(tmpdir(), "arc-xdg-same-"));
     try {
       // ARC_CONFIG_ROOT collapses next onto the legacy tree → legacy === next.
@@ -188,7 +188,7 @@ describe("#287 migrateArcDirsIfNeeded — migration-on-touch WITH relink", () =>
         createArcPaths(undefined, { home, env: { ARC_CONFIG_ROOT: legacyArcLayout({ home }).configRoot, PATH: "" } }),
       );
       const host = getDefaultHost({ root: join(home, ".claude") });
-      const result = await migrateArcDirsIfNeeded({
+      const result = migrateArcDirsIfNeeded({
         legacy: legacyArcLayout({ home }),
         next: layout,
         host,
@@ -203,7 +203,7 @@ describe("#287 migrateArcDirsIfNeeded — migration-on-touch WITH relink", () =>
 });
 
 describe("#287 migrateArcDirsIfNeeded — partial failure leaves legacy working", () => {
-  test("a mid-relink failure never dangles a symlink; legacy still resolves; no marker", async () => {
+  test("a mid-relink failure never dangles a symlink; legacy still resolves; no marker", () => {
     const home = mkdtempSync(join(tmpdir(), "arc-xdg-fail-"));
     try {
       const { legacy, next, host, legacySkillDir, link } = seedLegacyInstall(home);
@@ -214,7 +214,7 @@ describe("#287 migrateArcDirsIfNeeded — partial failure leaves legacy working"
       mkdirSync(next.dataRoot, { recursive: true });
       mkdirSync(next.dbPath, { recursive: true });
 
-      const result = await migrateArcDirsIfNeeded({ legacy, next, host, quiet: true });
+      const result = migrateArcDirsIfNeeded({ legacy, next, host, quiet: true });
 
       // Migration did not complete: no marker, warnings recorded.
       expect(existsSync(join(next.dataRoot, XDG_MIGRATION_MARKER))).toBe(false);

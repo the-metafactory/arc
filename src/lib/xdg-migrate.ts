@@ -235,12 +235,12 @@ function errMsg(err: unknown): string {
  * override or `ARC_CONFIG_ROOT` is set `next` equals `legacy` and this returns
  * `same-layout` without touching anything.
  */
-export async function migrateArcDirsIfNeeded(opts: {
+export function migrateArcDirsIfNeeded(opts: {
   legacy: ArcDirLayout;
   next: ArcDirLayout;
   host: HostAdapter;
   quiet?: boolean;
-}): Promise<XdgMigrationResult> {
+}): XdgMigrationResult {
   const { legacy, next, host } = opts;
   const log = (m: string) => {
     if (!opts.quiet) console.log(m);

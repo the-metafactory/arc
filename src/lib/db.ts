@@ -233,12 +233,13 @@ export function rewriteInstallPathPrefix(
   oldPrefix: string,
   newPrefix: string,
 ): number {
-  const swap = (value: string | null): string | null => {
-    if (value == null) return value;
+  const swapNonNull = (value: string): string => {
     if (value === oldPrefix) return newPrefix;
     if (value.startsWith(oldPrefix + sep)) return newPrefix + value.slice(oldPrefix.length);
     return value;
   };
+  const swapNullable = (value: string | null): string | null =>
+    value == null ? value : swapNonNull(value);
 
   const rows = db
     .prepare("SELECT name, install_path, skill_dir, customization_path FROM skills")
@@ -256,9 +257,9 @@ export function rewriteInstallPathPrefix(
   let changed = 0;
   const tx = db.transaction(() => {
     for (const row of rows) {
-      const installPath = swap(row.install_path)!;
-      const skillDir = swap(row.skill_dir)!;
-      const customizationPath = swap(row.customization_path);
+      const installPath = swapNonNull(row.install_path);
+      const skillDir = swapNonNull(row.skill_dir);
+      const customizationPath = swapNullable(row.customization_path);
       if (
         installPath !== row.install_path ||
         skillDir !== row.skill_dir ||
