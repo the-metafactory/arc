@@ -17,6 +17,7 @@ import {
   existsSync,
   symlinkSync,
   readlinkSync,
+  readdirSync,
 } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
@@ -233,6 +234,100 @@ describe("#287 migrateArcDirsIfNeeded — partial failure leaves legacy working"
       } finally {
         db.close();
       }
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("#287 migrateArcDirsIfNeeded — FIX 1: config.yaml (custom bin_dir) is carried", () => {
+  test("legacy config.yaml with a custom bin_dir migrates so shimDir still resolves to it", () => {
+    const home = mkdtempSync(join(tmpdir(), "arc-xdg-cfg-"));
+    try {
+      const { legacy, next, host } = seedLegacyInstall(home);
+
+      // User had set `arc config set bin-dir <custom>` → config.yaml holds it.
+      const customBin = join(home, "custom-shims");
+      writeFileSync(join(legacy.configRoot, "config.yaml"), `bin_dir: ${customBin}\n`);
+
+      const result = migrateArcDirsIfNeeded({ legacy, next, host, quiet: true });
+      expect(result.configChildrenCopied).toContain("config.yaml");
+      expect(existsSync(join(next.configRoot, "config.yaml"))).toBe(true);
+
+      // After migration arc reads config.yaml at the NEW config root → the custom
+      // bin dir still wins for CLI-shim placement (would silently revert to
+      // ~/.local/bin if config.yaml had been stranded).
+      const resolved = createArcPaths(undefined, { home, env: { PATH: "" } });
+      expect(resolved.shimDir).toBe(customBin);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("#287 migrateArcDirsIfNeeded — FIX 2: config-only user (no db, no repos)", () => {
+  test("writes the marker and the second run is a clean no-op (no perpetual warning)", () => {
+    const home = mkdtempSync(join(tmpdir(), "arc-xdg-cfgonly-"));
+    try {
+      // A user who added a source / set secrets but never installed anything:
+      // legacy config + secrets present, NO packages.db, NO repos → dataRoot is
+      // never created as a side effect, so the marker write must mkdir it.
+      const legacy = legacyArcLayout({ home });
+      const next = toArcDirLayout(createArcPaths(undefined, { home, env: { PATH: "" } }));
+      const host = getDefaultHost({ root: join(home, ".claude") });
+      mkdirSync(legacy.configRoot, { recursive: true });
+      writeFileSync(legacy.sourcesPath, "sources: []\n");
+      mkdirSync(legacy.secretsDir, { recursive: true });
+      writeFileSync(join(legacy.secretsDir, "token"), "s3cr3t\n");
+      expect(existsSync(legacy.reposDir)).toBe(false);
+      expect(existsSync(legacy.dbPath)).toBe(false);
+
+      const first = migrateArcDirsIfNeeded({ legacy, next, host, quiet: true });
+      expect(first.migrated).toBe(true);
+      expect(first.warnings).toEqual([]);
+      expect(existsSync(join(next.dataRoot, XDG_MIGRATION_MARKER))).toBe(true);
+
+      // Second run short-circuits cleanly — no "did not complete" re-run loop.
+      const second = migrateArcDirsIfNeeded({ legacy, next, host, quiet: true });
+      expect(second.migrated).toBe(false);
+      expect(second.skipped).toBe("already-complete");
+      expect(second.warnings).toEqual([]);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("#287 migrateArcDirsIfNeeded — FIX 3: repos copy is atomic (torn copy never committed)", () => {
+  test("a stale partial temp is discarded; the committed tree is complete + clean; no temp residue", () => {
+    const home = mkdtempSync(join(tmpdir(), "arc-xdg-atomic-"));
+    try {
+      const { legacy, next, host, link } = seedLegacyInstall(home);
+
+      // Simulate a PRIOR crashed copy: a stranded `.arc-incoming-<pid>` temp
+      // holding a PARTIAL tree (junk, missing the real files). The atomic copy
+      // must clear it and never fold it into the committed tree.
+      mkdirSync(next.dataRoot, { recursive: true });
+      const stale = `${next.reposDir}.arc-incoming-${process.pid}`;
+      mkdirSync(stale, { recursive: true });
+      writeFileSync(join(stale, "JUNK-partial"), "torn\n");
+
+      const result = migrateArcDirsIfNeeded({ legacy, next, host, quiet: true });
+      expect(result.reposCopied).toBe(true);
+
+      // Committed tree is the COMPLETE legacy copy — the junk from the stale temp
+      // is gone; the real SKILL.md is present.
+      const nextSkillDir = join(next.reposDir, "mypkg", "skill");
+      expect(existsSync(join(nextSkillDir, "SKILL.md"))).toBe(true);
+      expect(existsSync(join(next.reposDir, "JUNK-partial"))).toBe(false);
+
+      // No `.arc-incoming` temp residue left behind under the data root.
+      const residue = readdirSync(next.dataRoot).filter((e) => e.includes(".arc-incoming"));
+      expect(residue).toEqual([]);
+
+      // The symlink was re-pointed into the COMPLETE new tree (never a partial).
+      expect(readlinkSync(link)).toBe(nextSkillDir);
+      expect(existsSync(link)).toBe(true);
     } finally {
       rmSync(home, { recursive: true, force: true });
     }

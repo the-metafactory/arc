@@ -37,6 +37,9 @@
 import {
   existsSync,
   cpSync,
+  mkdirSync,
+  renameSync,
+  rmSync,
   lstatSync,
   readdirSync,
   readlinkSync,
@@ -126,13 +129,37 @@ export interface XdgMigrationResult {
   warnings: string[];
 }
 
-/** Copy `src` → `dst` (recursive), keeping the source. No-op if `src` absent or
- *  `dst` already present (idempotent — never clobbers a partial prior run). */
-function copyKeepSource(src: string, dst: string): boolean {
+/**
+ * Copy `src` file/tree → `dst`, keeping the source, ATOMICALLY: stage into a
+ * sibling `.arc-incoming-<pid>` temp path, then `rename` into place. `rename` is
+ * atomic on the same filesystem (temp is a sibling of `dst`, so same fs), so
+ * `dst` NEVER holds a torn/partial copy — the whole reason copy-keep-source can
+ * promise "never dangle". `cpSync` is non-atomic: a mid-copy I/O failure would
+ * otherwise strand a PARTIAL tree at `dst`, and the `existsSync(dst)` retry-skip
+ * would then treat that partial as complete and re-point symlinks into it. With
+ * temp+rename a failed copy leaves `dst` absent (the temp is cleared on the next
+ * attempt) so the retry re-copies cleanly. No-op if `src` absent or `dst`
+ * already present (idempotent). `renameSync` over an existing `dst` is not used
+ * here (the guard skips that case); {@link atomicReplaceFile} handles overwrite.
+ */
+function atomicCopyKeepSource(src: string, dst: string): boolean {
   if (!existsSync(src)) return false;
   if (existsSync(dst)) return false;
-  cpSync(src, dst, { recursive: true });
+  const tmp = `${dst}.arc-incoming-${process.pid}`;
+  rmSync(tmp, { recursive: true, force: true }); // clear a stale temp from a prior crash
+  cpSync(src, tmp, { recursive: true });
+  renameSync(tmp, dst);
   return true;
+}
+
+/** Atomically copy `src` → `dst`, OVERWRITING `dst` if present (stage + rename;
+ *  `renameSync` replaces an existing file atomically). Used for db WAL sidecars
+ *  on a retry, where an earlier partial attempt may have left a stale sidecar. */
+function atomicReplaceFile(src: string, dst: string): void {
+  const tmp = `${dst}.arc-incoming-${process.pid}`;
+  rmSync(tmp, { force: true });
+  cpSync(src, tmp);
+  renameSync(tmp, dst);
 }
 
 /**
@@ -140,16 +167,21 @@ function copyKeepSource(src: string, dst: string): boolean {
  * source. arc runs the db in WAL mode, so the newest rows can live in the
  * uncheckpointed `-wal` sidecar: copying only `packages.db` would silently drop
  * them (the same WAL trap the cortex data-move hit). Carrying the sidecars gives
- * the new location a byte-consistent copy that SQLite replays on open. No-op if
- * `srcDb` absent or `dstDb` already present.
+ * the new location a byte-consistent copy that SQLite replays on open.
+ *
+ * Ordering matters: sidecars first, MAIN db LAST — the main file's presence is
+ * the commit point the `existsSync(dstDb)` retry-guard checks, so a failure
+ * before the final rename leaves `dstDb` absent and the whole copy re-runs
+ * (sidecars overwritten via {@link atomicReplaceFile}). No-op if `srcDb` absent
+ * or `dstDb` already present.
  */
 function copyDbKeepSource(srcDb: string, dstDb: string): boolean {
   if (!existsSync(srcDb)) return false;
   if (existsSync(dstDb)) return false;
-  cpSync(srcDb, dstDb);
   for (const suffix of ["-wal", "-shm"]) {
-    if (existsSync(srcDb + suffix)) cpSync(srcDb + suffix, dstDb + suffix);
+    if (existsSync(srcDb + suffix)) atomicReplaceFile(srcDb + suffix, dstDb + suffix);
   }
+  atomicReplaceFile(srcDb, dstDb); // main db last — the commit point
   return true;
 }
 
@@ -286,9 +318,19 @@ export function migrateArcDirsIfNeeded(opts: {
   }
 
   try {
-    // (1) Config-class children: sources.yaml + secrets/ + skills/ + pipelines/
-    //     + actions/ move into the new config root (`…/metafactory/arc`).
+    // Ensure the new data root exists up front — the db copy lands under it and
+    // the completion marker is written there. A config/cache/secrets-only user
+    // (a source added, or secrets set, but nothing ever installed) has NO repos
+    // and NO db, so nothing else would create dataRoot; without this the marker
+    // write ENOENTs → no marker → migration re-runs and warns on EVERY command.
+    mkdirSync(next.dataRoot, { recursive: true });
+
+    // (1) Config-class children move into the new config root (`…/metafactory/arc`).
+    //     config.yaml is included: it holds the user's `bin_dir` (custom CLI-shim
+    //     dir set via `arc config set bin-dir`); dropping it silently reverts tool
+    //     shims to the default ~/.local/bin, which may be off the user's PATH.
     const configChildren: [string, string, string][] = [
+      ["config.yaml", join(legacy.configRoot, "config.yaml"), join(next.configRoot, "config.yaml")],
       ["sources.yaml", legacy.sourcesPath, next.sourcesPath],
       ["secrets", legacy.secretsDir, next.secretsDir],
       ["skills", legacy.runtimeDir, next.runtimeDir],
@@ -296,20 +338,21 @@ export function migrateArcDirsIfNeeded(opts: {
       ["actions", legacy.actionsDir, next.actionsDir],
     ];
     for (const [label, from, to] of configChildren) {
-      if (from !== to && copyKeepSource(from, to)) {
+      if (from !== to && atomicCopyKeepSource(from, to)) {
         result.configChildrenCopied.push(label);
       }
     }
 
     // (2) Cache class: regenerable remote-registry index.
-    if (legacy.cachePath !== next.cachePath && copyKeepSource(legacy.cachePath, next.cachePath)) {
+    if (legacy.cachePath !== next.cachePath && atomicCopyKeepSource(legacy.cachePath, next.cachePath)) {
       result.cacheCopied = true;
     }
 
     // (3) Data class + RELINK (the three-part lockstep).
     if (legacy.reposDir !== next.reposDir) {
-      // (3a) copy the repos tree (keep source).
-      result.reposCopied = copyKeepSource(legacy.reposDir, next.reposDir);
+      // (3a) copy the repos tree (keep source, atomic temp+rename so a torn copy
+      //      is never committed nor repointed-into).
+      result.reposCopied = atomicCopyKeepSource(legacy.reposDir, next.reposDir);
       // copy the db (with its WAL sidecars) alongside it.
       result.dbCopied = copyDbKeepSource(legacy.dbPath, next.dbPath);
 
