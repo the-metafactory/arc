@@ -19,6 +19,33 @@ requires:
 
 Packages that opt out (`requires:` absent or `nats: false`) never invoke the broker gate. See `src/lib/nats-broker.ts` for the platform-specific bootstrap logic and `arc#152` for the operational rationale.
 
+### `provides.files` and path tokens
+
+A package may declare arbitrary file drops via `provides.files` — each entry
+symlinks a `source` (inside the package repo) to a `target` on the host:
+
+```yaml
+provides:
+  files:
+    - source: bin/mytool          # path inside the package repo
+      target: "{bin}/mytool"      # where it lands on the host
+```
+
+`target` supports a leading `~` (the user's home) plus these **path tokens**, so
+a package declares *intent* instead of hard-coding a machine-specific path:
+
+| Token | Resolves to | Use for |
+|-------|-------------|---------|
+| `{bin}` | `xdg-paths.binDir()` — `~/.local/bin` (or `~/bin` when already on `$PATH`) | PATH-accessible executables |
+| `{data}` | `$XDG_DATA_HOME/metafactory/arc` (fallback `~/.local/share/metafactory/arc`) | durable app data |
+| `{state}` | `$XDG_STATE_HOME/metafactory/arc` (fallback `~/.local/state/metafactory/arc`) | mutable runtime state |
+| `{cache}` | `$XDG_CACHE_HOME/metafactory/arc` (fallback `~/.cache/metafactory/arc`) | regenerable cache |
+| `{config}` | `$XDG_CONFIG_HOME/metafactory/arc` (fallback `~/.config/metafactory/arc`) | config |
+
+Tokens honor the same `$XDG_*` / `$PATH` resolution arc uses for its own dirs
+(#287). The identical resolver runs at install, verify, upgrade, and remove, so a
+file always lands and is cleaned up at the same computed path.
+
 ### Artifact Types
 
 | Type | Installed To | What It Is |
@@ -43,17 +70,26 @@ Trust flows from the **source**, not the package:
 
 ### Symlink-Based Installation
 
-Packages are git-cloned to `~/.config/metafactory/pkg/repos/` and symlinked into `~/.claude/`. Never hardcopy files into `~/.claude/`. This allows `git pull` upgrades, clean removal, and integrity verification.
+Packages are git-cloned to the XDG data root (`~/.local/share/metafactory/arc/repos/`) and symlinked into `~/.claude/`. Never hardcopy files into `~/.claude/`. This allows `git pull` upgrades, clean removal, and integrity verification.
 
 ### Key Paths
 
-| Path | Purpose |
-|------|---------|
-| `~/.config/metafactory/packages.db` | SQLite database tracking all installed packages |
-| `~/.config/metafactory/sources.yaml` | Configured registry sources |
-| `~/.config/metafactory/pkg/repos/` | Cloned package repositories |
-| `~/.config/metafactory/pkg/cache/` | Cached remote registry indexes |
-| `~/.claude/skills/` | Installed skill symlinks |
-| `~/.claude/agents/` | Installed agent symlinks |
-| `~/.claude/commands/` | Installed prompt/command symlinks |
-| `~/.claude/bin/` | Installed tool symlinks |
+Since #287 arc splits its own state across the XDG base dirs (each honoring its
+`$XDG_*` env var; `ARC_CONFIG_ROOT` still relocates the whole tree). An existing
+install is migrated to this layout on first touch — copy-keep-source, with the
+packages.db rows and `~/.claude` symlinks re-pointed in lockstep, so a botched
+migration falls back to the intact legacy tree.
+
+| Path | Class | Purpose |
+|------|-------|---------|
+| `~/.local/share/metafactory/arc/packages.db` | data (`$XDG_DATA_HOME`) | SQLite database tracking all installed packages |
+| `~/.local/share/metafactory/arc/repos/` | data (`$XDG_DATA_HOME`) | Cloned package repositories |
+| `~/.cache/metafactory/arc/cache/` | cache (`$XDG_CACHE_HOME`) | Cached remote registry indexes |
+| `~/.config/metafactory/arc/sources.yaml` | config (`$XDG_CONFIG_HOME`) | Configured registry sources |
+| `~/.config/metafactory/arc/secrets/` | config (`$XDG_CONFIG_HOME`) | Provisioned secrets |
+| `~/.claude/skills/` | host | Installed skill symlinks |
+| `~/.claude/agents/` | host | Installed agent symlinks |
+| `~/.claude/commands/` | host | Installed prompt/command symlinks |
+| `~/.claude/bin/` | host | Installed tool symlinks |
+
+Legacy `~/.config/metafactory/{packages.db,pkg/…,sources.yaml}` locations are read for one migration window, then relocated as above.

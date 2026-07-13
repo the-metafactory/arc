@@ -1,4 +1,6 @@
 import { Database } from "bun:sqlite";
+import { mkdirSync } from "fs";
+import { dirname, sep } from "path";
 import type {
   InstalledSkill,
   CapabilityRecord,
@@ -8,8 +10,15 @@ import type {
 /**
  * Initialize (or open) the packages database.
  * Creates tables if they don't exist.
+ *
+ * Ensures the parent directory exists first: since #287 the db lives under the
+ * XDG data root (`~/.local/share/metafactory/arc/`), which read-only commands
+ * (`list`, `info`, …) may reach before any `ensureDirectories` call has created
+ * it. `new Database(path, {create:true})` creates the FILE but not parent DIRs,
+ * so without this a first-touch read command would throw ENOENT.
  */
 export function openDatabase(dbPath: string): Database {
+  mkdirSync(dirname(dbPath), { recursive: true });
   const db = new Database(dbPath, { create: true });
   db.run("PRAGMA journal_mode=WAL;");
   db.run("PRAGMA foreign_keys=ON;");
@@ -202,6 +211,67 @@ export function listByLibrary(db: Database, libraryName: string): InstalledSkill
     .all(libraryName) as InstalledSkill[];
 }
 
+
+/**
+ * Rewrite every absolute repo path stored on `skills` rows whose value lives
+ * under `oldPrefix`, re-rooting it at `newPrefix`. Covers `install_path`,
+ * `skill_dir`, and `customization_path` — the three columns that hold absolute
+ * paths into the cloned package repos (`reposDir`).
+ *
+ * This is the DB half of the #287 repos-relocation lockstep: after the repos
+ * dir is copied to its new XDG data location the DB must point at the new tree
+ * or every installed package is orphaned. Runs in a single transaction (all
+ * rows swap or none do). Idempotent: a second run finds no `oldPrefix` rows and
+ * changes nothing. Returns the number of rows rewritten.
+ *
+ * Prefix match is exact-segment: a value equal to `oldPrefix` or beginning with
+ * `oldPrefix + sep` is rewritten; a merely string-prefixed sibling (e.g.
+ * `…/repos-backup`) is left untouched.
+ */
+export function rewriteInstallPathPrefix(
+  db: Database,
+  oldPrefix: string,
+  newPrefix: string,
+): number {
+  const swap = (value: string | null): string | null => {
+    if (value == null) return value;
+    if (value === oldPrefix) return newPrefix;
+    if (value.startsWith(oldPrefix + sep)) return newPrefix + value.slice(oldPrefix.length);
+    return value;
+  };
+
+  const rows = db
+    .prepare("SELECT name, install_path, skill_dir, customization_path FROM skills")
+    .all() as {
+    name: string;
+    install_path: string;
+    skill_dir: string;
+    customization_path: string | null;
+  }[];
+
+  const update = db.prepare(
+    "UPDATE skills SET install_path = ?, skill_dir = ?, customization_path = ? WHERE name = ?",
+  );
+
+  let changed = 0;
+  const tx = db.transaction(() => {
+    for (const row of rows) {
+      const installPath = swap(row.install_path)!;
+      const skillDir = swap(row.skill_dir)!;
+      const customizationPath = swap(row.customization_path);
+      if (
+        installPath !== row.install_path ||
+        skillDir !== row.skill_dir ||
+        customizationPath !== row.customization_path
+      ) {
+        update.run(installPath, skillDir, customizationPath, row.name);
+        changed++;
+      }
+    }
+  });
+  tx();
+  return changed;
+}
 
 /**
  * Get all capabilities across all active skills (for audit).
