@@ -41,17 +41,35 @@ describe("createArcPaths env-var handling", () => {
 });
 
 describe("resolveConfigRoot seam (scratch $HOME, zero real-home access)", () => {
-  test("defaults to <scratchHome>/.config/metafactory with an empty injected env", () => {
+  test("defaults to <scratchHome>/.config/metafactory/arc (XDG app segment, #287) with an empty injected env", () => {
     const home = mkdtempSync(join(tmpdir(), "arc-scratch-home-"));
     try {
       const root = resolveConfigRoot(undefined, { home, env: {} });
-      expect(root).toBe(join(home, ".config", "metafactory"));
+      expect(root).toBe(join(home, ".config", "metafactory", "arc"));
       // Resolved entirely under the injected home — the real home is untouched.
       expect(root.startsWith(home)).toBe(true);
       expect(root).not.toContain(homedir());
     } finally {
       rmSync(home, { recursive: true, force: true });
     }
+  });
+
+  test("honors $XDG_CONFIG_HOME from the injected env (#287)", () => {
+    const home = "/scratch/home";
+    const root = resolveConfigRoot(undefined, {
+      home,
+      env: { XDG_CONFIG_HOME: "/xdg/cfg" },
+    });
+    expect(root).toBe(join("/xdg/cfg", "metafactory", "arc"));
+  });
+
+  test("ARC_CONFIG_ROOT still wins over $XDG_CONFIG_HOME (precedence rank 2 > 3)", () => {
+    const home = "/scratch/home";
+    const root = resolveConfigRoot(undefined, {
+      home,
+      env: { ARC_CONFIG_ROOT: "/env/arc", XDG_CONFIG_HOME: "/xdg/cfg" },
+    });
+    expect(root).toBe("/env/arc");
   });
 
   test("ARC_CONFIG_ROOT from the injected env wins over the default, ~ expanded against the injected home", () => {
@@ -81,7 +99,7 @@ describe("resolveConfigRoot seam (scratch $HOME, zero real-home access)", () => 
       },
     });
     // Neither knob composes with the config-root resolver — it stays at default.
-    expect(root).toBe(join(home, ".config", "metafactory"));
+    expect(root).toBe(join(home, ".config", "metafactory", "arc"));
   });
 });
 
@@ -90,14 +108,23 @@ describe("createArcPaths seam", () => {
     const home = mkdtempSync(join(tmpdir(), "arc-scratch-home-"));
     try {
       const paths = createArcPaths(undefined, { home, env: { PATH: "" } });
-      const expectedRoot = join(home, ".config", "metafactory");
-      expect(paths.configRoot).toBe(expectedRoot);
-      expect(paths.dbPath).toBe(join(expectedRoot, "packages.db"));
+      const expectedConfigRoot = join(home, ".config", "metafactory", "arc");
+      const expectedDataRoot = join(home, ".local", "share", "metafactory", "arc");
+      const expectedCacheRoot = join(home, ".cache", "metafactory", "arc");
+      const expectedStateRoot = join(home, ".local", "state", "metafactory", "arc");
+      expect(paths.configRoot).toBe(expectedConfigRoot);
       expect(paths.shimDir).toBe(join(home, ".local", "bin"));
-      // XDG class roots collapse onto configRoot today (#287 wave-1 seam).
-      expect(paths.dataRoot).toBe(expectedRoot);
-      expect(paths.stateRoot).toBe(expectedRoot);
-      expect(paths.cacheRoot).toBe(expectedRoot);
+      // #287 (P2): XDG class roots now SPLIT across the base dirs on the default
+      // layout (each honoring its own `$XDG_*`).
+      expect(paths.dataRoot).toBe(expectedDataRoot);
+      expect(paths.stateRoot).toBe(expectedStateRoot);
+      expect(paths.cacheRoot).toBe(expectedCacheRoot);
+      // db + repos are DATA class; sources/secrets are CONFIG class.
+      expect(paths.dbPath).toBe(join(expectedDataRoot, "packages.db"));
+      expect(paths.reposDir).toBe(join(expectedDataRoot, "repos"));
+      expect(paths.cachePath).toBe(join(expectedCacheRoot, "cache"));
+      expect(paths.sourcesPath).toBe(join(expectedConfigRoot, "sources.yaml"));
+      expect(paths.secretsDir).toBe(join(expectedConfigRoot, "secrets"));
       // No real-home leakage into any resolved arc path.
       expect(paths.configRoot).not.toContain(homedir());
     } finally {

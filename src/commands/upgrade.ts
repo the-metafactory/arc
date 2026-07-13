@@ -8,6 +8,7 @@ import { listSkills, getSkill, listByLibrary } from "../lib/db.js";
 import { readManifest, readLibraryArtifacts } from "../lib/manifest.js";
 import { installSingleArtifact } from "./install.js";
 import { createSymlink } from "../lib/symlinks.js";
+import { resolveProvidesTarget } from "../lib/provides-target.js";
 import { findGitRoot } from "../lib/paths.js";
 import { loadSources } from "../lib/sources.js";
 import { findInAllSources } from "../lib/remote-registry.js";
@@ -370,7 +371,7 @@ export async function upgradePackage(
   if (manifest.type === "component" && manifest.provides?.files?.length) {
     for (const file of manifest.provides.files) {
       const sourcePath = join(installPath, file.source);
-      const targetPath = file.target.replace(/^~/, homedir());
+      const targetPath = resolveProvidesTarget(file.target);
       await mkdir(dirname(targetPath), { recursive: true });
       await createSymlink(sourcePath, targetPath);
     }

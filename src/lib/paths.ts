@@ -5,6 +5,15 @@ import { mkdir } from "fs/promises";
 import type { ArcPaths, HostAdapter } from "../types.js";
 import { createClaudeCodeHost } from "./hosts/claude-code.js";
 import { loadUserConfigSync, normalizeUserPath } from "./config.js";
+import {
+  configDir as xdgConfigDir,
+  dataDir as xdgDataDir,
+  stateDir as xdgStateDir,
+  cacheDir as xdgCacheDir,
+} from "./xdg-paths.js";
+
+/** arc's XDG suite-app namespace. Every XDG root resolves under `metafactory/arc`. */
+export const ARC_APP = "arc";
 
 // TODO: Remove migration logic after 2026-Q3. Only 2 users (founders) on arc currently,
 // so this migration path can be dropped once both have upgraded.
@@ -41,16 +50,34 @@ export interface PathSeam {
 }
 
 /**
- * Config-root override precedence — arc's OWN state tree (the
- * `~/.config/metafactory/` directory that `createArcPaths` derives db / repos /
- * cache / sources / secrets from). Ranked most-authoritative first; this
- * documents current reality and does not change behavior:
+ * True when arc resolves its own dirs from the DEFAULT (XDG) layout — i.e. no
+ * programmatic `overrides.configRoot` and no `ARC_CONFIG_ROOT` env var. This is
+ * the ONLY branch on which the #287 migration-on-touch may fire; when an
+ * override or env var is in play arc keeps the legacy single-tree layout
+ * (byte-identical to pre-#287) and migration is suppressed.
+ */
+export function isArcDefaultLayout(
+  overrideConfigRoot?: string,
+  seam?: PathSeam,
+): boolean {
+  const env = seam?.env ?? process.env;
+  return overrideConfigRoot == null && !env.ARC_CONFIG_ROOT;
+}
+
+/**
+ * Config-root override precedence — arc's OWN config tree (`sources.yaml`,
+ * `secrets/`, `skills/`, …). Ranked most-authoritative first:
  *
  *   1. `overrides.configRoot` — programmatic override passed to `createArcPaths`
  *      (how `test/helpers/test-env.ts` isolates a suite). Beats everything below.
  *   2. `ARC_CONFIG_ROOT` — env override for the whole arc config tree. A leading
- *      `~` is expanded. This is the ONE knob that relocates arc's own state.
- *   3. Default `~/.config/metafactory/`.
+ *      `~` is expanded. This is the ONE knob that relocates arc's own state; it
+ *      keeps arc in the legacy SINGLE-TREE layout (data/state/cache collapse
+ *      onto it, preserving the pre-#287 `pkg/…` tails).
+ *   3. Default `$XDG_CONFIG_HOME/metafactory/arc` (fallback `~/.config/metafactory/arc`).
+ *      #287 (P2): arc adopts the shared xdg-paths resolver for its own config
+ *      root — `$XDG_CONFIG_HOME` is now honored (previously hard-coded to
+ *      `~/.config/metafactory` and only `ARC_CONFIG_ROOT` was read).
  *
  * Three OTHER env vars look related but are INDEPENDENT — none composes with
  * `ARC_CONFIG_ROOT`; each governs only its own narrow subtree and bypasses this
@@ -63,35 +90,29 @@ export interface PathSeam {
  *   - `MF_SIDECAR_DIR` (`src/lib/identity-provision.ts`) — the agent
  *     provisioning-sidecar base (`<...>/agents/<id>.provision.json`) ONLY,
  *     default `~/.config/metafactory/agents`. Independent of both roots above.
- *   - `$XDG_*` — NOT honored for arc's own config tree today. (nats.ts reads
- *     `$XDG_CONFIG_HOME` / `$XDG_DATA_HOME` for the unrelated NATS/nsc subsystem;
- *     that is not arc state.) The XDG split of arc's data/state/cache roots is
- *     deferred to wave 5 (#287); until then `dataRoot`/`stateRoot`/`cacheRoot`
- *     collapse onto `configRoot` and `$XDG_*` has no effect here.
  *
- * Triggers the one-time `~/.config/arc/` → `~/.config/metafactory/` migration
- * when no override or env var is in play.
+ * On the default (XDG) branch the legacy `~/.config/arc/` → `~/.config/metafactory/`
+ * rename still runs (existence-gated, a no-op for everyone but the two founders);
+ * the subsequent `~/.config/metafactory` → `~/.config/metafactory/arc` hop is the
+ * copy-keep-source config-children migration in `migrateArcDirsIfNeeded` (#287).
  */
 export function resolveConfigRoot(override?: string, seam?: PathSeam): string {
   const home = seam?.home ?? homedir();
   const env = seam?.env ?? process.env;
-  const usingEnvVar = !!env.ARC_CONFIG_ROOT;
-  const usingOverride = !!override;
-  const defaultConfigRoot = join(home, ".config", "metafactory");
+
+  if (override != null) return override;
 
   const envConfigRoot = env.ARC_CONFIG_ROOT;
-  const configRoot =
-    override ??
-    (envConfigRoot
-      ? envConfigRoot.replace(/^~/, home)
-      : defaultConfigRoot);
+  if (envConfigRoot) return envConfigRoot.replace(/^~/, home);
 
-  if (!usingEnvVar && !usingOverride) {
-    const oldConfigRoot = join(home, ".config", "arc");
-    migrateConfigIfNeeded(oldConfigRoot, configRoot);
-  }
+  // Default (XDG) branch. Preserve the legacy gen0→gen1 rename first so a
+  // founder still on `~/.config/arc/` lands at `~/.config/metafactory/`, from
+  // where the #287 config-children migration relocates into `…/metafactory/arc`.
+  const gen0 = join(home, ".config", "arc");
+  const gen1 = join(home, ".config", "metafactory");
+  migrateConfigIfNeeded(gen0, gen1);
 
-  return configRoot;
+  return xdgConfigDir(ARC_APP, { home, env });
 }
 
 /**
@@ -177,19 +198,37 @@ export function createArcPaths(
     env.ARC_SHIM_DIR ??
     userConfig.binDir;
 
+  // #287 (P2): on the default layout arc splits its class roots across the XDG
+  // base dirs (data/state/cache each honoring `$XDG_*`). When an override or
+  // `ARC_CONFIG_ROOT` is in play we keep the legacy SINGLE-TREE layout — every
+  // class root collapses onto configRoot and the pre-#287 `pkg/…` path tails are
+  // preserved byte-for-byte, so relocated / test-isolated installs are unchanged
+  // and no migration fires.
+  const singleTree = !isArcDefaultLayout(overrides?.configRoot, { home, env });
+  const dataRoot =
+    overrides?.dataRoot ?? (singleTree ? configRoot : xdgDataDir(ARC_APP, { home, env }));
+  const stateRoot =
+    overrides?.stateRoot ?? (singleTree ? configRoot : xdgStateDir(ARC_APP, { home, env }));
+  const cacheRoot =
+    overrides?.cacheRoot ?? (singleTree ? configRoot : xdgCacheDir(ARC_APP, { home, env }));
+
   return {
     configRoot,
-    // XDG class roots (#287 wave-1 seam). Today arc keeps durable data, mutable
-    // state, and regenerable cache all under the single config tree, so each
-    // root collapses onto configRoot — no new directories are created here.
-    // Wave 5 (#287) repoints these at $XDG_DATA_HOME / $XDG_STATE_HOME /
-    // $XDG_CACHE_HOME without touching the call sites that read them.
-    dataRoot: overrides?.dataRoot ?? configRoot,
-    stateRoot: overrides?.stateRoot ?? configRoot,
-    cacheRoot: overrides?.cacheRoot ?? configRoot,
-    reposDir: overrides?.reposDir ?? join(configRoot, "pkg", "repos"),
-    cachePath: overrides?.cachePath ?? join(configRoot, "pkg", "cache"),
-    dbPath: overrides?.dbPath ?? join(configRoot, "packages.db"),
+    dataRoot,
+    stateRoot,
+    cacheRoot,
+    // Data class — durable, authoritative installed-package state. packages.db
+    // is the source of truth mapping installed packages → on-disk repos; losing
+    // it orphans every symlink, so it is DATA (not regenerable cache, not
+    // transient state). repos are the cloned package trees the symlinks target.
+    reposDir:
+      overrides?.reposDir ?? (singleTree ? join(configRoot, "pkg", "repos") : join(dataRoot, "repos")),
+    // Cache class — regenerable remote-registry index. Safe to nuke; rebuilt on
+    // `arc source update`.
+    cachePath:
+      overrides?.cachePath ?? (singleTree ? join(configRoot, "pkg", "cache") : join(cacheRoot, "cache")),
+    dbPath:
+      overrides?.dbPath ?? (singleTree ? join(configRoot, "packages.db") : join(dataRoot, "packages.db")),
     sourcesPath: overrides?.sourcesPath ?? join(configRoot, "sources.yaml"),
     secretsDir: overrides?.secretsDir ?? join(configRoot, "secrets"),
     runtimeDir: overrides?.runtimeDir ?? join(configRoot, "skills"),

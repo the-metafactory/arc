@@ -1,6 +1,5 @@
 import { join } from "path";
 import { rm, lstat, readlink, unlink } from "fs/promises";
-import { homedir } from "os";
 import type { Database } from "bun:sqlite";
 import type {
   ArcManifest,
@@ -10,6 +9,7 @@ import type {
 } from "../types.js";
 import { getSkill, removeSkill, listByLibrary } from "../lib/db.js";
 import { removeSymlink, removeCliShim, extractAllCliInfo } from "../lib/symlinks.js";
+import { resolveProvidesTarget } from "../lib/provides-target.js";
 import { readManifest } from "../lib/manifest.js";
 import { removeHooks } from "../lib/hooks.js";
 import { findGitRoot } from "../lib/paths.js";
@@ -194,8 +194,7 @@ async function removePerTarget(opts: {
     // provides.files (e.g. cortex's <name>.md fragment) — unlink each
     // declared target path.
     for (const f of opts.manifest.provides?.files ?? []) {
-      const home = process.env.HOME ?? "";
-      const target = f.target.replace(/^~/, home);
+      const target = resolveProvidesTarget(f.target);
       await removeSymlink(target);
     }
   }
@@ -419,7 +418,7 @@ export async function remove(
   if (manifest?.provides?.files?.length) {
     for (const file of manifest.provides.files) {
       const expectedSource = join(skill.install_path, file.source);
-      const targetPath = file.target.replace(/^~/, homedir());
+      const targetPath = resolveProvidesTarget(file.target);
       await removeProvidedFile(targetPath, expectedSource);
     }
   }

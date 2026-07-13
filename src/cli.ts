@@ -1,7 +1,8 @@
 #!/usr/bin/env bun
 
 import { Command } from "commander";
-import { createArcPaths, ensureDirectories, getDefaultHost, isDirOnPath } from "./lib/paths.js";
+import { createArcPaths, ensureDirectories, getDefaultHost, isDirOnPath, isArcDefaultLayout } from "./lib/paths.js";
+import { migrateArcDirsIfNeeded, legacyArcLayout, toArcDirLayout } from "./lib/xdg-migrate.js";
 import { openDatabase, getSkill } from "./lib/db.js";
 import { extractAllCliInfo } from "./lib/symlinks.js";
 import { install, parseNameVersion } from "./commands/install.js";
@@ -2162,4 +2163,28 @@ identity
     importPrincipals(file);
   });
 
-program.parse();
+// #287 (P2): migration-on-touch. The first time ANY arc command runs after the
+// XDG cutover, relocate arc's own dirs (repos → data, cache → cache, config
+// children → config, packages.db → data) from the legacy `~/.config/metafactory`
+// tree to the XDG layout — copy-keep-source, rewrite the db path rows, and
+// re-point every `~/.claude/{skills,agents,commands,bin}` symlink in lockstep.
+// Gated to the default layout: a relocated (ARC_CONFIG_ROOT) or test-overridden
+// tree keeps the legacy single-tree layout and this is a no-op. Never blocks the
+// command — on any failure the legacy tree is intact and still in use.
+program.hook("preAction", () => {
+  try {
+    if (!isArcDefaultLayout()) return;
+    const arc = createArcPaths();
+    migrateArcDirsIfNeeded({
+      legacy: legacyArcLayout(),
+      next: toArcDirLayout(arc),
+      host: getDefaultHost(),
+    });
+  } catch (err) {
+    console.warn(
+      `arc: XDG migration check failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+});
+
+await program.parseAsync();

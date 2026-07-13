@@ -1,7 +1,6 @@
 import { join, dirname } from "path";
 import { existsSync, readdirSync } from "fs";
 import { mkdir } from "fs/promises";
-import { homedir } from "os";
 import { readFileSync } from "fs";
 import YAML from "yaml";
 import type {
@@ -24,6 +23,7 @@ import {
 import { generateRules } from "./rules.js";
 import { requireHostDir } from "./hosts/dispatch.js";
 import { resolveHost, type HostOverrides } from "./hosts/registry.js";
+import { resolveProvidesTarget } from "./provides-target.js";
 
 /**
  * Maps an artifact type to its conventional source subdirectory within a cloned repo.
@@ -148,7 +148,7 @@ export function planArtifactSymlinks(opts: ArtifactSymlinkOpts): ArtifactSymlink
     if (!existsSync(sourcePath)) {
       filesMissingSource.push({
         source: sourcePath,
-        target: file.target.replace(/^~/, homedir()),
+        target: resolveProvidesTarget(file.target),
       });
     }
   }
@@ -281,7 +281,7 @@ export function planArtifactSymlinks(opts: ArtifactSymlinkOpts): ArtifactSymlink
   for (const file of declaredFiles) {
     symlinkTargets.push({
       source: join(installDir, file.source),
-      target: file.target.replace(/^~/, homedir()),
+      target: resolveProvidesTarget(file.target),
     });
   }
 
@@ -362,7 +362,7 @@ export async function artifactDropPresent(opts: {
   if (opts.type === "rules") return true;
 
   const declaredFileTargets = new Set(
-    (opts.manifest.provides?.files ?? []).map((f) => f.target.replace(/^~/, homedir())),
+    (opts.manifest.provides?.files ?? []).map((f) => resolveProvidesTarget(f.target)),
   );
 
   // Resolve the set of hosts the drop lands on -- mirror installPerTarget.
@@ -459,7 +459,7 @@ export async function createArtifactSymlinks(opts: {
   // but we keep an explicit mkdir for the provides.files subset to preserve
   // prior behavior and to populate `filesCreated`.
   const declaredFileTargets = new Set(
-    (manifest.provides?.files ?? []).map((f) => f.target.replace(/^~/, homedir())),
+    (manifest.provides?.files ?? []).map((f) => resolveProvidesTarget(f.target)),
   );
   const filesCreated: { source: string; target: string }[] = [];
   for (const link of plan.symlinkTargets) {
