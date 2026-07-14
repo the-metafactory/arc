@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.40.0 — 2026-07-14
+
+### Added
+
+- **Existence-gated cortex-host config resolver + `{cortex-config}` provides token** (XDG epic cortex#1867, G-18). arc's cortex host no longer hardcodes the legacy `~/.config/cortex` config root — it now resolves cortex's config dir the SAME way cortex does (new `src/lib/hosts/cortex-config-dir.ts`, byte-mirroring cortex's `resolveConfigDir`: `CORTEX_CONFIG_DIR` verbatim > canonical `~/.config/metafactory/cortex` if present > legacy `~/.config/cortex` > `~/.config/grove` > canonical default). So arc always provisions into whichever tree the live cortex reads — a pre-cutover box gets legacy, a migrated box gets canonical — instead of silently writing to a tree the migrated cortex ignores. `ARC_CONFIG_ROOT` / explicit `configRoot` / `--config-dir` overrides keep precedence above the default; `--stack <name>` now resolves its base through the gated resolver too. New **`{cortex-config}`** provides token resolves to the live cortex config dir (distinct from arc's own `{config}` → `metafactory/arc`), so a package's `provides.files` can drop into cortex's config tree by intent (e.g. `{cortex-config}/agents.d/<id>.yaml`) instead of hardcoding a path that breaks after the config move. Pure resolution — arc does not move or migrate cortex's config (cortex owns that).
+
 ## 0.39.0 — 2026-07-14
 
 ### Added
