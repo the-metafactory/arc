@@ -858,11 +858,11 @@ arc install https://github.com/the-metafactory/<agent-repo> -y
 
 What arc does:
 
-1. Clones the repo to `~/.config/metafactory/pkg/repos/<repo-name>/`.
+1. Clones the repo to `~/.local/share/metafactory/arc/repos/<repo-name>/`.
 2. Reads `arc-manifest.yaml` from the bundle root. If no root manifest is present, falls back to `<repo>/agent/arc-manifest.yaml` — but only when the nested manifest declares `type: agent`. The fallback exists so source repos that nest the agent files under `agent/` (e.g. forge: `agent/{persona.md, scaffold-instance.sh, CLAUDE.md, arc-manifest.yaml}`) install cleanly without forcing a layout migration. Skills/tools/etc. continue to require the manifest at the repo root.
 3. Validates the manifest. For `type: agent`, the `capabilities` block is **optional** — persona-driven agents declare authority via `guardrails`, and the host enforces it through its own primitives (`allowedDirs`, `disallowedTools`, `bashAllowlist`). Authoring a `capabilities` block on an agent manifest is allowed for forward compatibility but is not required.
 4. Records the install in `packages.db` with `artifact_type: agent` so `arc list --type agent` and host-side discovery can find it.
-5. Creates a convenience symlink under `~/.claude/agents/<name>` pointing at the bundle. Persona-driven hosts (grove, pilot) read the bundle directly from `~/.config/metafactory/pkg/repos/<name>/`; the symlink is for legacy single-file agent discovery.
+5. Creates a convenience symlink under `~/.claude/agents/<name>` pointing at the bundle. Persona-driven hosts (grove, pilot) read the bundle directly from `~/.local/share/metafactory/arc/repos/<name>/`; the symlink is for legacy single-file agent discovery.
 
 **What arc does NOT do (host responsibility):**
 
@@ -874,11 +874,11 @@ What arc does:
 
 ```bash
 # Bundle landed at canonical reposDir
-ls ~/.config/metafactory/pkg/repos/<repo-name>/
+ls ~/.local/share/metafactory/arc/repos/<repo-name>/
 
 # Manifest is readable (root, or under agent/ for nested-source repos)
-cat ~/.config/metafactory/pkg/repos/<repo-name>/arc-manifest.yaml \
-  || cat ~/.config/metafactory/pkg/repos/<repo-name>/agent/arc-manifest.yaml
+cat ~/.local/share/metafactory/arc/repos/<repo-name>/arc-manifest.yaml \
+  || cat ~/.local/share/metafactory/arc/repos/<repo-name>/agent/arc-manifest.yaml
 
 # DB row exists with artifact_type: agent
 arc list --type agent

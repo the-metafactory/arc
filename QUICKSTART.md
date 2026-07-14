@@ -50,7 +50,7 @@ arc install git@github.com:mellanon/arc-skill-doc.git
 ```
 
 arc will:
-1. Clone the repo to `~/.config/metafactory/pkg/repos/`
+1. Clone the repo to `~/.local/share/metafactory/arc/repos/`
 2. Show you what capabilities the skill requests
 3. Create a symlink in `~/.claude/skills/`
 4. Record the install in `~/.config/metafactory/packages.db`

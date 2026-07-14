@@ -54,7 +54,7 @@ Agentic Component Package Manager — CLI package manager for agentic skills, to
 User command
   -> CLI routes to command handler
     -> resolve source (registry lookup or direct URL)
-      -> git clone to ~/.config/metafactory/pkg/repos/
+      -> git clone to ~/.local/share/metafactory/arc/repos/
         -> read arc-manifest.yaml
           -> display capabilities + risk level
             -> user confirms
@@ -93,7 +93,7 @@ Trust flows from the **source**, not the package:
 
 ### Symlink-Based Installation
 
-Packages are git-cloned to `~/.config/metafactory/pkg/repos/` and symlinked into `~/.claude/`. Never hardcopy files into `~/.claude/`. This allows `git pull` upgrades, clean removal, and integrity verification.
+Packages are git-cloned to `~/.local/share/metafactory/arc/repos/` and symlinked into `~/.claude/`. Never hardcopy files into `~/.claude/`. This allows `git pull` upgrades, clean removal, and integrity verification.
 
 ### Key Paths
 
@@ -101,7 +101,7 @@ Packages are git-cloned to `~/.config/metafactory/pkg/repos/` and symlinked into
 |------|---------|
 | `~/.config/metafactory/packages.db` | SQLite database tracking all installed packages |
 | `~/.config/metafactory/sources.yaml` | Configured registry sources |
-| `~/.config/metafactory/pkg/repos/` | Cloned package repositories |
+| `~/.local/share/metafactory/arc/repos/` | Cloned package repositories |
 | `~/.config/metafactory/pkg/cache/` | Cached remote registry indexes |
 | `~/.claude/skills/` | Installed skill symlinks |
 | `~/.claude/agents/` | Installed agent symlinks |
