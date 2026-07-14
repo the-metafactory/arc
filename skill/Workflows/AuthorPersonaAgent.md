@@ -209,7 +209,7 @@ Today, before AP-104 lands the `grove install agent <manifest>` adapter, this is
 
 Concretely for Grove (today, manual):
 
-1. Add an entry to `discord[]` in `~/.config/grove/bot.yaml` with the Discord bot ID and token (token stays out of the manifest -- secrets are operator config).
+1. Add an entry to `discord[]` in `~/.config/metafactory/cortex/bot.yaml` with the Discord bot ID and token (token stays out of the manifest -- secrets are operator config).
 2. Add a per-bot role under `discord[].roles[]` with the same `allowedSkills`, `allowedDirs`, `disallowedTools`, and `bashAllowlist` as the manifest's `guardrails`.
 3. Set `personaFile` to point at the persona path on disk (see G-905 -- Grove already supports this).
 4. If the agent will be addressable by other bots, add it to `trustedAgentBots` with the role binding.

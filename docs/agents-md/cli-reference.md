@@ -5,7 +5,7 @@
 ```bash
 arc install <name-or-url>     # Install from registry or direct git URL
 arc install <name> --bin-dir <path> # Override where command shims are installed
-arc install <name> --stack <name>      # Target a config-split cortex stack (~/.config/cortex/<name>)
+arc install <name> --stack <name>      # Target a config-split cortex stack (~/.config/metafactory/cortex/<name>)
 arc install <name> --config-dir <path> # Target a config-split cortex stack by its config dir / pointer file
 arc list                      # List installed packages
 arc list --json               # Output as JSON
