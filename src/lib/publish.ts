@@ -61,6 +61,23 @@ function buildPublishHeaders(source: RegistrySource): Record<string, string> {
   return { Authorization: `Bearer ${source.token}` };
 }
 
+/**
+ * The identity/verification host to point a user at on a namespace-ownership
+ * error — derived from the CONFIGURED source so a self-hosted or non-metafactory
+ * registry names its OWN host, not a hardcoded `meta-factory.ai` (arc#302).
+ * arc supports non-metafactory sources (`--type registry`); an error that always
+ * said "verify at meta-factory.ai" sent those users to the wrong place.
+ */
+function identityHost(source: RegistrySource): string {
+  try {
+    return new URL(source.url).host;
+  } catch {
+    // Malformed url (shouldn't happen — validated at `source add`) → show the
+    // raw configured value rather than a wrong hardcoded host.
+    return source.url;
+  }
+}
+
 interface SubmissionWire {
   id?: string;
   status?: string;
@@ -322,7 +339,7 @@ export async function ensurePackageExists(
     if (getResp.status !== 404) {
       const body = await getResp.json().catch(() => ({})) as { error?: unknown; message?: unknown };
       if (getResp.status === 403) {
-        return { exists: false, created: false, error: `You do not own namespace @${scope}. Complete identity verification at meta-factory.ai.` };
+        return { exists: false, created: false, error: `You do not own namespace @${scope}. Complete identity verification at ${identityHost(source)}.` };
       }
       return { exists: false, created: false, error: combineError(body) ?? `Unexpected status: ${getResp.status}` };
     }
@@ -340,7 +357,7 @@ export async function ensurePackageExists(
 
     const createBody = await createResp.json().catch(() => ({})) as { error?: unknown; message?: unknown };
     if (createResp.status === 403) {
-      return { exists: false, created: false, error: `You do not own namespace @${scope}. Complete identity verification at meta-factory.ai.` };
+      return { exists: false, created: false, error: `You do not own namespace @${scope}. Complete identity verification at ${identityHost(source)}.` };
     }
 
     return { exists: false, created: false, error: combineError(createBody) ?? `Failed to create package: HTTP ${createResp.status}` };
@@ -560,7 +577,7 @@ export async function registerVersion(
     }
 
     if (resp.status === 403) {
-      return { success: false, error: `Namespace @${scope} not owned. Complete identity verification at meta-factory.ai.`, statusCode: 403 };
+      return { success: false, error: `Namespace @${scope} not owned. Complete identity verification at ${identityHost(source)}.`, statusCode: 403 };
     }
 
     if (resp.status === 401) {
