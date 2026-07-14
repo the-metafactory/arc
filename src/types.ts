@@ -832,7 +832,7 @@ export interface ArcPaths {
    * #287 wave-1 seam: today collapses onto `configRoot` (future `$XDG_CACHE_HOME`).
    */
   cacheRoot: string;
-  /** Package repos (~/.config/metafactory/pkg/repos/) */
+  /** Package repos (~/.local/share/metafactory/arc/repos/) */
   reposDir: string;
   /** Remote registry cache directory (~/.config/metafactory/pkg/cache/) */
   cachePath: string;

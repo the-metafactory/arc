@@ -39,7 +39,7 @@ arc handles multiple artifact types:
 | **Tool** | `~/.claude/bin/{name}` + PATH shim | CLI command you can run directly |
 | **Agent** | `~/.claude/agents/{name}.md` | Persona file -- auto-discovered as `subagent_type` |
 | **Prompt** | `~/.claude/commands/{name}.md` | Slash command template |
-| **Library** | `~/.config/metafactory/pkg/repos/` | Multi-artifact repo containing skills, tools, etc. |
+| **Library** | `~/.local/share/metafactory/arc/repos/` | Multi-artifact repo containing skills, tools, etc. |
 | **Action** | `~/.config/metafactory/actions/{name}/` | Pulse action (action.json + action.ts) |
 | **Rules** | `~/.claude/skills/{name}/` | Configurable rules templates (e.g. CLAUDE.md generators) |
 
