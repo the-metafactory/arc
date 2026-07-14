@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.39.0 — 2026-07-14
+
+### Added
+
+- **XDG Base Directory adoption — phase 2: arc adopts XDG for its own dirs + `{config}`/`{bin}` provides tokens** (epic cortex#1867, [#287](https://github.com/the-metafactory/arc/issues/287)). arc's own storage now routes through the `xdg-paths` resolver: pkg repos + `packages.db` → `dataDir("arc")` (`$XDG_DATA_HOME`), pkg cache → `cacheDir("arc")` (`$XDG_CACHE_HOME`), config/`sources.yaml`/`config.yaml` → `configDir("arc")` honoring `$XDG_CONFIG_HOME` (precedence `ARC_CONFIG_ROOT` > `$XDG_CONFIG_HOME` > spec fallback). Existing installs **migrate on first touch** — copy-keep-source (legacy tree never deleted), completion-marker gated, atomic temp-then-rename per class, and a three-part relink lockstep (move repos → rewrite `packages.db` path rows → re-create every `~/.claude/{skills,agents,commands,bin}` symlink) so installed packages keep resolving. A failed/partial migration leaves the legacy tree fully working. New `provides.files` tokens `{bin}`/`{config}`/`{data}`/`{state}`/`{cache}` let manifests declare intent instead of hardcoding paths (`{bin}` → `~/.local/bin`, generalizes cortex#1866).
+
 ## 0.38.0 — 2026-07-13
 
 ### Added
