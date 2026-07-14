@@ -6,6 +6,10 @@ import type {
   CortexHostPaths,
   HostAdapter,
 } from "../../types.js";
+import {
+  resolveCortexConfigDir,
+  type CortexConfigDirSeam,
+} from "./cortex-config-dir.js";
 
 /**
  * Cortex host adapter.
@@ -35,7 +39,15 @@ import type {
  */
 
 export interface CortexHostOptions {
-  /** Cortex config root (default: ~/.config/cortex). */
+  /**
+   * Cortex config root. When omitted the DEFAULT is existence-gated via
+   * {@link resolveCortexConfigDir} — it resolves to wherever the LIVE cortex
+   * reads (canonical `~/.config/metafactory/cortex` on a migrated box, else the
+   * legacy `~/.config/cortex` / `~/.config/grove` trees), so a bot-pack never
+   * lands in a tree cortex ignores. An explicit `configRoot` (e.g. from
+   * `--stack` / `--config-dir` steering) still wins verbatim — only the DEFAULT
+   * gains existence-gating.
+   */
   configRoot?: string;
   /**
    * Directory where the cortex daemon writes per-agent NATS creds
@@ -43,13 +55,22 @@ export interface CortexHostOptions {
    * because NATS clients expect creds at the NATS-conventional location.
    */
   credsRoot?: string;
+  /**
+   * Injectable `{home, env}` seam for the DEFAULT config-root + creds-root
+   * resolution (hermetic tests). Ignored when `configRoot` / `credsRoot` are
+   * passed explicitly. Defaults to the real process environment.
+   */
+  seam?: CortexConfigDirSeam;
 }
 
 /** Build cortex host paths rooted at the given config root + creds root. */
 export function cortexPaths(opts?: CortexHostOptions): CortexHostPaths {
-  const configRoot = opts?.configRoot ?? join(homedir(), ".config", "cortex");
+  // DEFAULT config root is existence-gated to match the live cortex (G-18);
+  // an explicit override keeps its verbatim precedence above it.
+  const configRoot = opts?.configRoot ?? resolveCortexConfigDir(opts?.seam);
   const credsRoot =
-    opts?.credsRoot ?? join(homedir(), ".config", "nats", "creds");
+    opts?.credsRoot ??
+    join(opts?.seam?.home ?? homedir(), ".config", "nats", "creds");
   return {
     root: configRoot,
     // Cortex is not a skills host — skillsDir stays empty so a caller that

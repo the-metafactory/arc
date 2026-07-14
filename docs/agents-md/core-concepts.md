@@ -40,11 +40,30 @@ a package declares *intent* instead of hard-coding a machine-specific path:
 | `{data}` | `$XDG_DATA_HOME/metafactory/arc` (fallback `~/.local/share/metafactory/arc`) | durable app data |
 | `{state}` | `$XDG_STATE_HOME/metafactory/arc` (fallback `~/.local/state/metafactory/arc`) | mutable runtime state |
 | `{cache}` | `$XDG_CACHE_HOME/metafactory/arc` (fallback `~/.cache/metafactory/arc`) | regenerable cache |
-| `{config}` | `$XDG_CONFIG_HOME/metafactory/arc` (fallback `~/.config/metafactory/arc`) | config |
+| `{config}` | `$XDG_CONFIG_HOME/metafactory/arc` (fallback `~/.config/metafactory/arc`) | arc's own config |
+| `{cortex-config}` | the **live cortex** config dir, existence-gated (see below) | dropping agent-pack fragments where the running cortex reads |
 
 Tokens honor the same `$XDG_*` / `$PATH` resolution arc uses for its own dirs
 (#287). The identical resolver runs at install, verify, upgrade, and remove, so a
 file always lands and is cleaned up at the same computed path.
+
+**`{cortex-config}` is NOT arc's own config** (G-18, cortex#1867). arc provisions
+agent identity fragments INTO cortex's config tree, so this token resolves to
+wherever the *live cortex* reads — mirroring cortex's own `resolveConfigDir`
+precedence exactly, so arc never writes to a tree cortex ignores:
+
+1. `$CORTEX_CONFIG_DIR` (trimmed; blank ⇒ unset) — verbatim, a self-contained root.
+2. canonical `~/.config/metafactory/cortex` — if it exists.
+3. legacy flat `~/.config/cortex` — if it exists.
+4. legacy `~/.config/grove` — if it exists.
+5. canonical `~/.config/metafactory/cortex` — the fresh-host default.
+
+Note it deliberately hardcodes `.config` and does **not** consult
+`$XDG_CONFIG_HOME` (unlike `{config}`), because cortex's config-dir resolver
+doesn't either — matching it byte-for-byte is the point. An agent-pack manifest
+therefore declares `target: "{cortex-config}/agents.d/<id>.yaml"` and lands in the
+tree the running cortex actually loads, on both pre- and post-migration boxes.
+arc only RESOLVES this tree; it never moves or migrates it (cortex owns that).
 
 ### Artifact Types
 

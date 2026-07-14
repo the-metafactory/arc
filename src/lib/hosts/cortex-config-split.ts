@@ -1,6 +1,10 @@
-import { join, dirname, resolve } from "path";
+import { dirname, join, resolve } from "path";
 import { existsSync, statSync } from "fs";
 import { homedir } from "os";
+import {
+  resolveCortexConfigDir,
+  type CortexConfigDirSeam,
+} from "./cortex-config-dir.js";
 
 /**
  * Config-split stack targeting for the cortex host (arc#244 S1 / cortex#1133).
@@ -59,12 +63,20 @@ export interface ResolveCortexConfigRootOpts {
    */
   configDir?: string;
   /**
-   * Stack name (`--stack`). Resolved to `~/.config/cortex/<name>`. Mutually
-   * exclusive with `configDir`.
+   * Stack name (`--stack`). Resolved to `<cortex-config-dir>/<name>`, where
+   * `<cortex-config-dir>` is the existence-gated LIVE cortex config dir (G-18)
+   * — legacy `~/.config/cortex/<name>` on a pre-cutover box (byte-identical to
+   * before), canonical `~/.config/metafactory/cortex/<name>` on a migrated one.
+   * Mutually exclusive with `configDir`.
    */
   stack?: string;
   /** Home dir override (test isolation). Defaults to os.homedir(). */
   home?: string;
+  /**
+   * Injectable environment (test isolation) for the existence-gated stack-base
+   * resolution — honors `$CORTEX_CONFIG_DIR`. Defaults to `process.env`.
+   */
+  env?: Record<string, string | undefined>;
 }
 
 export interface ResolvedCortexConfigRoot {
@@ -139,6 +151,7 @@ export function resolveCortexConfigRoot(
   opts: ResolveCortexConfigRootOpts,
 ): ResolvedCortexConfigRoot {
   const home = opts.home ?? homedir();
+  const seam: CortexConfigDirSeam = { home, env: opts.env };
 
   if (opts.configDir != null && opts.stack != null) {
     throw new Error(
@@ -162,8 +175,13 @@ export function resolveCortexConfigRoot(
         `Invalid --stack name "${opts.stack}": must be a single directory name (no path separators).`,
       );
     }
+    // Base the stack subdir on the existence-gated LIVE cortex config dir so a
+    // `--stack` target lands where the running cortex reads (G-18). The name is
+    // still an explicit user override (validated above); only its BASE tracks
+    // the live tree — byte-identical on a pre-cutover box where the legacy
+    // `~/.config/cortex` tree exists.
     return {
-      configRoot: join(home, ".config", "cortex", name),
+      configRoot: join(resolveCortexConfigDir(seam), name),
       source: "stack",
     };
   }
