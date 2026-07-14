@@ -1,6 +1,6 @@
 import { describe, test, expect } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "fs";
-import { tmpdir, homedir } from "os";
+import { tmpdir } from "os";
 import { join } from "path";
 import {
   detectCortexLayout,
@@ -8,6 +8,7 @@ import {
   buildCortexInstallSteering,
   CORTEX_LAYOUT_MARKER,
 } from "../../src/lib/hosts/cortex-config-split.js";
+import { resolveCortexConfigDir } from "../../src/lib/hosts/cortex-config-dir.js";
 
 /**
  * S1 (arc#244 / cortex#1133) — config-split stack targeting for `arc install`.
@@ -78,9 +79,13 @@ describe("resolveCortexConfigRoot", () => {
     expect(r.source).toBe("default");
   });
 
-  test("--stack <name> → ~/.config/cortex/<name>", () => {
-    const r = resolveCortexConfigRoot({ stack: "meta-factory", home });
-    expect(r.configRoot).toBe(join(home, ".config", "cortex", "meta-factory"));
+  test("--stack <name> → <existence-gated cortex dir>/<name> (canonical on a fresh/scratch box)", () => {
+    // Scratch home has NO cortex trees on disk → the existence-gated base is the
+    // canonical `metafactory/cortex` default (matching a migrated/fresh cortex).
+    const r = resolveCortexConfigRoot({ stack: "meta-factory", home, env: {} });
+    expect(r.configRoot).toBe(
+      join(home, ".config", "metafactory", "cortex", "meta-factory"),
+    );
     expect(r.source).toBe("stack");
   });
 
@@ -119,8 +124,13 @@ describe("resolveCortexConfigRoot", () => {
   });
 
   test("--stack expands relative to home even when home is overridden", () => {
-    const r = resolveCortexConfigRoot({ stack: "work", home: "/custom/home" });
-    expect(r.configRoot).toBe("/custom/home/.config/cortex/work");
+    const r = resolveCortexConfigRoot({
+      stack: "work",
+      home: "/custom/home",
+      env: {},
+    });
+    // Scratch home → canonical base; the stack name hangs off the home override.
+    expect(r.configRoot).toBe("/custom/home/.config/metafactory/cortex/work");
   });
 
   test("rejects --config-dir together with --stack (ambiguous)", () => {
@@ -164,8 +174,47 @@ describe("resolveCortexConfigRoot", () => {
   });
 
   test("default home is the real homedir() when not overridden", () => {
+    // Deterministic regardless of the box's on-disk cortex trees: the stack
+    // base is whatever the shared existence-gated resolver returns for the real
+    // home/env, so this pins the home-defaulting wiring, not the tree state.
     const r = resolveCortexConfigRoot({ stack: "s" });
-    expect(r.configRoot).toBe(join(homedir(), ".config", "cortex", "s"));
+    expect(r.configRoot).toBe(join(resolveCortexConfigDir(), "s"));
+  });
+
+  test("--stack base is existence-gated: legacy ~/.config/cortex wins when present (byte-identical pre-cutover)", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "arc-css-stack-legacy-"));
+    try {
+      // Plant the legacy flat cortex tree, NOT the canonical one.
+      mkdirSync(join(tmp, ".config", "cortex"), { recursive: true });
+      const r = resolveCortexConfigRoot({ stack: "meta-factory", home: tmp, env: {} });
+      expect(r.configRoot).toBe(join(tmp, ".config", "cortex", "meta-factory"));
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test("--stack base is existence-gated: canonical metafactory/cortex wins when present", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "arc-css-stack-canonical-"));
+    try {
+      // Plant BOTH trees — canonical must win (matches a migrated cortex).
+      mkdirSync(join(tmp, ".config", "cortex"), { recursive: true });
+      mkdirSync(join(tmp, ".config", "metafactory", "cortex"), { recursive: true });
+      const r = resolveCortexConfigRoot({ stack: "meta-factory", home: tmp, env: {} });
+      expect(r.configRoot).toBe(
+        join(tmp, ".config", "metafactory", "cortex", "meta-factory"),
+      );
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test("--stack base honors an explicit $CORTEX_CONFIG_DIR override (verbatim base)", () => {
+    const r = resolveCortexConfigRoot({
+      stack: "meta-factory",
+      home,
+      env: { CORTEX_CONFIG_DIR: "/srv/cortex-cfg" },
+    });
+    expect(r.configRoot).toBe(join("/srv/cortex-cfg", "meta-factory"));
   });
 });
 
@@ -180,8 +229,9 @@ describe("buildCortexInstallSteering (CLI → install() wiring)", () => {
   });
 
   test("--stack → cortex.configRoot override + CORTEX_CONFIG env, creds NOT overridden", () => {
-    const s = buildCortexInstallSteering({ stack: "meta-factory", home });
-    const expected = join(home, ".config", "cortex", "meta-factory");
+    const s = buildCortexInstallSteering({ stack: "meta-factory", home, env: {} });
+    // Scratch home → existence-gated canonical base.
+    const expected = join(home, ".config", "metafactory", "cortex", "meta-factory");
     expect(s.hostOverrides).toEqual({ cortex: { configRoot: expected } });
     expect(s.cortexConfigEnv).toEqual({ CORTEX_CONFIG: expected });
     // credsRoot must NOT appear — creds stay at ~/.config/nats/creds.

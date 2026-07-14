@@ -195,7 +195,7 @@ program
   .option("--from-env", "Resolve declared secrets from the current environment instead of prompting")
   .option("--secret-backend <choice>", "Secret storage backend: auto (default) | keychain | file. 'auto' uses the chmod-600 file backend on shared/CI hosts to avoid the macOS Keychain argv-exposure window")
   .option("--config-dir <path>", "Target a config-split cortex stack by its config dir (or its pointer file). Roots cortex agents.d/ + personas/ at the stack subdir. (arc#244)")
-  .option("--stack <name>", "Target a config-split cortex stack by name (resolves to ~/.config/cortex/<name>). (arc#244)")
+  .option("--stack <name>", "Target a config-split cortex stack by name (resolves to <name> under the live cortex config dir — legacy ~/.config/cortex on a pre-cutover box, canonical ~/.config/metafactory/cortex on a migrated one). (arc#244)")
   .action(async (nameOrUrl: string, opts: { yes?: boolean; pin?: string; binDir?: string; strictSigning?: boolean; skipSecrets?: boolean; fromEnv?: boolean; secretBackend?: string; configDir?: string; stack?: string }) => {
     // Non-TTY guard: fail loud rather than silently half-installing
     if (!opts.yes && !process.stdin.isTTY) {

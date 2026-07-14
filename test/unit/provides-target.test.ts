@@ -67,3 +67,53 @@ describe("resolveProvidesTarget — {bin} token (#287)", () => {
     expect(out).toBe(join("/xdg/data", "metafactory", "arc", "x"));
   });
 });
+
+describe("resolveProvidesTarget — {cortex-config} token (G-18, cortex#1867)", () => {
+  const home = "/scratch/home";
+
+  test("{cortex-config} resolves to the existence-gated cortex config dir (canonical on a fresh box)", () => {
+    // Scratch home, empty env, no trees on disk → canonical metafactory/cortex.
+    const out = resolveProvidesTarget("{cortex-config}/agents.d/echo.yaml", {
+      home,
+      env: {},
+    });
+    expect(out).toBe(
+      join(home, ".config", "metafactory", "cortex", "agents.d", "echo.yaml"),
+    );
+  });
+
+  test("{cortex-config} honors $CORTEX_CONFIG_DIR verbatim (self-contained root)", () => {
+    const out = resolveProvidesTarget("{cortex-config}/agents.d/echo.yaml", {
+      home,
+      env: { CORTEX_CONFIG_DIR: "/srv/cortex-cfg" },
+    });
+    expect(out).toBe(join("/srv/cortex-cfg", "agents.d", "echo.yaml"));
+  });
+
+  test("{cortex-config} is DISTINCT from arc's own {config}", () => {
+    // {config} → arc's suite-app root (metafactory/arc); {cortex-config} → the
+    // LIVE cortex config dir (metafactory/cortex). They must never collide.
+    const seam = { home, env: {} };
+    const arcConfig = resolveProvidesTarget("{config}/x", seam);
+    const cortexConfig = resolveProvidesTarget("{cortex-config}/x", seam);
+    expect(arcConfig).toBe(join(home, ".config", "metafactory", "arc", "x"));
+    expect(cortexConfig).toBe(join(home, ".config", "metafactory", "cortex", "x"));
+    expect(arcConfig).not.toBe(cortexConfig);
+  });
+
+  test("{cortex-config} does NOT disturb {config} in the same target", () => {
+    const out = resolveProvidesTarget("{cortex-config}/a::{config}/b", {
+      home,
+      env: {},
+    });
+    expect(out).toBe(
+      `${join(home, ".config", "metafactory", "cortex", "a")}::${join(
+        home,
+        ".config",
+        "metafactory",
+        "arc",
+        "b",
+      )}`,
+    );
+  });
+});

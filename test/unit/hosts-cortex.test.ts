@@ -7,20 +7,47 @@ import { hostPathFor, requireHostDir } from "../../src/lib/hosts/dispatch.js";
 import type { ArtifactType } from "../../src/types.js";
 
 describe("cortexPaths", () => {
-  test("returns default paths rooted at ~/.config/cortex and ~/.config/nats/creds", () => {
-    const paths = cortexPaths();
-    const home = homedir();
-    expect(paths.root).toBe(join(home, ".config", "cortex"));
-    expect(paths.settingsPath).toBe(
-      join(home, ".config", "cortex", "cortex.yaml"),
-    );
-    expect(paths.agentsDir).toBe(
-      join(home, ".config", "cortex", "agents.d"),
-    );
-    expect(paths.personasDir).toBe(
-      join(home, ".config", "cortex", "personas"),
-    );
-    expect(paths.credsDir).toBe(join(home, ".config", "nats", "creds"));
+  test("DEFAULT config root is existence-gated: canonical metafactory/cortex on a fresh box", () => {
+    // Hermetic: a scratch home with NO cortex trees on disk + empty env → the
+    // existence-gated DEFAULT resolves to the canonical `metafactory/cortex`
+    // (matching a migrated/fresh cortex). Creds stay NATS-conventional.
+    const tmp = mkdtempSync(join(tmpdir(), "arc-cortex-default-"));
+    try {
+      const paths = cortexPaths({ seam: { home: tmp, env: {} } });
+      expect(paths.root).toBe(join(tmp, ".config", "metafactory", "cortex"));
+      expect(paths.settingsPath).toBe(
+        join(tmp, ".config", "metafactory", "cortex", "cortex.yaml"),
+      );
+      expect(paths.agentsDir).toBe(
+        join(tmp, ".config", "metafactory", "cortex", "agents.d"),
+      );
+      expect(paths.personasDir).toBe(
+        join(tmp, ".config", "metafactory", "cortex", "personas"),
+      );
+      expect(paths.credsDir).toBe(join(tmp, ".config", "nats", "creds"));
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test("DEFAULT config root is existence-gated: legacy ~/.config/cortex wins when present (byte-identical pre-cutover)", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "arc-cortex-legacy-"));
+    try {
+      mkdirSync(join(tmp, ".config", "cortex"), { recursive: true });
+      const paths = cortexPaths({ seam: { home: tmp, env: {} } });
+      expect(paths.root).toBe(join(tmp, ".config", "cortex"));
+      expect(paths.agentsDir).toBe(join(tmp, ".config", "cortex", "agents.d"));
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test("DEFAULT config root honors $CORTEX_CONFIG_DIR verbatim (self-contained root)", () => {
+    const paths = cortexPaths({
+      seam: { home: "/scratch/home", env: { CORTEX_CONFIG_DIR: "/srv/cortex-cfg" } },
+    });
+    expect(paths.root).toBe("/srv/cortex-cfg");
+    expect(paths.agentsDir).toBe(join("/srv/cortex-cfg", "agents.d"));
   });
 
   test("honors configRoot override", () => {
