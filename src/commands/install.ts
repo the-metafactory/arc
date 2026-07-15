@@ -177,6 +177,132 @@ export interface InstallResult {
 }
 
 /**
+ * Narrowed slice of {@link InstallOptions} that the package-dependency
+ * install loop needs. Lets `upgradePackage()` reuse the exact same loop
+ * without threading a full InstallOptions.
+ */
+export interface PackageDependencyContext {
+  /** arc's own state paths (configRoot, dbPath, reposDir, …). */
+  arc: ArcPaths;
+  /** Target host adapter. */
+  host: HostAdapter;
+  db: Database;
+  /** Skip capability confirmation / suppress progress chatter. */
+  yes?: boolean;
+  /** Per-host adapter overrides for multi-target / sandboxed-test installs. */
+  hostOverrides?: HostOverrides;
+}
+
+/**
+ * Install a package's arc-package dependencies (`depends_on.packages`).
+ *
+ * Extracted from the install "step 2b" loop so BOTH `install()` and
+ * `upgradePackage()` install declared package dependencies through the SAME
+ * code path. Before arc#306, `arc upgrade` pulled new code + ran `bun install`
+ * but NEVER installed newly-declared `depends_on.packages` — so an upgrade
+ * across an extraction boundary (e.g. cortex moving its platform adapters to 5
+ * first-party surface bundles) landed new code with none of its dependency
+ * bundles: no adapters + the renderer-coverage boot guard hard-failing.
+ *
+ * Behavior is preserved exactly from the original inline loop: the arc#248
+ * drop-present re-install check, stale-row removal, the recursive `install()`,
+ * and failure propagation.
+ */
+export async function installPackageDependencies(
+  manifest: ArcManifest,
+  ctx: PackageDependencyContext,
+): Promise<{ success: boolean; error?: string }> {
+  const { arc, host, db } = ctx;
+
+  if (manifest.depends_on?.packages?.length) {
+    for (const dep of manifest.depends_on.packages) {
+      if (!dep.repo) {
+        if (!ctx.yes) {
+          console.log(`  Skipping dependency ${dep.name}: no repo URL specified`);
+        }
+        continue;
+      }
+
+      // arc#248: honor the `active` skip only when the dependency's host DROP
+      // is actually present on disk. The DB can claim a dep is installed while
+      // its symlinks/fragments are gone (a prior run recorded the row but the
+      // drop never landed, or the host dir was wiped) — skipping then is a
+      // silent no-op. Re-derive the expected targets from the dep's recorded
+      // install path + its manifest (the SAME path the install would write);
+      // fall through to (re-)install when the drop is missing.
+      const existing = getSkill(db, dep.name);
+      if (existing?.status === "active") {
+        // Determine whether the dep's host drop is actually present, and — when
+        // it is NOT — WHY, so the operator notice is accurate (a missing/
+        // unreadable repo clone is a different failure than a wiped host drop).
+        let dropPresent = false;
+        let reason = "host drop missing";
+        if (!existsSync(existing.install_path)) {
+          reason = "repo clone missing";
+        } else {
+          const depManifest = await readManifest(existing.install_path);
+          if (!depManifest) {
+            reason = "manifest unreadable";
+          } else {
+            dropPresent = await artifactDropPresent({
+              type: depManifest.type,
+              manifest: depManifest,
+              arc,
+              host,
+              installDir: existing.install_path,
+              hostOverrides: ctx.hostOverrides,
+            });
+          }
+        }
+        if (dropPresent) {
+          continue; // Already installed and the drop is present.
+        }
+        // DB says active but the drop (or its repo clone / manifest) cannot be
+        // confirmed — re-install rather than skip. Surfaced unconditionally so
+        // the operator sees the accurate reason a supposedly-installed dep is
+        // being re-installed.
+        process.stderr.write(
+          `  re-installing dependency ${dep.name}: DB row active but ${reason}\n`,
+        );
+        // Drop the stale row so the recursive install's recordInstall INSERT
+        // doesn't trip the skills.name UNIQUE constraint / the standalone
+        // "already installed" guard. Discarding the row here is intentional and
+        // non-transactional: the precondition is an ALREADY-broken install
+        // (the recorded drop is gone / unverifiable), so the row was already
+        // lying; and the recursive install() below fails loudly if the re-drop
+        // fails, so we never silently leave a WORSE state than we found.
+        removeSkill(db, dep.name);
+      }
+
+      if (!ctx.yes) {
+        console.log(`\nInstalling dependency: ${dep.name} (${dep.repo})`);
+      }
+
+      const depResult = await install({
+        arc,
+        host,
+        db,
+        repoUrl: dep.repo,
+        yes: ctx.yes,
+      });
+
+      if (!depResult.success) {
+        return {
+          success: false,
+          error: `Failed to install dependency '${dep.name}': ${depResult.error}`,
+        };
+      }
+
+      if (!ctx.yes) {
+        console.log(`  ✓ ${dep.name} v${depResult.version}`);
+      }
+    }
+  }
+
+  return { success: true };
+}
+
+/**
  * Install a skill from a git repo URL.
  *
  * Flow:
@@ -343,90 +469,20 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
     return { success: false, error: brokerGate.error };
   }
 
-  // 2b. Install package dependencies (other arc packages)
-  if (manifest.depends_on?.packages?.length) {
-    for (const dep of manifest.depends_on.packages) {
-      if (!dep.repo) {
-        if (!opts.yes) {
-          console.log(`  Skipping dependency ${dep.name}: no repo URL specified`);
-        }
-        continue;
-      }
-
-      // arc#248: honor the `active` skip only when the dependency's host DROP
-      // is actually present on disk. The DB can claim a dep is installed while
-      // its symlinks/fragments are gone (a prior run recorded the row but the
-      // drop never landed, or the host dir was wiped) — skipping then is a
-      // silent no-op. Re-derive the expected targets from the dep's recorded
-      // install path + its manifest (the SAME path the install would write);
-      // fall through to (re-)install when the drop is missing.
-      const existing = getSkill(db, dep.name);
-      if (existing?.status === "active") {
-        // Determine whether the dep's host drop is actually present, and — when
-        // it is NOT — WHY, so the operator notice is accurate (a missing/
-        // unreadable repo clone is a different failure than a wiped host drop).
-        let dropPresent = false;
-        let reason = "host drop missing";
-        if (!existsSync(existing.install_path)) {
-          reason = "repo clone missing";
-        } else {
-          const depManifest = await readManifest(existing.install_path);
-          if (!depManifest) {
-            reason = "manifest unreadable";
-          } else {
-            dropPresent = await artifactDropPresent({
-              type: depManifest.type,
-              manifest: depManifest,
-              arc,
-              host,
-              installDir: existing.install_path,
-              hostOverrides: opts.hostOverrides,
-            });
-          }
-        }
-        if (dropPresent) {
-          continue; // Already installed and the drop is present.
-        }
-        // DB says active but the drop (or its repo clone / manifest) cannot be
-        // confirmed — re-install rather than skip. Surfaced unconditionally so
-        // the operator sees the accurate reason a supposedly-installed dep is
-        // being re-installed.
-        process.stderr.write(
-          `  re-installing dependency ${dep.name}: DB row active but ${reason}\n`,
-        );
-        // Drop the stale row so the recursive install's recordInstall INSERT
-        // doesn't trip the skills.name UNIQUE constraint / the standalone
-        // "already installed" guard. Discarding the row here is intentional and
-        // non-transactional: the precondition is an ALREADY-broken install
-        // (the recorded drop is gone / unverifiable), so the row was already
-        // lying; and the recursive install() below fails loudly if the re-drop
-        // fails, so we never silently leave a WORSE state than we found.
-        removeSkill(db, dep.name);
-      }
-
-      if (!opts.yes) {
-        console.log(`\nInstalling dependency: ${dep.name} (${dep.repo})`);
-      }
-
-      const depResult = await install({
-        arc,
-        host,
-        db,
-        repoUrl: dep.repo,
-        yes: opts.yes,
-      });
-
-      if (!depResult.success) {
-        return {
-          success: false,
-          error: `Failed to install dependency '${dep.name}': ${depResult.error}`,
-        };
-      }
-
-      if (!opts.yes) {
-        console.log(`  ✓ ${dep.name} v${depResult.version}`);
-      }
-    }
+  // 2b. Install package dependencies (other arc packages).
+  // Extracted to installPackageDependencies() so the SAME loop runs on both
+  // the fresh-install path (here) and the upgrade path (upgradePackage) —
+  // arc#306 closed the gap where `arc upgrade` pulled new code but never
+  // installed newly-declared `depends_on.packages`.
+  const packageDepsResult = await installPackageDependencies(manifest, {
+    arc,
+    host,
+    db,
+    yes: opts.yes,
+    hostOverrides: opts.hostOverrides,
+  });
+  if (!packageDepsResult.success) {
+    return { success: false, error: packageDepsResult.error };
   }
 
   // 2c. Compat surfacing (arc#284) — WARN, not hard-fail (burn-in posture,

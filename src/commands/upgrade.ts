@@ -6,7 +6,8 @@ import type { ArcPaths, HostAdapter, RulesTemplate } from "../types.js";
 import type { Database } from "bun:sqlite";
 import { listSkills, getSkill, listByLibrary } from "../lib/db.js";
 import { readManifest, readLibraryArtifacts } from "../lib/manifest.js";
-import { installSingleArtifact } from "./install.js";
+import YAML from "yaml";
+import { installSingleArtifact, installPackageDependencies } from "./install.js";
 import { createSymlink } from "../lib/symlinks.js";
 import { resolveProvidesTarget } from "../lib/provides-target.js";
 import { findGitRoot } from "../lib/paths.js";
@@ -58,6 +59,52 @@ function compareSemver(a: string, b: string): number {
 }
 
 /**
+ * The version advertised by a git-cloned package's REMOTE default branch — the
+ * source of truth for a repo-first (not-on-registry) package like cortex, which
+ * is distributed straight from GitHub, NOT the meta-factory.ai registry.
+ *
+ * arc#305: `checkUpgrades` used to read the version from the package's LOCAL
+ * clone for git-cloned packages — i.e. it compared the installed version
+ * against itself, so a version bump pushed to GitHub was never detected and
+ * `arc upgrade <name>` reported "already at X" without ever fetching. The
+ * available version for a git-cloned package lives on the remote, so fetch it
+ * and read the manifest at the upstream ref.
+ *
+ * Returns null on ANY failure (not a git repo, no upstream, fetch/auth failure,
+ * missing/unparseable remote `arc-manifest.yaml`) — the caller then falls back
+ * to the local manifest, preserving prior behaviour.
+ */
+function readRemoteManifestVersion(installPath: string): string | null {
+  const gitRoot = findGitRoot(installPath);
+  if (!gitRoot || !existsSync(join(gitRoot, ".git"))) return null;
+  const opts = { cwd: gitRoot, stdout: "pipe" as const, stderr: "pipe" as const };
+  // Fetch remote refs (no working-tree change). Non-fatal on failure.
+  if (Bun.spawnSync(["git", "fetch", "--quiet"], opts).exitCode !== 0) return null;
+  // Upstream of the checked-out branch (e.g. origin/main); fall back to
+  // origin/HEAD when no upstream is configured.
+  let upstream = Bun.spawnSync(
+    ["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+    opts,
+  ).stdout.toString().trim();
+  if (!upstream) {
+    upstream = Bun.spawnSync(["git", "rev-parse", "--abbrev-ref", "origin/HEAD"], opts)
+      .stdout.toString()
+      .trim();
+  }
+  if (!upstream) return null;
+  const show = Bun.spawnSync(["git", "show", `${upstream}:arc-manifest.yaml`], opts);
+  if (show.exitCode !== 0) return null;
+  try {
+    const parsed = YAML.parse(show.stdout.toString()) as { version?: unknown } | null;
+    return parsed && typeof parsed.version === "string" ? parsed.version : null;
+  } catch (_err) {
+    // Unparseable remote manifest → treat as "no remote version"; caller falls
+    // back to the local manifest. Non-fatal.
+    return null;
+  }
+}
+
+/**
  * Check which installed packages have newer versions available.
  *
  * @param host Unused today; threaded for signature consistency with
@@ -105,16 +152,29 @@ export async function checkUpgrades(
       }
     }
 
-    // Check the actual cloned repo's manifest for current version
+    // Resolve the AVAILABLE version. For a git-cloned (repo-first, non-registry)
+    // package the source of truth is the REMOTE default branch (GitHub), not the
+    // local clone — reading the clone would compare the installed version to
+    // itself and never see a pushed bump (arc#305). Registry packages already
+    // resolved registryVersion above; fall back to the local manifest only when
+    // the remote read fails (preserving prior behaviour / offline).
     if (existsSync(skill.install_path)) {
-      const manifest = await readManifest(skill.install_path);
-      if (manifest) {
-        result.repoVersion = manifest.version;
+      if (!ref) {
+        result.repoVersion =
+          readRemoteManifestVersion(skill.install_path) ??
+          (await readManifest(skill.install_path))?.version ??
+          null;
+      } else {
+        const manifest = await readManifest(skill.install_path);
+        if (manifest) {
+          result.repoVersion = manifest.version;
+        }
       }
     }
 
     // Determine if upgrade is available
-    // Priority: registry version (remote truth) > repo version (local clone)
+    // Priority: registry version (remote truth) > repo version (remote default
+    // branch for git-cloned; local manifest fallback).
     const availableVersion = result.registryVersion ?? result.repoVersion;
     if (availableVersion && compareSemver(skill.version, availableVersion) < 0) {
       result.upgradable = true;
@@ -396,6 +456,31 @@ export async function upgradePackage(
       name,
       oldVersion,
       error: `bun install failed for ${name} (node_modules incomplete): ${nodeDepsResult.error ?? "unknown error"}` + note,
+    };
+  }
+
+  // Install package dependencies (arc#306) — parity with fresh install's
+  // step 2b. `arc upgrade` previously pulled new code + ran `bun install`
+  // but NEVER installed newly-declared `depends_on.packages`. So an upgrade
+  // across an extraction boundary (cortex moving its platform adapters to 5
+  // first-party surface bundles) landed new code with NONE of its dependency
+  // bundles — no adapters + the renderer-coverage boot guard hard-failing.
+  // Runs the SAME shared loop install() uses, AFTER `bun install` (so the
+  // package's own node deps are present) and BEFORE postupgrade + commit (so
+  // the bundles are on disk before any postupgrade hook / DB version bump).
+  // On failure: roll the code pull back so DB + on-disk stay consistent.
+  const packageDepsResult = await installPackageDependencies(manifest, {
+    arc,
+    host,
+    db,
+  });
+  if (!packageDepsResult.success) {
+    const note = rollback();
+    return {
+      success: false,
+      name,
+      oldVersion,
+      error: (packageDepsResult.error ?? "dependency install failed") + note,
     };
   }
 
