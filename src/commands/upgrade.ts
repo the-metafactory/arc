@@ -59,6 +59,93 @@ function compareSemver(a: string, b: string): number {
 }
 
 /**
+ * The highest semver release tag in a git checkout, or null when there are
+ * none. Tags may be `vX.Y.Z` or `X.Y.Z`; only semver-shaped release tags are
+ * considered (pre-release / build-metadata tags are ignored — arc tracks
+ * releases). Independent of `git tag`'s version-sort availability: candidates
+ * are re-ranked with compareSemver after the v-prefix is normalised.
+ */
+function latestSemverTag(gitCwd: string): string | null {
+  const list = Bun.spawnSync(["git", "tag", "--list", "--sort=-v:refname"], {
+    cwd: gitCwd,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (list.exitCode !== 0) return null;
+  const semverTags = list.stdout
+    .toString()
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .filter((t) => /^v?\d+\.\d+\.\d+$/.test(t));
+  if (!semverTags.length) return null;
+  semverTags.sort((a, b) => compareSemver(b.replace(/^v/, ""), a.replace(/^v/, "")));
+  return semverTags[0];
+}
+
+/**
+ * Advance a detached-HEAD git checkout to the latest semver release tag.
+ *
+ * arc#272: `git pull --ff-only` requires a checked-out branch with an upstream;
+ * a tag-checkout install (`arc install <git-url> --pin <tag>`, or a plain direct
+ * install that checks out a release tag) sits on a detached HEAD and can never
+ * satisfy that ("You are not currently on a branch"). arc tracks releases, not
+ * main, so the upgrade target is the highest semver tag on the remote. Fetches
+ * tags, resolves the latest, and — only when it differs from the tag(s) already
+ * at HEAD — checks it out. When HEAD is already at the latest tag it leaves the
+ * checkout untouched; the caller's downstream version compare then reports
+ * "already up to date", matching the fast-forward-pull path's no-op UX.
+ */
+function advanceDetachedToLatestTag(
+  gitCwd: string,
+): { success: boolean; error?: string } {
+  // Fetch remote tags (no working-tree change).
+  const fetch = Bun.spawnSync(["git", "fetch", "--tags", "origin"], {
+    cwd: gitCwd,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (fetch.exitCode !== 0) {
+    return { success: false, error: `git fetch --tags failed: ${fetch.stderr.toString().trim()}` };
+  }
+
+  const latest = latestSemverTag(gitCwd);
+  if (!latest) {
+    return {
+      success: false,
+      error:
+        "no semver release tag found; cannot resolve an upgrade target for a detached-HEAD (tag-checkout) install",
+    };
+  }
+
+  // Tags pointing at the current HEAD. When the latest tag already points here,
+  // there is nothing to advance to — leave the checkout as-is.
+  const pointsAt = Bun.spawnSync(["git", "tag", "--points-at", "HEAD"], {
+    cwd: gitCwd,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const currentTags =
+    pointsAt.exitCode === 0
+      ? pointsAt.stdout.toString().trim().split("\n").filter(Boolean)
+      : [];
+  if (currentTags.includes(latest)) {
+    return { success: true };
+  }
+
+  // Check out the latest release tag. Suppress the detached-HEAD advisory: we
+  // intentionally stay on a tag, the same posture install pins to.
+  const checkout = Bun.spawnSync(
+    ["git", "-c", "advice.detachedHead=false", "checkout", latest],
+    { cwd: gitCwd, stdout: "pipe", stderr: "pipe" },
+  );
+  if (checkout.exitCode !== 0) {
+    return { success: false, error: `git checkout ${latest} failed: ${checkout.stderr.toString().trim()}` };
+  }
+  return { success: true };
+}
+
+/**
  * The version advertised by a git-cloned package's REMOTE default branch — the
  * source of truth for a repo-first (not-on-registry) package like cortex, which
  * is distributed straight from GitHub, NOT the meta-factory.ai registry.
@@ -340,16 +427,41 @@ export async function upgradePackage(
     });
     const preHeadSha = preHeadProbe.exitCode === 0 ? preHeadProbe.stdout.toString().trim() : null;
 
-    // git pull in the cloned repo
-    const pullResult = Bun.spawnSync(["git", "pull", "--ff-only"], {
-      cwd: gitCwd,
-      stdout: "pipe",
-      stderr: "pipe",
-    });
+    // A tag-checkout install sits on a detached HEAD with no branch + no
+    // upstream, so `git pull --ff-only` can never succeed ("You are not
+    // currently on a branch") — the failing class in arc#272, hit by BOTH
+    // `arc install <git-url> --pin <tag>` and plain direct installs that check
+    // out a release tag. `git symbolic-ref -q HEAD` exits non-zero iff HEAD is
+    // detached; use it to branch the upgrade mechanic.
+    const onBranch =
+      Bun.spawnSync(["git", "symbolic-ref", "-q", "HEAD"], {
+        cwd: gitCwd,
+        stdout: "pipe",
+        stderr: "pipe",
+      }).exitCode === 0;
 
-    if (pullResult.exitCode !== 0) {
-      const stderr = pullResult.stderr.toString().trim();
-      return { success: false, name, oldVersion: skill.version, error: `git pull failed: ${stderr}` };
+    if (onBranch) {
+      // Branch-tracking install: keep the existing fast-forward pull unchanged.
+      const pullResult = Bun.spawnSync(["git", "pull", "--ff-only"], {
+        cwd: gitCwd,
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+
+      if (pullResult.exitCode !== 0) {
+        const stderr = pullResult.stderr.toString().trim();
+        return { success: false, name, oldVersion: skill.version, error: `git pull failed: ${stderr}` };
+      }
+    } else {
+      // Detached-HEAD (tag-checkout) install: `git pull` is not the right
+      // primitive. arc tracks releases, not main, so advance to the latest
+      // semver release tag (arc#272). A no-op when HEAD is already at the
+      // latest tag — downstream then reports "already up to date", matching
+      // the fast-forward-pull path's UX.
+      const advance = advanceDetachedToLatestTag(gitCwd);
+      if (!advance.success) {
+        return { success: false, name, oldVersion: skill.version, error: advance.error ?? "detached-HEAD upgrade failed" };
+      }
     }
 
     rollback = () => {
