@@ -405,6 +405,45 @@ describe("upgradePackage — detached HEAD (tag-checkout install, arc#272)", () 
       .get("BranchTracking") as { version: string };
     expect(row.version).toBe("1.1.0");
   });
+
+  test("never downgrades: detached ahead of all tags leaves the checkout untouched (PR #308 review)", async () => {
+    // The reviewer's edge on PR #308: HEAD detached somewhere that is NOT the
+    // max tag but is AHEAD of every tag — e.g. a hand-checked-out SHA, or the
+    // install's tag deleted afterwards. Pre-guard, advanceDetachedToLatestTag
+    // would check out the (older) max tag, leaving disk behind the DB while
+    // the downstream version compare reports "already up to date".
+    const repo = await createMockSkillRepo(env.root, { name: "PinnedAhead", version: "1.0.0" });
+    git(repo.path, "tag", "v1.0.0");
+    await install({
+      arc: env.arc, host: env.host, db: env.db,
+      repoUrl: repo.url, yes: true, pinnedVersion: "1.0.0",
+    });
+
+    // Advance the origin past the tag WITHOUT tagging (2.0.0 exists only as a
+    // branch commit), then hand-advance the clone onto that untagged SHA and
+    // record 2.0.0 in the DB — the "ahead of all tags" state.
+    await bumpAndTag(repo.path, "1.0.0", "2.0.0");
+    git(repo.path, "tag", "-d", "v2.0.0"); // bumpAndTag tags; delete → untagged head commit
+    const installPath = getSkill(env.db, "PinnedAhead")!.install_path;
+    git(installPath, "fetch", "origin");
+    git(installPath, "-c", "advice.detachedHead=false", "checkout", "origin/HEAD");
+    env.db.prepare("UPDATE skills SET version = ? WHERE name = ?").run("2.0.0", "PinnedAhead");
+    expect(isDetached(installPath)).toBe(true);
+    const headBefore = git(installPath, "rev-parse", "HEAD");
+
+    // Latest tag on the origin is v1.0.0 — OLDER than the recorded 2.0.0.
+    const result = await upgradePackage(env.db, env.arc, env.host, "PinnedAhead");
+    expect(result.success).toBe(true);
+
+    // The guard must return before any working-tree mutation: same commit,
+    // still detached, DB version unchanged — no silent downgrade.
+    expect(git(installPath, "rev-parse", "HEAD")).toBe(headBefore);
+    expect(isDetached(installPath)).toBe(true);
+    const row = env.db
+      .prepare("SELECT version FROM skills WHERE name = ?")
+      .get("PinnedAhead") as { version: string };
+    expect(row.version).toBe("2.0.0");
+  });
 });
 
 describe("formatCheckResults", () => {

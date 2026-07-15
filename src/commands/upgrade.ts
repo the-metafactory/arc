@@ -98,6 +98,7 @@ function latestSemverTag(gitCwd: string): string | null {
  */
 function advanceDetachedToLatestTag(
   gitCwd: string,
+  installedVersion?: string,
 ): { success: boolean; error?: string } {
   // Fetch remote tags (no working-tree change).
   const fetch = Bun.spawnSync(["git", "fetch", "--tags", "origin"], {
@@ -116,6 +117,20 @@ function advanceDetachedToLatestTag(
       error:
         "no semver release tag found; cannot resolve an upgrade target for a detached-HEAD (tag-checkout) install",
     };
+  }
+
+  // Explicit no-op guard BEFORE any working-tree mutation (PR #308 review):
+  // when the recorded installed version is already >= the latest release tag,
+  // there is nothing to advance to — return success without touching disk.
+  // This keys off the DB-recorded version rather than tags at HEAD, so it also
+  // covers a hand-checked-out SHA ahead of all tags and a tag deleted after
+  // install — cases where the points-at check below sees no tags and the old
+  // code would have checked out an OLDER tag, leaving disk behind the DB.
+  if (
+    installedVersion &&
+    compareSemver(latest.replace(/^v/, ""), installedVersion.replace(/^v/, "")) <= 0
+  ) {
+    return { success: true };
   }
 
   // Tags pointing at the current HEAD. When the latest tag already points here,
@@ -458,7 +473,7 @@ export async function upgradePackage(
       // semver release tag (arc#272). A no-op when HEAD is already at the
       // latest tag — downstream then reports "already up to date", matching
       // the fast-forward-pull path's UX.
-      const advance = advanceDetachedToLatestTag(gitCwd);
+      const advance = advanceDetachedToLatestTag(gitCwd, skill.version);
       if (!advance.success) {
         return { success: false, name, oldVersion: skill.version, error: advance.error ?? "detached-HEAD upgrade failed" };
       }
