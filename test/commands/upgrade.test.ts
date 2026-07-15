@@ -110,6 +110,42 @@ describe("checkUpgrades", () => {
     const results = await checkUpgrades(env.db, env.arc, env.host);
     expect(results[0].upgradable).toBe(false);
   });
+
+  test("detects a remote version bump for a git-cloned repo-first package (arc#305)", async () => {
+    // Repo-first (git-cloned, NOT on a registry, e.g. cortex): the AVAILABLE
+    // version lives on the REMOTE, not the local clone. Previously checkUpgrades
+    // read the clone's own manifest → compared the installed version to itself
+    // → never detected a pushed bump. Now it fetches the remote.
+    const repo = await createMockSkillRepo(env.root, { name: "RepoFirst", version: "1.0.0" });
+    await install({ arc: env.arc, host: env.host, db: env.db, repoUrl: repo.url, yes: true });
+
+    // Bump the ORIGIN's manifest + commit. No registry source configured.
+    const manifestPath = join(repo.path, "arc-manifest.yaml");
+    const content = await Bun.file(manifestPath).text();
+    await writeFile(manifestPath, content.replace("version: 1.0.0", "version: 1.1.0"));
+    Bun.spawnSync(["git", "add", "."], { cwd: repo.path, stdout: "pipe", stderr: "pipe" });
+    Bun.spawnSync(
+      ["git", "-c", "user.name=Test", "-c", "user.email=test@test.com", "commit", "-m", "bump"],
+      { cwd: repo.path, stdout: "pipe", stderr: "pipe" },
+    );
+
+    const results = await checkUpgrades(env.db, env.arc, env.host);
+    const r = results.find((x) => x.name === "RepoFirst");
+    expect(r?.installedVersion).toBe("1.0.0");
+    expect(r?.registryVersion).toBeNull(); // not on any registry
+    expect(r?.repoVersion).toBe("1.1.0"); // read from the REMOTE, not the stale clone
+    expect(r?.upgradable).toBe(true);
+  });
+
+  test("no false-positive when a git-cloned repo-first remote has no new version (arc#305)", async () => {
+    const repo = await createMockSkillRepo(env.root, { name: "RepoFirstCurrent", version: "1.0.0" });
+    await install({ arc: env.arc, host: env.host, db: env.db, repoUrl: repo.url, yes: true });
+    // No bump, no registry → remote version == installed → not upgradable.
+    const results = await checkUpgrades(env.db, env.arc, env.host);
+    const r = results.find((x) => x.name === "RepoFirstCurrent");
+    expect(r?.repoVersion).toBe("1.0.0");
+    expect(r?.upgradable).toBe(false);
+  });
 });
 
 describe("upgradePackage", () => {
