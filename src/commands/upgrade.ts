@@ -7,7 +7,7 @@ import type { Database } from "bun:sqlite";
 import { listSkills, getSkill, listByLibrary } from "../lib/db.js";
 import { readManifest, readLibraryArtifacts } from "../lib/manifest.js";
 import YAML from "yaml";
-import { installSingleArtifact } from "./install.js";
+import { installSingleArtifact, installPackageDependencies } from "./install.js";
 import { createSymlink } from "../lib/symlinks.js";
 import { resolveProvidesTarget } from "../lib/provides-target.js";
 import { findGitRoot } from "../lib/paths.js";
@@ -456,6 +456,31 @@ export async function upgradePackage(
       name,
       oldVersion,
       error: `bun install failed for ${name} (node_modules incomplete): ${nodeDepsResult.error ?? "unknown error"}` + note,
+    };
+  }
+
+  // Install package dependencies (arc#306) — parity with fresh install's
+  // step 2b. `arc upgrade` previously pulled new code + ran `bun install`
+  // but NEVER installed newly-declared `depends_on.packages`. So an upgrade
+  // across an extraction boundary (cortex moving its platform adapters to 5
+  // first-party surface bundles) landed new code with NONE of its dependency
+  // bundles — no adapters + the renderer-coverage boot guard hard-failing.
+  // Runs the SAME shared loop install() uses, AFTER `bun install` (so the
+  // package's own node deps are present) and BEFORE postupgrade + commit (so
+  // the bundles are on disk before any postupgrade hook / DB version bump).
+  // On failure: roll the code pull back so DB + on-disk stay consistent.
+  const packageDepsResult = await installPackageDependencies(manifest, {
+    arc,
+    host,
+    db,
+  });
+  if (!packageDepsResult.success) {
+    const note = rollback();
+    return {
+      success: false,
+      name,
+      oldVersion,
+      error: (packageDepsResult.error ?? "dependency install failed") + note,
     };
   }
 

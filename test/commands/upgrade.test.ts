@@ -10,6 +10,7 @@ import {
   formatUpgradeResults,
 } from "../../src/commands/upgrade.js";
 import { saveSources } from "../../src/lib/sources.js";
+import { getSkill } from "../../src/lib/db.js";
 import { mkdir, readFile, rm, writeFile } from "fs/promises";
 import { existsSync, readFileSync, writeFileSync } from "fs";
 import { join } from "path";
@@ -861,5 +862,118 @@ describe("upgradeLibrary", () => {
     expect(results).toHaveLength(1);
     expect(results[0].success).toBe(false);
     expect(results[0].error).toContain("No artifacts installed");
+  });
+});
+
+/**
+ * arc#306 — `arc upgrade` must install `depends_on.packages` too.
+ *
+ * The bug: on a fresh `arc install`, step 2b installs a package's declared
+ * `depends_on.packages`. `arc upgrade` pulled new code + ran `bun install` but
+ * NEVER installed newly-declared package dependencies — so an upgrade across an
+ * extraction boundary (cortex moving its platform adapters to 5 first-party
+ * surface bundles) landed new code with none of its dependency bundles: no
+ * adapters + the renderer-coverage boot guard hard-failing.
+ *
+ * The fix extracts the step-2b loop into installPackageDependencies() and calls
+ * it from BOTH install() and upgradePackage() so the two paths can't drift.
+ */
+describe("upgradePackage — installs depends_on.packages (arc#306)", () => {
+  /**
+   * Rewrite a git-cloned mock repo's manifest: optionally bump the version and
+   * add `depends_on.packages` entries, then commit so `git pull` picks it up.
+   */
+  async function bumpAndAddPackageDeps(
+    repoPath: string,
+    opts: { toVersion?: string; packages?: { name: string; repo: string }[] },
+  ): Promise<void> {
+    const manifestPath = join(repoPath, "arc-manifest.yaml");
+    const parsed = YAML.parse(await Bun.file(manifestPath).text()) as Record<string, unknown>;
+    if (opts.toVersion) parsed.version = opts.toVersion;
+    if (opts.packages) {
+      const dependsOn = (parsed.depends_on ?? {}) as Record<string, unknown>;
+      dependsOn.packages = opts.packages;
+      parsed.depends_on = dependsOn;
+    }
+    await writeFile(manifestPath, YAML.stringify(parsed));
+    Bun.spawnSync(["git", "add", "."], { cwd: repoPath, stdout: "pipe", stderr: "pipe" });
+    Bun.spawnSync(
+      ["git", "-c", "user.name=Test", "-c", "user.email=test@test.com", "commit", "-m", "bump + deps"],
+      { cwd: repoPath, stdout: "pipe", stderr: "pipe" },
+    );
+  }
+
+  test("install path still installs declared depends_on.packages (no step-2b regression)", async () => {
+    // Dependency bundle B (plain, no deps of its own).
+    const depB = await createMockSkillRepo(env.root, { name: "DepB", version: "1.0.0" });
+    // Package A declares depends_on.packages: [DepB] at install time.
+    const pkgA = await createMockSkillRepo(env.root, { name: "PkgA", version: "1.0.0" });
+    await bumpAndAddPackageDeps(pkgA.path, { packages: [{ name: "DepB", repo: depB.url }] });
+
+    const result = await install({ arc: env.arc, host: env.host, db: env.db, repoUrl: pkgA.url, yes: true });
+    expect(result.success).toBe(true);
+
+    // The dependency was installed transitively by step 2b (via the shared helper).
+    const b = getSkill(env.db, "DepB");
+    expect(b?.status).toBe("active");
+    expect(existsSync(b!.install_path)).toBe(true);
+  });
+
+  test("upgrade installs a newly-declared depends_on.packages bundle (the regression-proof)", async () => {
+    // A installed at v1.0.0 with NO package dependencies.
+    const pkgA = await createMockSkillRepo(env.root, { name: "UpgA", version: "1.0.0" });
+    await install({ arc: env.arc, host: env.host, db: env.db, repoUrl: pkgA.url, yes: true });
+
+    // The dependency bundle does not exist yet in the DB.
+    expect(getSkill(env.db, "UpgDepB")).toBeNull();
+
+    // A new dependency bundle B is created, and A's source is bumped to v1.1.0
+    // AND now declares depends_on.packages: [B] — exactly the extraction-era
+    // shape (new code + a new dependency the installed version never had).
+    const depB = await createMockSkillRepo(env.root, { name: "UpgDepB", version: "1.0.0" });
+    await bumpAndAddPackageDeps(pkgA.path, {
+      toVersion: "1.1.0",
+      packages: [{ name: "UpgDepB", repo: depB.url }],
+    });
+
+    const result = await upgradePackage(env.db, env.arc, env.host, "UpgA");
+    expect(result.success).toBe(true);
+    expect(result.newVersion).toBe("1.1.0");
+
+    // The core assertion: the newly-declared dependency is now installed.
+    const b = getSkill(env.db, "UpgDepB");
+    expect(b?.status).toBe("active");
+    expect(existsSync(b!.install_path)).toBe(true);
+  });
+
+  test("upgrade with an unresolvable dependency fails and rolls the code pull back", async () => {
+    const pkgA = await createMockSkillRepo(env.root, { name: "RollbackA", version: "1.0.0" });
+    await install({ arc: env.arc, host: env.host, db: env.db, repoUrl: pkgA.url, yes: true });
+
+    const installedA = getSkill(env.db, "RollbackA");
+    expect(installedA?.version).toBe("1.0.0");
+
+    // Bump to 1.1.0 AND declare a dependency whose repo cannot be cloned.
+    await bumpAndAddPackageDeps(pkgA.path, {
+      toVersion: "1.1.0",
+      packages: [{ name: "MissingDep", repo: join(env.root, "does-not-exist-repo") }],
+    });
+
+    const result = await upgradePackage(env.db, env.arc, env.host, "RollbackA");
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("Failed to install dependency 'MissingDep'");
+
+    // DB version is unchanged — the failed upgrade did not record success.
+    expect(getSkill(env.db, "RollbackA")?.version).toBe("1.0.0");
+
+    // The on-disk code pull was rolled back: the installed clone's manifest
+    // reads the OLD version again (git reset --hard to the pre-pull HEAD).
+    const revertedManifest = YAML.parse(
+      await Bun.file(join(installedA!.install_path, "arc-manifest.yaml")).text(),
+    ) as { version: string };
+    expect(revertedManifest.version).toBe("1.0.0");
+
+    // The bogus dependency was never recorded.
+    expect(getSkill(env.db, "MissingDep")).toBeNull();
   });
 });
