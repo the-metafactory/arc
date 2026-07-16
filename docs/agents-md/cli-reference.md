@@ -14,6 +14,7 @@ arc info <name>               # Show details, capabilities, release notes
 arc audit                     # Audit capability surface (summary + cross-tier warnings)
 arc audit --verbose           # Full pairwise capability combination list
 arc verify <name>             # Verify manifest integrity
+arc validate [path]           # Strictly validate an arc/v1 manifest (default: cwd) — exit 1 with one line per violation
 ```
 
 ### Lifecycle

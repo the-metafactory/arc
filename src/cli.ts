@@ -15,6 +15,7 @@ import {
   secretsRemove,
 } from "./commands/secrets.js";
 import { readManifest, readManifestVersionSync, MANIFEST_FILENAME } from "./lib/manifest.js";
+import { validate as validateManifest } from "./commands/validate.js";
 import { resolveSecretBackend, type SecretBackend, type SecretBackendChoice } from "./lib/secrets.js";
 import { list, formatList, formatListJson } from "./commands/list.js";
 import { info, formatInfo, formatInfoJson } from "./commands/info.js";
@@ -654,6 +655,21 @@ program
     const result = await verify(db, paths, host, name);
     console.log(formatVerify(result));
     db.close();
+  });
+
+program
+  .command("validate [path]")
+  .description("Strictly validate an arc/v1 manifest against the skill-repo migration contract (arc#317)")
+  .action(async (path?: string) => {
+    const result = await validateManifest(path ?? process.cwd());
+    for (const line of result.lines) {
+      if (result.exitCode === 0) {
+        console.log(line);
+      } else {
+        console.error(line);
+      }
+    }
+    process.exit(result.exitCode);
   });
 
 // ── Config / doctor commands ─────────────────────────────────
