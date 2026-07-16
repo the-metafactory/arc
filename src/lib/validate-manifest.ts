@@ -47,13 +47,20 @@ const REQUIRED_SCHEMA = "arc/v1";
 const REJECTED_SCHEMA = "pai/v1";
 
 /**
- * Package types strict mode accepts. Union of the canonical `ArcManifest.type`
- * set (with `action` added — arc#95) plus `bundle` from spec §4.1's skill-repo
- * class-choice rule (`type: skill | bundle`).
+ * Package types strict mode accepts — the canonical `ArcManifest.type` set arc
+ * can actually install (with `action` — arc#95). These MUST stay in lockstep
+ * with the installer's supported set (`INSTALLABLE_ARTIFACT_TYPES` in
+ * artifact-installer.ts); a parity test asserts it so they can't drift (arc#334).
+ *
+ * `bundle` is deliberately NOT here (arc#334, decision b): the installer has no
+ * `bundle` case, so accepting it here let a manifest validate green yet throw at
+ * `arc install`. `bundle` is a REPO-NAME class (metafactory-bundle-<name>), not
+ * a manifest type — bundle-class repos declare an installable type (the
+ * class-choice rule maps them to skill/tool; e.g. metafactory-bundle-discord is
+ * `type: skill`, metafactory-bundle-content-filter is `type: tool`).
  */
-const VALID_TYPES = [
+export const VALID_TYPES = [
   "skill",
-  "bundle",
   "system",
   "tool",
   "agent",

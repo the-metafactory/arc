@@ -1,7 +1,7 @@
 schema: arc/v1
 name: bundle-discord
 version: 0.1.0
-type: bundle
+type: skill
 tier: community
 description: Discord bundle carrying the rejected plural authors list shape.
 license: Apache-2.0

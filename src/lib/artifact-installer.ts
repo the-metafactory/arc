@@ -29,6 +29,37 @@ import { isDarwinLaunchdHost } from "./hosts/darwin-launchd.js";
 import { isLinuxSystemdHost } from "./hosts/linux-systemd.js";
 
 /**
+ * The complete set of manifest `type`s arc can install (arc#334). This is the
+ * INSTALLER side of the validator↔installer type-set contract: the strict
+ * validator's `VALID_TYPES` (validate-manifest.ts) must equal this set exactly,
+ * asserted by a parity test so the two can't drift again (the drift that let
+ * `type: bundle` validate green yet throw at install).
+ *
+ * It is the union of:
+ *   - every case handled by `planArtifactSymlinks` below — skill, system, tool,
+ *     agent, prompt, component, pipeline, rules, action; and
+ *   - the two types intercepted earlier, in `readManifest` (manifest.ts), which
+ *     never reach `planArtifactSymlinks` — library and process.
+ *
+ * A new installable type means: add a `planArtifactSymlinks` case (or a
+ * readManifest special-case) AND add it here AND to `VALID_TYPES`. `bundle` is
+ * deliberately absent — it is a repo-name class, not a manifest type.
+ */
+export const INSTALLABLE_ARTIFACT_TYPES = [
+  "skill",
+  "system",
+  "tool",
+  "agent",
+  "prompt",
+  "component",
+  "pipeline",
+  "rules",
+  "action",
+  "library",
+  "process",
+] as const;
+
+/**
  * Maps an artifact type to its conventional source subdirectory within a cloned repo.
  *
  * - rules, component, tool -> baseDir (no subdirectory)

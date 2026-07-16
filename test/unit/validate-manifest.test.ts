@@ -109,8 +109,8 @@ describe("type rule (arc#95: 'action' is valid)", () => {
   test("pass: type action (arc#95)", () => {
     expect(hasField(validateStrictManifest(withManifest({ type: "action" })), "type")).toBe(false);
   });
-  test("pass: type bundle (spec §4.1)", () => {
-    expect(hasField(validateStrictManifest(withManifest({ type: "bundle" })), "type")).toBe(false);
+  test("fail: type bundle rejected (arc#334, decision b — bundle is a repo-name class, not a manifest type)", () => {
+    expect(hasField(validateStrictManifest(withManifest({ type: "bundle" })), "type")).toBe(true);
   });
   test("fail: unknown type", () => {
     expect(hasField(validateStrictManifest(withManifest({ type: "widget" })), "type")).toBe(true);

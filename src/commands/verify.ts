@@ -68,8 +68,14 @@ export async function verify(
     passed: manifest !== null,
   });
 
-  // Check 3: Skill symlink valid (only for active skills)
-  if (skill.status === "active") {
+  // Check 3: Skill symlink valid — only for active packages that actually ship
+  // a skill. The installer creates the ~/.claude/skills/<name> link only for
+  // skill/system types (planArtifactSymlinks); a type:tool package (e.g. a
+  // CLI + hooks bundle like content-filter) has no skill link, so running this
+  // check unconditionally reported a spurious ❌ (arc#334). Gate on the manifest
+  // type so verify checks only what install placed.
+  const providesSkill = manifest?.type === "skill" || manifest?.type === "system";
+  if (skill.status === "active" && providesSkill) {
     const skillLink = join(host.paths.skillsDir, name);
     const linkValid = await isValidSymlink(skillLink);
     checks.push({

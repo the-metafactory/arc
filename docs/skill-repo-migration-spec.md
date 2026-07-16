@@ -82,7 +82,7 @@ schema: arc/v1                      # REQUIRED literal; pai/v1 and absent are mi
 name: <repo-name-minus-prefix>      # lowercase-hyphenated; MUST derive from repo name (see 4.2)
 # namespace: <@scope>               # OPTIONAL — see "Namespace is not identity" below
 version: <semver, from 0.1.0>
-type: skill | bundle                # bundle only when class-choice rule says bundle
+type: skill | tool | agent | prompt | component | pipeline | action | rules | system | library | process  # an INSTALLABLE type (arc#334). NOT `bundle`: that is a repo-name class (metafactory-bundle-<name>), not a manifest type — the class-choice rule maps a bundle-class repo to an installable type (skill/tool).
 tier: official | community | custom # one vocabulary; registry stops reusing these words for trust
 description: <one line>
 license: Apache-2.0
