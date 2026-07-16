@@ -2,7 +2,7 @@ import { describe, test, expect } from "bun:test";
 import YAML from "yaml";
 import {
   sectionForType,
-  tierToRegistryType,
+  tierToTrust,
   manifestDerivedFields,
   mergeEntry,
   generateRegistry,
@@ -48,13 +48,13 @@ describe("sectionForType", () => {
   });
 });
 
-describe("tierToRegistryType", () => {
+describe("tierToTrust", () => {
   test("community stays community; everything else collapses to custom", () => {
-    expect(tierToRegistryType("community")).toBe("community");
-    expect(tierToRegistryType("custom")).toBe("custom");
-    expect(tierToRegistryType("official")).toBe("custom");
-    expect(tierToRegistryType("core")).toBe("custom");
-    expect(tierToRegistryType(undefined)).toBe("custom");
+    expect(tierToTrust("community")).toBe("community");
+    expect(tierToTrust("custom")).toBe("custom");
+    expect(tierToTrust("official")).toBe("custom");
+    expect(tierToTrust("core")).toBe("custom");
+    expect(tierToTrust(undefined)).toBe("custom");
   });
 });
 
@@ -67,7 +67,7 @@ describe("manifestDerivedFields", () => {
       author: "mellanon",
       version: "1.2.3",
       source: "https://github.com/the-metafactory/widget",
-      type: "custom",
+      trust: "custom",
     });
     expect((f as Record<string, unknown>).has_cli).toBeUndefined();
     expect((f as Record<string, unknown>).bundle).toBeUndefined();
@@ -75,7 +75,7 @@ describe("manifestDerivedFields", () => {
 
   test("external repo is forced to community regardless of manifest tier", () => {
     const f = manifestDerivedFields(repo({ external: true, manifest: manifest({ tier: "official" }) }));
-    expect(f.type).toBe("community");
+    expect(f.trust).toBe("community");
   });
 
   test("has_cli set when the manifest provides a cli; bundle set for type bundle", () => {
@@ -109,7 +109,7 @@ describe("mergeEntry", () => {
       contributors: ["mellanon", "jcfischer"],
       version: "0.12.1",
       source: "https://github.com/the-metafactory/arc",
-      type: "custom",
+      trust: "custom",
       status: "shipped",
       core: true,
       has_cli: true,
@@ -147,7 +147,7 @@ describe("generateRegistry", () => {
         agents: [],
         prompts: [],
         tools: [
-          { name: "arc", description: "d", author: "metafactory", version: "0.12.1", source: "https://github.com/the-metafactory/arc", type: "custom", status: "shipped", core: true } as unknown as RegistryEntry,
+          { name: "arc", description: "d", author: "metafactory", version: "0.12.1", source: "https://github.com/the-metafactory/arc", trust: "custom", status: "shipped", core: true } as unknown as RegistryEntry,
         ],
         components: [],
         rules: [],
@@ -166,7 +166,7 @@ describe("generateRegistry", () => {
       registry: {
         skills: [],
         agents: [
-          { name: "gorse", description: "aspirational", author: "mellanon", source: "https://github.com/the-metafactory/gorse", type: "custom", status: "designed" } as unknown as RegistryEntry,
+          { name: "gorse", description: "aspirational", author: "mellanon", source: "https://github.com/the-metafactory/gorse", trust: "custom", status: "designed" } as unknown as RegistryEntry,
         ],
         prompts: [], tools: [], components: [], rules: [],
       },

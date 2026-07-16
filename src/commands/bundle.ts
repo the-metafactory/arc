@@ -21,7 +21,7 @@ export interface BundleCommandResult {
   error?: string;
 }
 
-/** Execute the arc bundle command */
+/** Execute the `arc pack` command (produces the distributable tarball). */
 export async function bundle(opts: BundleOptions): Promise<BundleCommandResult> {
   const packageDir = resolve(opts.packageDir);
   const outputPath = opts.outputPath ? resolve(opts.outputPath) : undefined;
@@ -57,7 +57,7 @@ export function formatBundle(result: BundleCommandResult): string {
 
   const sizeStr = formatSize(result.sizeBytes ?? 0);
   const lines = [
-    `Bundled ${result.name} v${result.version}`,
+    `Packed ${result.name} v${result.version}`,
     `  Type:     ${result.type}`,
     `  Files:    ${result.fileCount}`,
     `  Size:     ${sizeStr}`,

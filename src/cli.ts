@@ -1083,20 +1083,36 @@ program
 
 // ── Bundle and publish commands ────────────────────────────
 
+// `arc pack` — produce a distributable tarball from a package directory. Renamed
+// from `arc bundle` (arc#63/#324): "bundle" is reserved for the multi-artifact
+// repo taxonomy term, so the packaging VERB uses `pack` (npm-familiar). The old
+// name stays as a deprecated hidden alias for one release.
+async function runPack(path: string | undefined, opts: { output?: string }) {
+  const paths = createArcPaths();
+  const result = await bundle({
+    paths,
+    packageDir: path ?? process.cwd(),
+    outputPath: opts.output,
+  });
+  console.log(formatBundle(result));
+  if (!result.success) process.exit(1);
+}
+
 program
-  .command("bundle [path]")
-  .description("Create a distributable tarball from a package directory. For monorepos, pass a subdirectory (e.g. `arc bundle packages/my-pkg`) or use the library pattern at the repo root.")
+  .command("pack [path]")
+  .description("Create a distributable tarball from a package directory. For monorepos, pass a subdirectory (e.g. `arc pack packages/my-pkg`) or use the library pattern at the repo root.")
+  .option("-o, --output <path>", "Output path for the tarball")
+  .action(runPack);
+
+// Deprecated alias — `arc bundle` collided with the registry "bundle" taxonomy
+// term (arc#63). Kept working for one release; warns and delegates to `arc pack`.
+program
+  .command("bundle [path]", { hidden: true })
+  .description("Deprecated alias for `arc pack`.")
   .option("-o, --output <path>", "Output path for the tarball")
   .action(async (path: string | undefined, opts: { output?: string }) => {
-    const paths = createArcPaths();
-    const result = await bundle({
-      paths,
-      packageDir: path ?? process.cwd(),
-      outputPath: opts.output,
-    });
-
-    console.log(formatBundle(result));
-    if (!result.success) process.exit(1);
+    console.error("arc: `arc bundle` is deprecated and will be removed — use `arc pack`.");
+    await runPack(path, opts);
   });
 
 program

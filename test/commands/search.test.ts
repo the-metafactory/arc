@@ -84,8 +84,8 @@ describe("searchAcrossSources", () => {
     const url = await createLocalRegistry({
       registry: {
         skills: [
-          { name: "research", description: "Multi-agent research", author: "alice", version: "1.0.0", source: "", type: "community", status: "shipped" },
-          { name: "writer", description: "Content writer", author: "bob", version: "1.0.0", source: "", type: "community", status: "shipped" },
+          { name: "research", description: "Multi-agent research", author: "alice", version: "1.0.0", source: "", trust: "community", status: "shipped" },
+          { name: "writer", description: "Content writer", author: "bob", version: "1.0.0", source: "", trust: "community", status: "shipped" },
         ],
         tools: [],
         agents: [],
@@ -108,8 +108,8 @@ describe("searchAcrossSources", () => {
     const url = await createLocalRegistry({
       registry: {
         skills: [
-          { name: "research", description: "Multi-agent research", author: "alice", version: "1.0.0", source: "", type: "community", status: "shipped" },
-          { name: "writer", description: "Content writer", author: "bob", version: "1.0.0", source: "", type: "community", status: "shipped" },
+          { name: "research", description: "Multi-agent research", author: "alice", version: "1.0.0", source: "", trust: "community", status: "shipped" },
+          { name: "writer", description: "Content writer", author: "bob", version: "1.0.0", source: "", trust: "community", status: "shipped" },
         ],
         tools: [], agents: [], prompts: [],
       },
@@ -127,8 +127,8 @@ describe("searchAcrossSources", () => {
   test("filters by type", async () => {
     const url = await createLocalRegistry({
       registry: {
-        skills: [{ name: "s1", description: "Skill 1", author: "a", version: "1.0.0", source: "", type: "community", status: "shipped" }],
-        tools: [{ name: "t1", description: "Tool 1", author: "a", version: "1.0.0", source: "", type: "community", status: "shipped" }],
+        skills: [{ name: "s1", description: "Skill 1", author: "a", version: "1.0.0", source: "", trust: "community", status: "shipped" }],
+        tools: [{ name: "t1", description: "Tool 1", author: "a", version: "1.0.0", source: "", trust: "community", status: "shipped" }],
         agents: [], prompts: [],
       },
     });
@@ -149,13 +149,13 @@ describe("searchAcrossSources", () => {
   test("filters by tier", async () => {
     const officialUrl = await createLocalRegistry({
       registry: {
-        skills: [{ name: "s1", description: "Skill", author: "a", version: "1.0.0", source: "", type: "community", status: "shipped" }],
+        skills: [{ name: "s1", description: "Skill", author: "a", version: "1.0.0", source: "", trust: "community", status: "shipped" }],
         tools: [], agents: [], prompts: [],
       },
     });
     const communityUrl = await createLocalRegistry({
       registry: {
-        skills: [{ name: "s2", description: "Skill", author: "b", version: "1.0.0", source: "", type: "community", status: "shipped" }],
+        skills: [{ name: "s2", description: "Skill", author: "b", version: "1.0.0", source: "", trust: "community", status: "shipped" }],
         tools: [], agents: [], prompts: [],
       },
     });
@@ -175,8 +175,8 @@ describe("searchAcrossSources", () => {
   test("combines type and tier filters", async () => {
     const url = await createLocalRegistry({
       registry: {
-        skills: [{ name: "s1", description: "Skill", author: "a", version: "1.0.0", source: "", type: "community", status: "shipped" }],
-        tools: [{ name: "t1", description: "Tool", author: "a", version: "1.0.0", source: "", type: "community", status: "shipped" }],
+        skills: [{ name: "s1", description: "Skill", author: "a", version: "1.0.0", source: "", trust: "community", status: "shipped" }],
+        tools: [{ name: "t1", description: "Tool", author: "a", version: "1.0.0", source: "", trust: "community", status: "shipped" }],
         agents: [], prompts: [],
       },
     });
@@ -216,7 +216,7 @@ describe("searchAcrossSources", () => {
   test("healthy sources work when another fails", async () => {
     const workingUrl = await createLocalRegistry({
       registry: {
-        skills: [{ name: "s1", description: "Works", author: "a", version: "1.0.0", source: "", type: "community", status: "shipped" }],
+        skills: [{ name: "s1", description: "Works", author: "a", version: "1.0.0", source: "", trust: "community", status: "shipped" }],
         tools: [], agents: [], prompts: [],
       },
     });
@@ -243,7 +243,7 @@ describe("searchAcrossSources", () => {
   test("disabled sources are ignored", async () => {
     const url = await createLocalRegistry({
       registry: {
-        skills: [{ name: "s1", description: "Skill", author: "a", version: "1.0.0", source: "", type: "community", status: "shipped" }],
+        skills: [{ name: "s1", description: "Skill", author: "a", version: "1.0.0", source: "", trust: "community", status: "shipped" }],
         tools: [], agents: [], prompts: [],
       },
     });
@@ -278,7 +278,7 @@ describe("formatSearch", () => {
   test("shows results with tier badge", () => {
     const result: SearchResult = {
       results: [{
-        entry: { name: "research", description: "Multi-agent", author: "alice", version: "1.0.0", source: "", type: "community", status: "shipped" },
+        entry: { name: "research", description: "Multi-agent", author: "alice", version: "1.0.0", source: "", trust: "community", status: "shipped" },
         artifactType: "skill",
         sourceName: "metafactory",
         sourceTier: "official",
@@ -299,8 +299,8 @@ describe("formatSearch", () => {
   test("shows beta and deprecated badges", () => {
     const result: SearchResult = {
       results: [
-        { entry: { name: "b", description: "Beta", author: "a", version: "1.0.0", source: "", type: "community", status: "beta" }, artifactType: "skill", sourceName: "s", sourceTier: "community" },
-        { entry: { name: "d", description: "Old", author: "a", version: "1.0.0", source: "", type: "community", status: "deprecated" }, artifactType: "skill", sourceName: "s", sourceTier: "community" },
+        { entry: { name: "b", description: "Beta", author: "a", version: "1.0.0", source: "", trust: "community", status: "beta" }, artifactType: "skill", sourceName: "s", sourceTier: "community" },
+        { entry: { name: "d", description: "Old", author: "a", version: "1.0.0", source: "", trust: "community", status: "deprecated" }, artifactType: "skill", sourceName: "s", sourceTier: "community" },
       ],
       warnings: [],
       totalSources: 1,
@@ -314,7 +314,7 @@ describe("formatSearch", () => {
   test("shows source ratio in header", () => {
     const result: SearchResult = {
       results: [{
-        entry: { name: "x", description: "Test", author: "a", version: "1.0.0", source: "", type: "community", status: "shipped" },
+        entry: { name: "x", description: "Test", author: "a", version: "1.0.0", source: "", trust: "community", status: "shipped" },
         artifactType: "skill", sourceName: "s", sourceTier: "community",
       }],
       warnings: [],
@@ -393,7 +393,7 @@ describe("formatSearchJson", () => {
   test("returns valid JSON with results and meta", () => {
     const result: SearchResult = {
       results: [{
-        entry: { name: "research", description: "Multi-agent", author: "alice", version: "1.0.0", source: "https://example.com/r", type: "community", status: "shipped" },
+        entry: { name: "research", description: "Multi-agent", author: "alice", version: "1.0.0", source: "https://example.com/r", trust: "community", status: "shipped" },
         artifactType: "skill",
         sourceName: "metafactory",
         sourceTier: "official",
