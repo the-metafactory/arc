@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.41.0 — 2026-07-17
+
+### Removed
+
+- **Retired `catalog.yaml` and the `arc catalog` command surface** ([#323](https://github.com/the-metafactory/arc/issues/323), skill-estate migration epic [#315](https://github.com/the-metafactory/arc/issues/315)). `catalog.yaml` (entries typed `builtin`, pointing at raw PAI-era GitHub URLs) predated `REGISTRY.yaml`; discovery now has one path (sources + registry). Deleted the data file, `src/lib/catalog.ts`, `src/commands/catalog.ts`, the `arc catalog *` commands (list/search/add/remove/use/sync/push/push-catalog), the `registry.ts` → catalog bridge (`addFromRegistry`, used only by those commands), and `ArcPaths.catalogPath`. The `CatalogEntry`/`CatalogEntryType`/`CatalogConfig` types were removed; `RegistryEntry` now stands alone (its `type` is `RegistryEntryType`). `arc search` / `arc install` / `arc source` are unaffected — they never read `catalog.yaml`. Full suite green.
+
 ## 0.40.3 — 2026-07-17
 
 ### Changed

@@ -239,8 +239,6 @@ export function createArcPaths(
       pathEnv: env.PATH,
       configuredBinDir: configuredShimDir,
     }),
-    catalogPath:
-      overrides?.catalogPath ?? join(import.meta.dir, "..", "..", "catalog.yaml"),
     registryPath:
       overrides?.registryPath ?? join(import.meta.dir, "..", "..", "registry.yaml"),
   };
@@ -259,7 +257,7 @@ export function getDefaultHost(opts?: { root?: string }): HostAdapter {
  *
  * Intentionally NOT in this list:
  * - `arc.cachePath` — file path, not a directory; remote-registry lazy-creates the parent.
- * - `arc.dbPath` / `arc.sourcesPath` / `arc.catalogPath` / `arc.registryPath` — file
+ * - `arc.dbPath` / `arc.sourcesPath` / `arc.registryPath` — file
  *   paths created on first write (`openDatabase`, `saveSources`, etc.).
  * - `arc.shimDir` — created on first `arc install` of a CLI artifact (createCliShim).
  * - `host.paths.settingsPath` — host-owned file; we never pre-create it.

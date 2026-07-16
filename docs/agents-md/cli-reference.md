@@ -58,19 +58,6 @@ arc config set bin-dir ~/.local/bin
 arc doctor path               # Check whether the shim directory is on PATH
 ```
 
-### Catalog
-
-```bash
-arc catalog list              # List catalog with install status
-arc catalog search [keyword]  # Search catalog by name or description
-arc catalog add <name>        # Add entry (--from-registry to pull from sources)
-arc catalog remove <name>     # Remove entry from catalog
-arc catalog use <name>        # Install from catalog (resolves dependencies)
-arc catalog sync              # Re-pull all installed catalog entries
-arc catalog push <name>       # Push local changes back to source
-arc catalog push-catalog      # Commit and push catalog.yaml to git remote
-```
-
 ### Scaffolding
 
 ```bash

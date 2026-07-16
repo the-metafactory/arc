@@ -3,7 +3,7 @@ import { resolve, dirname, basename } from "path";
 import type { ResolvedSource } from "../types.js";
 
 /**
- * Resolve a catalog source string into a structured clone target.
+ * Resolve a source string into a structured clone target.
  *
  * Supports three formats:
  *   Local:   /abs/path/to/SKILL.md  or  ~/relative/path/to/SKILL.md

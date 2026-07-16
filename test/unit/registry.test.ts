@@ -4,10 +4,9 @@ import {
   loadRegistry,
   searchRegistry,
   findRegistryEntry,
-  addFromRegistry,
   formatRegistrySearch,
 } from "../../src/lib/registry.js";
-import type { RegistryConfig, CatalogConfig } from "../../src/types.js";
+import type { RegistryConfig } from "../../src/types.js";
 import YAML from "yaml";
 
 let env: TestEnv;
@@ -54,23 +53,6 @@ function sampleRegistry(): RegistryConfig {
           status: "shipped",
         },
       ],
-      prompts: [],
-      tools: [],
-    },
-  };
-}
-
-function emptyCatalog(): CatalogConfig {
-  return {
-    defaults: {
-      skills_dir: "~/.claude/skills/",
-      agents_dir: "~/.claude/agents/",
-      prompts_dir: "~/.claude/commands/",
-      tools_dir: "~/.claude/bin/",
-    },
-    catalog: {
-      skills: [],
-      agents: [],
       prompts: [],
       tools: [],
     },
@@ -160,86 +142,6 @@ describe("findRegistryEntry", () => {
 
   test("returns null for unknown", () => {
     expect(findRegistryEntry(sampleRegistry(), "Nope")).toBeNull();
-  });
-});
-
-describe("addFromRegistry", () => {
-  test("copies entry from registry to catalog", () => {
-    const registry = sampleRegistry();
-    const catalog = emptyCatalog();
-
-    const { entry, artifactType } = addFromRegistry(registry, catalog, "SpecFlow");
-    expect(artifactType).toBe("skill");
-    expect(entry.name).toBe("SpecFlow");
-    expect(entry.has_cli).toBe(true);
-    expect(entry.bundle).toBe(true);
-
-    // Verify added to catalog
-    expect(catalog.catalog.skills).toHaveLength(1);
-    expect(catalog.catalog.skills[0].name).toBe("SpecFlow");
-  });
-
-  test("copies agent entry", () => {
-    const registry = sampleRegistry();
-    const catalog = emptyCatalog();
-
-    const { entry, artifactType } = addFromRegistry(registry, catalog, "Architect");
-    expect(artifactType).toBe("agent");
-    expect(catalog.catalog.agents).toHaveLength(1);
-  });
-
-  test("strips registry-specific fields", () => {
-    const registry = sampleRegistry();
-    const catalog = emptyCatalog();
-
-    addFromRegistry(registry, catalog, "SpecFlow");
-    const added = catalog.catalog.skills[0] as any;
-    // These should NOT be on the catalog entry
-    expect(added.author).toBeUndefined();
-    expect(added.status).toBeUndefined();
-    expect(added.reviewed_by).toBeUndefined();
-  });
-
-  test("preserves requires field", () => {
-    const registry = sampleRegistry();
-    // Add a skill with requires
-    registry.registry.skills.push({
-      name: "Council",
-      description: "Multi-agent debate",
-      author: "danielmiessler",
-      source: "https://github.com/danielmiessler/pai/blob/main/skills/Thinking/Council/SKILL.md",
-      type: "builtin",
-      status: "shipped",
-      requires: ["skill:Thinking"],
-    });
-    const catalog = emptyCatalog();
-
-    addFromRegistry(registry, catalog, "Council");
-    expect(catalog.catalog.skills[0].requires).toEqual(["skill:Thinking"]);
-  });
-
-  test("throws if not found in registry", () => {
-    const registry = sampleRegistry();
-    const catalog = emptyCatalog();
-
-    expect(() => addFromRegistry(registry, catalog, "NonExistent")).toThrow(
-      "not found in registry"
-    );
-  });
-
-  test("throws if already in catalog", () => {
-    const registry = sampleRegistry();
-    const catalog = emptyCatalog();
-    catalog.catalog.skills.push({
-      name: "SpecFlow",
-      description: "Already here",
-      source: "https://example.com",
-      type: "custom",
-    });
-
-    expect(() => addFromRegistry(registry, catalog, "SpecFlow")).toThrow(
-      "already exists in your catalog"
-    );
   });
 });
 
