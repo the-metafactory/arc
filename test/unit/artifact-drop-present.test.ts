@@ -374,7 +374,6 @@ describe("artifactDropPresent — arc#250 supervision-host regression", () => {
       installDir,
       quiet: true,
       systemctlRunner: noopRunner,
-      lingerChecker: async () => ({ enabled: true, username: "test" }),
     });
 
     const hostOverrides = { "linux-systemd": { unitDir, binDir, forcePlatform: "linux" as const } };
@@ -494,7 +493,6 @@ describe("artifactDropPresent — arc#250 supervision-host regression", () => {
       installDir,
       quiet: true,
       systemctlRunner: noopRunner,
-      lingerChecker: async () => ({ enabled: true, username: "test" }),
     });
 
     // Simulate the wipe.

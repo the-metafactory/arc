@@ -15,11 +15,7 @@ import { createTestEnv, type TestEnv } from "../helpers/test-env.js";
 import { install } from "../../src/commands/install.js";
 import { remove } from "../../src/commands/remove.js";
 import { getSkill } from "../../src/lib/db.js";
-import type {
-  SystemctlRunner,
-  SystemctlResult,
-  LingerChecker,
-} from "../../src/lib/hosts/systemd-install.js";
+import type { SystemctlRunner, SystemctlResult } from "../../src/lib/hosts/systemd-install.js";
 
 let env: TestEnv;
 let unitDir: string;
@@ -44,10 +40,6 @@ function makeRecorder(responses: Record<string, SystemctlResult> = {}) {
     return responses[args.join(" ")] ?? { code: 0, stderr: "" };
   };
   return { runner, calls };
-}
-
-function makeLingerChecker(enabled: boolean): LingerChecker {
-  return async () => ({ enabled, username: "testuser" });
 }
 
 const hostOverrides = () => ({
@@ -95,7 +87,6 @@ async function installBot(name: string) {
     arc: env.arc, host: env.host, db: env.db, repoUrl: repo.url, yes: true,
     hostOverrides: hostOverrides(),
     systemctlRunner: runner,
-    lingerChecker: makeLingerChecker(true),
   });
 }
 

@@ -15,16 +15,28 @@ import { stateDir } from "../xdg-paths.js";
 /**
  * linux-systemd install/remove dispatch (arc#311, L2).
  *
- * Sister to `launchd-install.ts`, with one structural difference: darwin
- * defers `launchctl bootstrap` to the bot's own `lifecycle.postinstall`
- * script (see that file's header), but this dispatch invokes
- * `systemctl --user daemon-reload` + `enable --now` INLINE, per the L2
- * design (cortex `docs/design-arc-agent-bots.md` §3.2 platform note).
- * That means a mid-sequence systemctl failure here must undo whatever this
- * call already landed (unit file, binary symlink) itself — the outer
+ * RENDER-ONLY, matching `launchd-install.ts` exactly (principal decision,
+ * PR #314 review — supersedes the L2 design's original inline-activation
+ * dispatch): install symlinks `provides.binary`, renders `provides.systemdUnit`,
+ * and runs `systemctl --user daemon-reload` so systemd sees the new unit
+ * file — that's it. Activation (`systemctl --user enable --now`, or
+ * whatever the package needs) is the PACKAGE's own `lifecycle.postinstall`
+ * concern, exactly like darwin-launchd defers `launchctl bootstrap` to the
+ * same mechanism (see that file's header). This restores platform parity
+ * and removes the "arbitrary ExecStart goes live sight-unseen" gap by
+ * construction — nothing gets ACTIVATED here, so there is no
+ * content-level review surface needed in this function.
+ *
+ * A mid-sequence systemctl failure (daemon-reload) still must undo whatever
+ * this call already landed (unit file, binary symlink) itself — the outer
  * `installPerTarget` rollback only unwinds records this function actually
  * RETURNS, and a thrown error never returns one. See `installSystemdArtifacts`
  * for the local cleanup-then-throw discipline that closes that gap.
+ *
+ * Remove (`removeSystemdArtifacts`) is UNCHANGED by this decision: arc still
+ * owns teardown symmetrically, `systemctl --user disable --now` first (in
+ * case the package's own postinstall enabled it) — same as darwin remove
+ * unloading the plist regardless of who loaded it.
  *
  * Do NOT generalize `SystemdInstallRecord`/`LaunchdInstallRecord` into one
  * shared record type in this PR (spec open-question 1, arc#311): keep them
@@ -175,21 +187,31 @@ async function safeRun(run: SystemctlRunner, args: string[]): Promise<SystemctlR
   }
 }
 
-/** Outcome of a linger check — whether `enable --now` is safe to run. */
+/**
+ * Outcome of a linger check — whether an ENABLED unit will survive logout.
+ *
+ * NOT consulted by `installSystemdArtifacts` (render-only design, see file
+ * header) — arc's install dispatch never enables anything, so it has no
+ * STOP-AND-ASK precondition to gate. Kept exported as a seam for the
+ * PACKAGE side of the split: a bot's own `lifecycle.postinstall` script is
+ * where `systemctl --user enable --now` actually runs, and that is where a
+ * linger check belongs. `arc` itself does not currently call this from any
+ * command; it is public API for that future package-side use (and for
+ * tests that still want to construct a fixed `LingerStatus`).
+ */
 export interface LingerStatus {
   enabled: boolean;
   username: string;
 }
 
 /**
- * Injectable seam for the linger precondition check (see
- * `installSystemdArtifacts` step 4 doc comment for why this exists).
- * Production queries `loginctl` for real; unit tests inject a fixed
- * result so no real `loginctl` process is spawned either.
+ * Injectable seam for a linger precondition check. See `LingerStatus`'s
+ * doc comment for why this lives here unused by the install dispatch.
  */
 export type LingerChecker = () => Promise<LingerStatus>;
 
-async function defaultLingerChecker(): Promise<LingerStatus> {
+/** Real `loginctl show-user --property=Linger` query. Timeout-guarded like `defaultSystemctlRunner`. */
+export async function defaultLingerChecker(): Promise<LingerStatus> {
   const username = userInfo().username;
   const proc = Bun.spawn(
     ["loginctl", "show-user", username, "--property=Linger", "--value"],
@@ -208,15 +230,11 @@ async function defaultLingerChecker(): Promise<LingerStatus> {
 
 /**
  * Normalize a `LingerChecker` call so a THROW fails CLOSED — `enabled:
- * false` — rather than silently proceeding as if linger were confirmed on.
- * Sister to `safeRun`; same BLOCKER class (arc#311/PR#314 review): the
- * account's ACTUAL linger state is unknown when the check itself throws
- * (missing `loginctl`, timeout, …), and STOP-AND-ASK's whole point is
- * never enabling a unit without a confirmed-safe precondition. The
- * underlying failure reason is threaded into the eventual error message
- * via `checkError` rather than swallowed.
+ * false` — rather than silently reporting linger as confirmed on. Sister to
+ * `safeRun`. Exported alongside `defaultLingerChecker` for the same
+ * not-yet-wired package-side use.
  */
-async function safeCheckLinger(
+export async function safeCheckLinger(
   check: LingerChecker,
 ): Promise<LingerStatus & { checkError?: string }> {
   try {
@@ -234,14 +252,16 @@ function isNotLoadedError(stderr: string): boolean {
 /**
  * Find any `{{TOKEN}}` markers still present after `renderUnit` substitution
  * (arc#311/PR#314 review, MINOR): a typo'd or unsupported token in
- * `provides.systemdUnit` must not silently reach `systemctl enable --now`
- * — unlike launchd (activation deferred to the package's own reviewable
- * `lifecycle.postinstall`), this dispatch inlines activation, so a
- * template bug goes disk-to-running-process with nothing catching it.
- * Deliberately NOT added to the shared `renderTokens` (used by
- * `launchd-install.ts`'s `renderPlist` too) — launchd's permissive
- * unknown-token pass-through is documented, intentional behavior for that
- * host's deferred-activation model and must not change here.
+ * `provides.systemdUnit` must not silently reach disk — even under the
+ * render-only design (activation deferred to the package's own
+ * `lifecycle.postinstall`, see file header), a typo'd token would still
+ * ship a broken unit file the package's postinstall then tries to enable
+ * blind. Catching it here, before daemon-reload, is strictly better than
+ * letting it surface as a confusing `systemctl` failure two steps later
+ * inside the package's own script. Deliberately NOT added to the shared
+ * `renderTokens` (used by `launchd-install.ts`'s `renderPlist` too) —
+ * launchd's permissive unknown-token pass-through is documented,
+ * intentional behavior for that host and must not change here.
  */
 function findUnrenderedTokens(rendered: string): string[] {
   const matches = rendered.match(/\{\{[A-Za-z0-9_-]+\}\}/g);
@@ -252,25 +272,18 @@ function findUnrenderedTokens(rendered: string): string[] {
  * Install the linux-systemd-side artifacts of a `type: agent`/`tool`
  * package: symlink `provides.binary` into `host.paths.binDir`, render
  * `provides.systemdUnit` into `host.paths.unitDir`, then
- * `systemctl --user daemon-reload` and `systemctl --user enable --now`.
+ * `systemctl --user daemon-reload` so systemd sees the new unit file.
  *
- * Unlike `installLaunchdArtifacts` (which stops at rendering the plist —
- * `launchctl bootstrap` is the bot's own `lifecycle.postinstall` concern),
- * this function owns the `systemctl` calls itself per the L2 design. That
- * means it also owns cleanup on a mid-sequence failure: every step past
- * the first records what it created, and any subsequent throw first
- * removes what THIS call landed (unit file, binary symlink) before
- * throwing, so a caught error never leaves an orphan for the outer
- * `installPerTarget` rollback to miss.
+ * RENDER-ONLY (see file header) — this function does NOT enable or start
+ * the unit. `systemctl --user enable --now` is the package's own
+ * `lifecycle.postinstall` responsibility, exactly matching
+ * `installLaunchdArtifacts` (which stops at rendering the plist —
+ * `launchctl bootstrap` is likewise the bot's postinstall concern).
  *
- * STOP-AND-ASK (arc#311, principal-authored constraint): `enable --now`
- * persisting a user unit across logout requires systemd "linger" for the
- * account (`loginctl enable-linger <user>`). Without it the daemon dies
- * the moment the install session ends — silently defeating the point of
- * installing a supervised daemon. arc never invokes `sudo` itself, so
- * when linger is off this throws with the exact command for the operator
- * to run, rather than proceeding into a service that looks installed but
- * won't survive logout.
+ * A mid-sequence systemctl failure (daemon-reload) still must undo
+ * whatever this call already landed (unit file, binary symlink) itself —
+ * the outer `installPerTarget` rollback only unwinds records this
+ * function actually RETURNS, and a thrown error never returns one.
  *
  * Returns the record so a later failure elsewhere in the install can roll
  * back the systemd side of the multi-target install (see
@@ -286,18 +299,15 @@ export async function installSystemdArtifacts(opts: {
   tokens?: SystemdTokens;
   /** Injectable systemctl seam (test isolation — never spawns for real in tests). */
   systemctlRunner?: SystemctlRunner;
-  /** Injectable linger-check seam (test isolation). */
-  lingerChecker?: LingerChecker;
 }): Promise<SystemdInstallRecord> {
   const record: SystemdInstallRecord = {};
   const provides = opts.manifest.provides ?? {};
   const runSystemctl = opts.systemctlRunner ?? defaultSystemctlRunner;
-  const checkLinger = opts.lingerChecker ?? defaultLingerChecker;
 
   // Best-effort undo of whatever THIS call has landed so far. See file
-  // header: unlike launchd, a failure past unit-render here (daemon-reload,
-  // linger gate, enable --now) must not leak a rendered unit or symlinked
-  // binary — this function is its own rollback boundary for those steps.
+  // header: unlike launchd, a daemon-reload failure here must not leak a
+  // rendered unit or symlinked binary — this function is its own rollback
+  // boundary for that one remaining systemctl step.
   const cleanupPartial = async () => {
     if (record.unitPath) {
       try {
@@ -363,13 +373,13 @@ export async function installSystemdArtifacts(opts: {
 
     // 2b. Unrendered-token gate — BEFORE anything lands on disk. See
     // findUnrenderedTokens' doc comment: a typo'd/unsupported token must
-    // not reach `enable --now`.
+    // not ship to disk, even though nothing gets activated here.
     const unrendered = findUnrenderedTokens(rendered);
     if (unrendered.length) {
       await cleanupPartial();
       throw new Error(
         `provides.systemdUnit '${provides.systemdUnit}' has unrendered token(s) after substitution: ` +
-          `${unrendered.join(", ")} — refusing to enable a unit with unresolved template markers. ` +
+          `${unrendered.join(", ")} — refusing to write a unit with unresolved template markers. ` +
           `Fix the manifest/template and reinstall.`,
       );
     }
@@ -384,7 +394,9 @@ export async function installSystemdArtifacts(opts: {
       console.log(`  ✓ Unit rendered: ${unitTargetPath}`);
     }
 
-    // 3. daemon-reload so systemd picks up the freshly-rendered unit file.
+    // 3. daemon-reload so systemd sees the freshly-rendered unit file. This
+    // is the LAST step — no enable, no linger check (see file header):
+    // activation is the package's own lifecycle.postinstall concern.
     // safeRun: a THROW (missing systemctl binary, timeout, …) must hit
     // cleanupPartial() exactly like a resolved non-zero exit does — see
     // safeRun's doc comment (arc#311/PR#314 review, BLOCKER).
@@ -395,40 +407,8 @@ export async function installSystemdArtifacts(opts: {
         `systemctl --user daemon-reload failed (exit ${reload.code}): ${reload.stderr.trim()}`,
       );
     }
-
-    // 4. STOP-AND-ASK: see doc comment above. Check linger BEFORE enabling
-    // so a disabled-linger account never ends up with a unit that LOOKS
-    // enabled but silently stops at logout. safeCheckLinger: a throwing
-    // check fails CLOSED (enabled: false), never silently proceeds.
-    const linger = await safeCheckLinger(checkLinger);
-    if (!linger.enabled) {
-      await cleanupPartial();
-      const reasonSuffix = linger.checkError
-        ? ` (could not confirm linger status: ${linger.checkError})`
-        : "";
-      throw new Error(
-        `linux-systemd install for '${opts.manifest.name}' requires linger enabled for user ` +
-          `'${linger.username}' so the '${unitName}' unit survives logout. arc never invokes ` +
-          `sudo — run this yourself, then re-run the install:\n` +
-          `  sudo loginctl enable-linger ${linger.username}${reasonSuffix}`,
-      );
-    }
-
-    const enable = await safeRun(runSystemctl, ["--user", "enable", "--now", unitName]);
-    if (enable.code !== 0) {
-      // Best-effort undo of a partial enable/start before removing the unit
-      // file — enable --now can fail after having already enabled (but not
-      // started) the unit, or vice versa. safeRun here too: this is
-      // itself best-effort, so its own throw must not skip the load-bearing
-      // cleanupPartial() below.
-      await safeRun(runSystemctl, ["--user", "disable", "--now", unitName]);
-      await cleanupPartial();
-      throw new Error(
-        `systemctl --user enable --now ${unitName} failed (exit ${enable.code}): ${enable.stderr.trim()}`,
-      );
-    }
     if (!opts.quiet) {
-      console.log(`  ✓ Unit enabled + started: ${unitName}`);
+      console.log(`  ✓ systemd daemon-reload complete (activation deferred to the package's lifecycle.postinstall)`);
     }
   }
 

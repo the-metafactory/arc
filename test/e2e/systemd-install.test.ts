@@ -1,16 +1,23 @@
 /**
- * arc#311 (L2) e2e: full linux-systemd lifecycle against a REAL
+ * arc#311 (L2) e2e: linux-systemd RENDER-ONLY install/remove against a REAL
  * `systemd --user` session. This is the CI systemd-e2e job's glob target
  * (`test/e2e/systemd*.test.ts` — see .github/workflows/ci.yml); it runs
  * ONLY there.
+ *
+ * RENDER-ONLY design (principal decision, PR #314 review): install lands
+ * the binary symlink + rendered unit + `daemon-reload` — nothing more.
+ * Activation (`enable --now`) is the package's own `lifecycle.postinstall`
+ * concern, so this test does NOT start anything and does NOT assert
+ * `is-active`. It asserts that systemd actually SEES the rendered unit
+ * (`systemctl --user cat <unit>` succeeds) after install, and no longer
+ * does after remove.
  *
  * Deliberately does NOT override unitDir/binDir the way the command-level
  * multitarget tests (test/commands/install-multitarget-systemd-311.test.ts)
  * do: the already-running `systemd --user` manager resolves its unit search
  * path from ITS OWN startup environment, not from whatever env this test
  * process happens to set. An overridden HOME/unitDir here would render a
- * unit file the real manager can never see, and `enable --now` would fail
- * with "unit not found". So this test exercises the REAL
+ * unit file the real manager can never see. So this test exercises the REAL
  * `~/.config/systemd/user` + shared bin dir, exactly as a genuine install
  * would on the ephemeral CI runner.
  *
@@ -23,7 +30,6 @@ import { describe, test, expect } from "bun:test";
 import { existsSync } from "fs";
 import { mkdir, writeFile, chmod, rm } from "fs/promises";
 import { join } from "path";
-import { userInfo } from "os";
 import { install } from "../../src/commands/install.js";
 import { remove } from "../../src/commands/remove.js";
 import { createTestEnv, type TestEnv } from "../helpers/test-env.js";
@@ -38,22 +44,17 @@ function canRunSystemdE2E(): boolean {
   if (process.platform !== "linux") return false;
   const runtimeDir = process.env.XDG_RUNTIME_DIR;
   if (!runtimeDir || !existsSync(join(runtimeDir, "bus"))) return false;
-  if (systemctlUser(["show-environment"]).exitCode !== 0) return false;
-  const linger = Bun.spawnSync(
-    ["loginctl", "show-user", userInfo().username, "--property=Linger", "--value"],
-    { stdout: "pipe", stderr: "pipe" },
-  );
-  return linger.stdout?.toString().trim() === "yes";
+  return systemctlUser(["show-environment"]).exitCode === 0;
 }
 
 const RUN_E2E = canRunSystemdE2E();
-const UNIT_NAME = "arc-e2e-sleep.service";
+const UNIT_NAME = "arc-e2e-render.service";
 const BIN_NAME = "arc-e2e-daemon";
-const PKG_NAME = "arc-e2e-sleep";
+const PKG_NAME = "arc-e2e-render";
 
-describe("linux-systemd install/remove e2e (real systemctl --user)", () => {
+describe("linux-systemd install/remove e2e (real systemctl --user, render-only)", () => {
   test.skipIf(!RUN_E2E)(
-    "install renders + enables + starts the unit; remove tears it all down (unit, service, symlink)",
+    "install renders + daemon-reloads (no enable/start); remove tears it all down (unit, service, symlink)",
     async () => {
       const env: TestEnv = await createTestEnv();
       const paths = linuxSystemdPaths();
@@ -61,18 +62,15 @@ describe("linux-systemd install/remove e2e (real systemctl --user)", () => {
       const binPath = join(paths.binDir, BIN_NAME);
 
       try {
-        const repoDir = join(env.root, "mock-e2e-sleep");
+        const repoDir = join(env.root, "mock-e2e-render");
         await mkdir(join(repoDir, "bin"), { recursive: true });
-        // ExecStart runs the symlinked wrapper, which execs /bin/sleep
-        // infinity — the process image becomes `sleep`, matching the
-        // fixture the L2 issue specifies.
         await writeFile(join(repoDir, "bin", BIN_NAME), `#!/bin/bash\nexec /bin/sleep infinity\n`);
         await chmod(join(repoDir, "bin", BIN_NAME), 0o755);
 
         await mkdir(join(repoDir, "services"), { recursive: true });
         await writeFile(
           join(repoDir, "services", UNIT_NAME),
-          `[Unit]\nDescription=arc e2e sleep test unit\n\n[Service]\nExecStart={{BIN}}\n\n[Install]\nWantedBy=default.target\n`,
+          `[Unit]\nDescription=arc e2e render-only test unit\n\n[Service]\nExecStart={{BIN}}\n`,
         );
 
         await writeFile(
@@ -112,22 +110,30 @@ provides:
         expect(existsSync(unitPath)).toBe(true);
         expect(existsSync(binPath)).toBe(true);
 
-        const active = systemctlUser(["is-active", UNIT_NAME]);
-        expect(active.stdout.toString().trim()).toBe("active");
+        // Render-only: systemd SEES the unit (daemon-reload picked it up,
+        // `cat` can locate + parse it) — but nothing started it. No
+        // is-active assertion; arc never ran enable --now.
+        const cat = systemctlUser(["cat", UNIT_NAME]);
+        expect(cat.exitCode).toBe(0);
+        expect(cat.stdout.toString()).toContain("arc e2e render-only test unit");
+
+        const activeBeforeRemove = systemctlUser(["is-active", UNIT_NAME]);
+        expect(activeBeforeRemove.stdout.toString().trim()).not.toBe("active");
 
         const removeResult = await remove(env.db, env.arc, env.host, PKG_NAME, { quiet: true });
         expect(removeResult.success).toBe(true);
 
         expect(existsSync(unitPath)).toBe(false);
         expect(existsSync(binPath)).toBe(false);
-        const afterRemove = systemctlUser(["is-active", UNIT_NAME]);
-        expect(afterRemove.stdout.toString().trim()).not.toBe("active");
+        const catAfterRemove = systemctlUser(["cat", UNIT_NAME]);
+        expect(catAfterRemove.exitCode).not.toBe(0);
         expect(getSkill(env.db, PKG_NAME)).toBeNull();
       } finally {
         // Best-effort real-world cleanup regardless of assertion outcome —
         // this test touches the REAL ~/.config/systemd/user (see file
-        // header), so a failed assertion must not leave a live daemon on
-        // the runner.
+        // header). Nothing was ever enabled/started (render-only), but
+        // `disable --now` is a harmless no-op if that's true and a safety
+        // net if some prior failed run left something loaded.
         systemctlUser(["disable", "--now", UNIT_NAME]);
         await rm(unitPath, { force: true });
         await rm(binPath, { force: true });

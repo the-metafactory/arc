@@ -36,7 +36,6 @@ import {
 import { isDarwinLaunchdHost } from "../lib/hosts/darwin-launchd.js";
 import {
   type SystemctlRunner,
-  type LingerChecker,
   type SystemdInstallRecord,
   installSystemdArtifacts,
   rollbackSystemdArtifacts,
@@ -125,16 +124,11 @@ export interface InstallOptions {
    * Injectable `systemctl --user` seam for linux-systemd installs (arc#311).
    * Production leaves this absent (real spawn). Tests inject a recorder so
    * a linux-systemd multi-target install/rollback never spawns a real
-   * `systemctl` process.
+   * `systemctl` process. Only `daemon-reload` runs during install — arc's
+   * dispatch is render-only; activation is deferred to the package's own
+   * `lifecycle.postinstall` (principal decision, PR #314 review).
    */
   systemctlRunner?: SystemctlRunner;
-  /**
-   * Injectable linger-check seam for linux-systemd installs (arc#311's
-   * STOP-AND-ASK: `enable --now` requires `loginctl enable-linger` on the
-   * account, and arc never invokes `sudo` to fix that itself). Production
-   * leaves this absent (real `loginctl` query). Tests inject a fixed result.
-   */
-  lingerChecker?: LingerChecker;
   /**
    * F-6e (arc#229) — secret provisioning controls.
    *
@@ -620,7 +614,6 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
       quiet: opts.yes,
       hostOverrides: opts.hostOverrides,
       systemctlRunner: opts.systemctlRunner,
-      lingerChecker: opts.lingerChecker,
     });
     if ("error" in multi) {
       return { success: false, error: multi.error };
@@ -1099,7 +1092,6 @@ export async function installSingleArtifact(
       quiet: opts.yes,
       hostOverrides: opts.hostOverrides,
       systemctlRunner: opts.systemctlRunner,
-      lingerChecker: opts.lingerChecker,
     });
     if ("error" in multi) {
       return { success: false, error: multi.error };
@@ -1245,7 +1237,6 @@ async function installPerTarget(opts: {
   quiet?: boolean;
   hostOverrides?: HostOverrides;
   systemctlRunner?: SystemctlRunner;
-  lingerChecker?: LingerChecker;
 }): Promise<MultiTargetInstallResult | { error: string }> {
   const ordered = orderTargetsForInstall(opts.targets);
   const merged: ArtifactSymlinkRecord = {
@@ -1334,7 +1325,6 @@ async function installPerTarget(opts: {
           installDir: opts.installPath,
           quiet: opts.quiet,
           systemctlRunner: opts.systemctlRunner,
-          lingerChecker: opts.lingerChecker,
         });
         systemd.push(rec);
       } catch (err) {

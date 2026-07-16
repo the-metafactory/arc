@@ -1,12 +1,20 @@
 /**
  * Tests for arc#311 (L2) linux-systemd install: unit rendering + binary
- * install + `systemctl` dispatch (daemon-reload / enable --now / disable
- * --now) + rollback. Sister to test/unit/launchd-install.test.ts.
+ * install + `systemctl` dispatch + rollback. Sister to
+ * test/unit/launchd-install.test.ts.
  *
- * NEVER spawns a real `systemctl` or `loginctl` process — every test
- * injects a recorder for both seams (`SystemctlRunner`, `LingerChecker`).
- * The real-systemctl path is exercised only by test/e2e/systemd-install.test.ts,
- * gated to the CI systemd-e2e job.
+ * RENDER-ONLY design (principal decision, PR #314 review): install lands
+ * `provides.binary` (symlink), `provides.systemdUnit` (rendered), then
+ * `systemctl --user daemon-reload` — nothing more. Activation
+ * (`enable --now`) is the package's own `lifecycle.postinstall` concern,
+ * exactly matching how `launchd-install.ts` defers `launchctl bootstrap`.
+ * Remove is UNCHANGED: `disable --now` (in case postinstall enabled it),
+ * unlink unit, `daemon-reload`, unlink symlink — arc still owns teardown
+ * symmetrically.
+ *
+ * NEVER spawns a real `systemctl` process — every test injects a recorder
+ * (`SystemctlRunner`). The real-systemctl path is exercised only by
+ * test/e2e/systemd-install.test.ts, gated to the CI systemd-e2e job.
  */
 
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
@@ -23,7 +31,6 @@ import {
   withSpawnTimeout,
   type SystemctlRunner,
   type SystemctlResult,
-  type LingerChecker,
 } from "../../src/lib/hosts/systemd-install.js";
 import { createLinuxSystemdHost } from "../../src/lib/hosts/linux-systemd.js";
 import type { ArcManifest } from "../../src/types.js";
@@ -66,17 +73,13 @@ function makeRecorder(responses: Record<string, SystemctlResult> = {}) {
   return { runner, calls };
 }
 
-function makeLingerChecker(enabled: boolean, username = "testuser"): LingerChecker {
-  return async () => ({ enabled, username });
-}
-
 /**
  * A runner that THROWS instead of resolving — this is what `Bun.spawn`
  * actually does synchronously on a missing binary (ENOENT), which the
  * PR #314 adversarial review proved the original recorder-only test suite
- * never exercised. `onlyFor` scopes the throw to a specific arg-tuple
- * (e.g. only `daemon-reload`) so later steps in the same test can still be
- * asserted as "never reached"; omit it to throw on every call.
+ * never exercised. `onlyFor` scopes the throw to a specific arg-tuple so
+ * later steps in the same test can still be asserted as "never reached";
+ * omit it to throw on every call.
  */
 function makeThrowingRunner(message: string, onlyFor?: string[]): {
   runner: SystemctlRunner;
@@ -91,12 +94,6 @@ function makeThrowingRunner(message: string, onlyFor?: string[]): {
     return { code: 0, stderr: "" };
   };
   return { runner, calls };
-}
-
-function makeThrowingLingerChecker(message: string): LingerChecker {
-  return async () => {
-    throw new Error(message);
-  };
 }
 
 describe("renderUnit", () => {
@@ -169,7 +166,7 @@ describe("installSystemdArtifacts", () => {
     expect(calls.length).toBe(0);
   });
 
-  test("renders unit, daemon-reloads, checks linger, then enables --now (in order)", async () => {
+  test("renders the unit then daemon-reloads — no enable, no linger check (activation deferred to lifecycle.postinstall)", async () => {
     const unitSrc = join(installDir, "services", "fake-bot.service");
     await mkdir(join(installDir, "services"), { recursive: true });
     await writeFile(
@@ -186,7 +183,6 @@ describe("installSystemdArtifacts", () => {
       quiet: true,
       tokens: { NATS_URL: "nats://test:4222" },
       systemctlRunner: runner,
-      lingerChecker: makeLingerChecker(true),
     });
 
     const expectedUnit = join(unitDir, "fake-bot.service");
@@ -196,10 +192,8 @@ describe("installSystemdArtifacts", () => {
     expect(rendered).toContain("nats://test:4222");
     expect(rendered).not.toContain("{{NATS_URL}}");
 
-    expect(calls).toEqual([
-      ["--user", "daemon-reload"],
-      ["--user", "enable", "--now", "fake-bot.service"],
-    ]);
+    // ONLY daemon-reload -- no enable, no disable, no linger check.
+    expect(calls).toEqual([["--user", "daemon-reload"]]);
   });
 
   test("BIN token resolves to the installed binary symlink", async () => {
@@ -222,7 +216,6 @@ describe("installSystemdArtifacts", () => {
       installDir,
       quiet: true,
       systemctlRunner: runner,
-      lingerChecker: makeLingerChecker(true),
     });
 
     const rendered = await readFile(rec.unitPath!, "utf-8");
@@ -267,7 +260,7 @@ describe("installSystemdArtifacts", () => {
     expect(existsSync(join(binDir, "fake-bot"))).toBe(false);
   });
 
-  test("daemon-reload failure rolls back the rendered unit + binary symlink, never calls enable", async () => {
+  test("daemon-reload failure rolls back the rendered unit + binary symlink", async () => {
     const binSrc = join(installDir, "bin", "fake-bot");
     await mkdir(join(installDir, "bin"), { recursive: true });
     await writeFile(binSrc, "#!/bin/bash\n");
@@ -297,59 +290,6 @@ describe("installSystemdArtifacts", () => {
     expect(existsSync(join(binDir, "fake-bot"))).toBe(false);
     expect(calls).toEqual([["--user", "daemon-reload"]]);
   });
-
-  test("STOP-AND-ASK: linger disabled aborts before enable --now with the exact sudo command", async () => {
-    const unitSrc = join(installDir, "services", "fake-bot.service");
-    await mkdir(join(installDir, "services"), { recursive: true });
-    await writeFile(unitSrc, `[Service]\nExecStart=/bin/true\n`);
-
-    const { runner, calls } = makeRecorder();
-    const host = createLinuxSystemdHost({ unitDir, binDir, forcePlatform: "linux" });
-
-    await expect(
-      installSystemdArtifacts({
-        host,
-        manifest: fakeAgentManifest({ provides: { systemdUnit: "services/fake-bot.service" } }),
-        installDir,
-        quiet: true,
-        systemctlRunner: runner,
-        lingerChecker: makeLingerChecker(false, "opuser"),
-      }),
-    ).rejects.toThrow(/sudo loginctl enable-linger opuser/);
-
-    // Never invoked sudo, never called enable, and cleaned up the unit it rendered.
-    expect(calls).toEqual([["--user", "daemon-reload"]]);
-    expect(existsSync(join(unitDir, "fake-bot.service"))).toBe(false);
-  });
-
-  test("enable --now failure attempts a best-effort disable, then rolls back and throws", async () => {
-    const unitSrc = join(installDir, "services", "fake-bot.service");
-    await mkdir(join(installDir, "services"), { recursive: true });
-    await writeFile(unitSrc, `[Service]\nExecStart=/bin/true\n`);
-
-    const { runner, calls } = makeRecorder({
-      "--user enable --now fake-bot.service": { code: 1, stderr: "Failed to enable: access denied" },
-    });
-    const host = createLinuxSystemdHost({ unitDir, binDir, forcePlatform: "linux" });
-
-    await expect(
-      installSystemdArtifacts({
-        host,
-        manifest: fakeAgentManifest({ provides: { systemdUnit: "services/fake-bot.service" } }),
-        installDir,
-        quiet: true,
-        systemctlRunner: runner,
-        lingerChecker: makeLingerChecker(true),
-      }),
-    ).rejects.toThrow(/enable --now fake-bot\.service failed \(exit 1\): Failed to enable: access denied/);
-
-    expect(calls).toEqual([
-      ["--user", "daemon-reload"],
-      ["--user", "enable", "--now", "fake-bot.service"],
-      ["--user", "disable", "--now", "fake-bot.service"],
-    ]);
-    expect(existsSync(join(unitDir, "fake-bot.service"))).toBe(false);
-  });
 });
 
 describe("removeSystemdArtifacts", () => {
@@ -372,11 +312,13 @@ describe("removeSystemdArtifacts", () => {
       installDir,
       quiet: true,
       systemctlRunner: installRunner,
-      lingerChecker: makeLingerChecker(true),
     });
     expect(existsSync(join(unitDir, "fake-bot.service"))).toBe(true);
     expect(existsSync(join(binDir, "fake-bot"))).toBe(true);
 
+    // Remove still `disable --now`s unconditionally -- the package's own
+    // postinstall may well have enabled it after this install landed the
+    // render-only artifacts above.
     const { runner: removeRunner, calls } = makeRecorder();
     const removed = await removeSystemdArtifacts({
       host,
@@ -439,7 +381,6 @@ describe("rollbackSystemdArtifacts", () => {
       installDir,
       quiet: true,
       systemctlRunner: installRunner,
-      lingerChecker: makeLingerChecker(true),
     });
 
     expect(existsSync(rec.unitPath!)).toBe(true);
@@ -467,13 +408,12 @@ describe("rollbackSystemdArtifacts", () => {
 
 /**
  * PR #314 adversarial review, BLOCKER: the original suite only ever
- * resolved `SystemctlRunner`/`LingerChecker` with a `{code, stderr}`
- * value — never THREW, which is exactly what `Bun.spawn` does
- * synchronously on a missing binary (ENOENT). A throw used to bypass
- * `cleanupPartial()` entirely and propagate uncaught. These tests pin the
- * fix: `safeRun`/`safeCheckLinger` normalize a throw into the same
- * `{code: -1, stderr}` / `{enabled: false}` shape every non-zero-exit
- * branch already handled.
+ * resolved `SystemctlRunner` with a `{code, stderr}` value — never THREW,
+ * which is exactly what `Bun.spawn` does synchronously on a missing binary
+ * (ENOENT). A throw used to bypass `cleanupPartial()` entirely and
+ * propagate uncaught. `daemon-reload` is now the ONLY systemctl call
+ * install makes (render-only design), so it's also the only throw surface
+ * left to pin here.
  */
 describe("installSystemdArtifacts — throwing runner (arc#311/PR#314 BLOCKER)", () => {
   test("a throwing systemctl call at daemon-reload cleans up the unit + symlink and throws a meaningful error", async () => {
@@ -503,63 +443,6 @@ describe("installSystemdArtifacts — throwing runner (arc#311/PR#314 BLOCKER)",
     // No leak: the rendered unit AND the binary symlink are both gone.
     expect(existsSync(join(unitDir, "fake-bot.service"))).toBe(false);
     expect(existsSync(join(binDir, "fake-bot"))).toBe(false);
-    // Never reached enable --now — the throw at daemon-reload stopped the sequence.
-    expect(calls).toEqual([["--user", "daemon-reload"]]);
-  });
-
-  test("a throwing systemctl call at enable --now cleans up, attempting a best-effort disable first", async () => {
-    const unitSrc = join(installDir, "services", "fake-bot.service");
-    await mkdir(join(installDir, "services"), { recursive: true });
-    await writeFile(unitSrc, `[Service]\nExecStart=/bin/true\n`);
-
-    const { runner, calls } = makeThrowingRunner("spawn systemctl ENOENT", [
-      "--user",
-      "enable",
-      "--now",
-      "fake-bot.service",
-    ]);
-    const host = createLinuxSystemdHost({ unitDir, binDir, forcePlatform: "linux" });
-
-    await expect(
-      installSystemdArtifacts({
-        host,
-        manifest: fakeAgentManifest({ provides: { systemdUnit: "services/fake-bot.service" } }),
-        installDir,
-        quiet: true,
-        systemctlRunner: runner,
-        lingerChecker: makeLingerChecker(true),
-      }),
-    ).rejects.toThrow(/enable --now fake-bot\.service failed \(exit -1\): spawn systemctl ENOENT/);
-
-    expect(existsSync(join(unitDir, "fake-bot.service"))).toBe(false);
-    expect(calls).toEqual([
-      ["--user", "daemon-reload"],
-      ["--user", "enable", "--now", "fake-bot.service"],
-      ["--user", "disable", "--now", "fake-bot.service"], // best-effort undo attempt
-    ]);
-  });
-
-  test("a throwing linger checker fails CLOSED (never proceeds to enable --now) and reports the underlying reason", async () => {
-    const unitSrc = join(installDir, "services", "fake-bot.service");
-    await mkdir(join(installDir, "services"), { recursive: true });
-    await writeFile(unitSrc, `[Service]\nExecStart=/bin/true\n`);
-
-    const { runner, calls } = makeRecorder();
-    const host = createLinuxSystemdHost({ unitDir, binDir, forcePlatform: "linux" });
-
-    await expect(
-      installSystemdArtifacts({
-        host,
-        manifest: fakeAgentManifest({ provides: { systemdUnit: "services/fake-bot.service" } }),
-        installDir,
-        quiet: true,
-        systemctlRunner: runner,
-        lingerChecker: makeThrowingLingerChecker("spawn loginctl ENOENT"),
-      }),
-    ).rejects.toThrow(/requires linger enabled.*could not confirm linger status: spawn loginctl ENOENT/s);
-
-    expect(existsSync(join(unitDir, "fake-bot.service"))).toBe(false);
-    // enable --now never called — the linger gate stopped the sequence.
     expect(calls).toEqual([["--user", "daemon-reload"]]);
   });
 });
@@ -584,7 +467,6 @@ describe("removeSystemdArtifacts — throwing runner completes without crashing 
       installDir,
       quiet: true,
       systemctlRunner: installRunner,
-      lingerChecker: makeLingerChecker(true),
     });
     expect(existsSync(join(unitDir, "fake-bot.service"))).toBe(true);
     expect(existsSync(join(binDir, "fake-bot"))).toBe(true);
@@ -610,9 +492,9 @@ describe("removeSystemdArtifacts — throwing runner completes without crashing 
 
 /**
  * PR #314 adversarial review, MINOR (a): a typo'd/unsupported token in
- * `provides.systemdUnit` must never reach `systemctl enable --now` — unlike
- * darwin (activation deferred to a reviewable lifecycle script), this
- * dispatch inlines activation.
+ * `provides.systemdUnit` must never reach disk — even render-only, a
+ * broken unit file left for the package's postinstall to enable blind is
+ * a needless landmine.
  */
 describe("installSystemdArtifacts — unrendered-token gate (arc#311/PR#314 MINOR)", () => {
   test("a typo'd token aborts BEFORE the unit file is written and BEFORE any systemctl call", async () => {
@@ -632,7 +514,6 @@ describe("installSystemdArtifacts — unrendered-token gate (arc#311/PR#314 MINO
         installDir,
         quiet: true,
         systemctlRunner: runner,
-        lingerChecker: makeLingerChecker(true),
       }),
     ).rejects.toThrow(/unrendered token\(s\).*\{\{BINN\}\}/s);
 
@@ -653,7 +534,6 @@ describe("installSystemdArtifacts — unrendered-token gate (arc#311/PR#314 MINO
       installDir,
       quiet: true,
       systemctlRunner: runner,
-      lingerChecker: makeLingerChecker(true),
     });
 
     expect(existsSync(rec.unitPath!)).toBe(true);

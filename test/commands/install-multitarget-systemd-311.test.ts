@@ -2,9 +2,14 @@
  * Integration tests for arc#311 (L2): multi-target install dispatch for
  * linux-systemd. Sister to install-multitarget-i140.test.ts (darwin-launchd).
  *
- * NEVER spawns a real `systemctl`/`loginctl` — `install()`'s injectable
- * `systemctlRunner`/`lingerChecker` are threaded through `installPerTarget`
- * -> `installSystemdArtifacts` -> `completeInstallTransaction` for every
+ * RENDER-ONLY design (principal decision, PR #314 review): install lands
+ * `provides.binary` (symlink), `provides.systemdUnit` (rendered), then
+ * `systemctl --user daemon-reload` — nothing more. Activation is the
+ * package's own `lifecycle.postinstall` concern (parity with darwin).
+ *
+ * NEVER spawns a real `systemctl` — `install()`'s injectable
+ * `systemctlRunner` is threaded through `installPerTarget` ->
+ * `installSystemdArtifacts` -> `completeInstallTransaction` for every
  * test here, mirroring how `hostOverrides` isolates paths.
  */
 
@@ -15,11 +20,7 @@ import { join } from "path";
 import { createTestEnv, type TestEnv } from "../helpers/test-env.js";
 import { install } from "../../src/commands/install.js";
 import { getSkill } from "../../src/lib/db.js";
-import type {
-  SystemctlRunner,
-  SystemctlResult,
-  LingerChecker,
-} from "../../src/lib/hosts/systemd-install.js";
+import type { SystemctlRunner, SystemctlResult } from "../../src/lib/hosts/systemd-install.js";
 
 let env: TestEnv;
 let unitDir: string;
@@ -45,10 +46,6 @@ function makeRecorder(responses: Record<string, SystemctlResult> = {}) {
     return responses[args.join(" ")] ?? { code: 0, stderr: "" };
   };
   return { runner, calls };
-}
-
-function makeLingerChecker(enabled: boolean): LingerChecker {
-  return async () => ({ enabled, username: "testuser" });
 }
 
 /** A standalone bot repo targeting linux-systemd only, binary + unit provided. */
@@ -93,7 +90,7 @@ provides:
 }
 
 describe("install: linux-systemd multi-target dispatch", () => {
-  test("standalone-bot install lands binary symlink + rendered unit, then daemon-reload + enable --now", async () => {
+  test("standalone-bot install lands binary symlink + rendered unit, then daemon-reload only (no enable)", async () => {
     const repo = await createStandaloneBotRepo({ parent: env.root, name: "alpha-bot" });
     const { runner, calls } = makeRecorder();
 
@@ -107,7 +104,6 @@ describe("install: linux-systemd multi-target dispatch", () => {
         "linux-systemd": { unitDir, binDir: systemdBinDir, forcePlatform: "linux" },
       },
       systemctlRunner: runner,
-      lingerChecker: makeLingerChecker(true),
     });
 
     expect(result.success).toBe(true);
@@ -122,10 +118,8 @@ describe("install: linux-systemd multi-target dispatch", () => {
     expect(unitContent).toContain("nats://");
     expect(unitContent).not.toContain("{{BIN}}");
 
-    expect(calls).toEqual([
-      ["--user", "daemon-reload"],
-      ["--user", "enable", "--now", "alpha-bot.service"],
-    ]);
+    // ONLY daemon-reload -- render-only design, no enable/disable/linger call.
+    expect(calls).toEqual([["--user", "daemon-reload"]]);
   });
 
   test("install records the package in the database", async () => {
@@ -136,35 +130,12 @@ describe("install: linux-systemd multi-target dispatch", () => {
       arc: env.arc, host: env.host, db: env.db, repoUrl: repo.url, yes: true,
       hostOverrides: { "linux-systemd": { unitDir, binDir: systemdBinDir, forcePlatform: "linux" } },
       systemctlRunner: runner,
-      lingerChecker: makeLingerChecker(true),
     });
 
     const row = getSkill(env.db, "beta-bot");
     expect(row).not.toBeNull();
     expect(row!.artifact_type).toBe("agent");
     expect(row!.status).toBe("active");
-  });
-
-  test("STOP-AND-ASK: linger disabled aborts the install with the exact sudo command, never invokes sudo", async () => {
-    const repo = await createStandaloneBotRepo({ parent: env.root, name: "gamma-bot" });
-    const { runner, calls } = makeRecorder();
-
-    const result = await install({
-      arc: env.arc, host: env.host, db: env.db, repoUrl: repo.url, yes: true,
-      hostOverrides: { "linux-systemd": { unitDir, binDir: systemdBinDir, forcePlatform: "linux" } },
-      systemctlRunner: runner,
-      lingerChecker: makeLingerChecker(false),
-    });
-
-    expect(result.success).toBe(false);
-    expect(result.error).toMatch(/sudo loginctl enable-linger testuser/);
-    // enable --now never called; the reload call is the only systemctl call recorded.
-    expect(calls).toEqual([["--user", "daemon-reload"]]);
-
-    // Rolled back cleanly.
-    expect(existsSync(join(unitDir, "gamma-bot.service"))).toBe(false);
-    expect(existsSync(join(systemdBinDir, "gamma-bot"))).toBe(false);
-    expect(getSkill(env.db, "gamma-bot")).toBeNull();
   });
 
   test("postinstall failure rolls back the systemd side (unit disabled/removed, symlink gone)", async () => {
@@ -210,7 +181,6 @@ lifecycle:
       arc: env.arc, host: env.host, db: env.db, repoUrl: repoDir, yes: true,
       hostOverrides: { "linux-systemd": { unitDir, binDir: systemdBinDir, forcePlatform: "linux" } },
       systemctlRunner: runner,
-      lingerChecker: makeLingerChecker(true),
     });
 
     expect(result.success).toBe(false);
@@ -219,7 +189,10 @@ lifecycle:
     expect(existsSync(join(unitDir, "delta-bot.service"))).toBe(false);
     expect(existsSync(join(systemdBinDir, "delta-bot"))).toBe(false);
     // The install-transaction rollback (fired AFTER completeInstallTransaction
-    // recorded the systemd side) disables the unit before deleting it.
+    // recorded the systemd side) still `disable --now`s defensively before
+    // deleting the unit -- arc owns teardown symmetrically even though
+    // install itself never enabled anything (the package's own postinstall
+    // is what would have, and it's what just failed).
     expect(calls).toContainEqual(["--user", "disable", "--now", "delta-bot.service"]);
     expect(getSkill(env.db, "delta-bot")).toBeNull();
   });
@@ -244,7 +217,6 @@ lifecycle:
         "linux-systemd": { unitDir, binDir: systemdBinDir, forcePlatform: "darwin" },
       },
       systemctlRunner: runner,
-      lingerChecker: makeLingerChecker(true),
     });
 
     expect(result.success).toBe(false);

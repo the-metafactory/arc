@@ -16,7 +16,7 @@ import { install } from "../../src/commands/install.js";
 import { findOrphanedSystemdUnits } from "../../src/commands/verify.js";
 import { updateSkillStatus, removeSkill } from "../../src/lib/db.js";
 import { resolveHost } from "../../src/lib/hosts/registry.js";
-import type { SystemctlRunner, SystemctlResult, LingerChecker } from "../../src/lib/hosts/systemd-install.js";
+import type { SystemctlRunner, SystemctlResult } from "../../src/lib/hosts/systemd-install.js";
 
 let env: TestEnv;
 let unitDir: string;
@@ -37,10 +37,6 @@ afterEach(async () => {
 function makeRecorder(responses: Record<string, SystemctlResult> = {}) {
   const runner: SystemctlRunner = async (args) => responses[args.join(" ")] ?? { code: 0, stderr: "" };
   return runner;
-}
-
-function makeLingerChecker(enabled: boolean): LingerChecker {
-  return async () => ({ enabled, username: "testuser" });
 }
 
 async function installBot(name: string) {
@@ -78,7 +74,6 @@ provides:
     arc: env.arc, host: env.host, db: env.db, repoUrl: repoDir, yes: true,
     hostOverrides: { "linux-systemd": { unitDir, binDir: systemdBinDir, forcePlatform: "linux" } },
     systemctlRunner: makeRecorder(),
-    lingerChecker: makeLingerChecker(true),
   });
 }
 
