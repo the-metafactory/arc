@@ -381,7 +381,7 @@ export interface ArcManifest {
   schema?: "arc/v1" | "pai/v1";
   name: string;
   version: string;
-  type: "skill" | "system" | "tool" | "agent" | "prompt" | "component" | "pipeline" | "process" | "rules" | "library";
+  type: "skill" | "system" | "tool" | "agent" | "prompt" | "component" | "pipeline" | "process" | "rules" | "library" | "action";
   /** Only present when type is "library" — lists contained artifacts */
   artifacts?: LibraryArtifactEntry[];
   /**

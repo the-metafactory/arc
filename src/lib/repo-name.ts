@@ -112,3 +112,30 @@ export function extractRepoName(url: string, p: PathFlavor = nodePath): string {
 
   return name;
 }
+
+/**
+ * Derive the canonical package `name` from a metafactory skill-repo directory
+ * name, per the strict-migration spec §4.2. The grammar has three prefix forms:
+ *
+ *   - `metafactory-skill-<name>`        → `<name>`
+ *   - `metafactory-bundle-<name>`       → `<name>`
+ *   - `metafactory-<app>-skill-<name>`  → `<name>`  (`<app>` is one segment)
+ *
+ * Returns `<name>` when the dir matches one of those forms, else `null` (the
+ * dir is not a metafactory skill repo, so the §4.2 derivation rule does not
+ * apply — a legacy repo name or a scratch dir falls here). The `metafactory-
+ * skill-` form is checked before the `<app>-skill-` form so the app segment is
+ * never mistakenly matched as empty.
+ */
+export function toStrictName(repoDirName: string): string | null {
+  const skill = /^metafactory-skill-(.+)$/.exec(repoDirName);
+  if (skill) return skill[1];
+
+  const bundle = /^metafactory-bundle-(.+)$/.exec(repoDirName);
+  if (bundle) return bundle[1];
+
+  const appSkill = /^metafactory-[a-z0-9]+-skill-(.+)$/.exec(repoDirName);
+  if (appSkill) return appSkill[1];
+
+  return null;
+}
