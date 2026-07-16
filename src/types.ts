@@ -88,7 +88,10 @@ export interface Capabilities {
     read?: string[];
     write?: string[];
   };
-  network?: { domain: string; reason: string }[];
+  // Canonical shape (spec §4.1): { host, reason }. The loader folds the
+  // deprecated { domain, reason } shape and the bare-string shorthand into
+  // this form (normalizeNetworkEntry), so downstream always sees `host`.
+  network?: { host: string; reason: string }[];
   bash?: {
     allowed: boolean;
     restricted_to?: string[];

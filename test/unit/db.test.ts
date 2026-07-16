@@ -31,7 +31,7 @@ const mockManifest: ArcManifest = {
       read: ["~/.claude/MEMORY/"],
       write: ["~/.claude/MEMORY/WORK/"],
     },
-    network: [{ domain: "api.example.com", reason: "API calls" }],
+    network: [{ host: "api.example.com", reason: "API calls" }],
     bash: { allowed: true, restricted_to: ["bun src/tool.ts"] },
     secrets: ["API_KEY"],
   },

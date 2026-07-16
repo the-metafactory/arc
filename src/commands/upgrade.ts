@@ -555,7 +555,7 @@ export async function upgradePackage(
       for (const p of caps.filesystem.write) insertCap.run(name, "fs_write", p, "");
     }
     if (caps.network) {
-      for (const n of caps.network) insertCap.run(name, "network", n.domain, n.reason);
+      for (const n of caps.network) insertCap.run(name, "network", n.host, n.reason);
     }
     if (caps.bash?.restricted_to) {
       for (const b of caps.bash.restricted_to) insertCap.run(name, "bash", b, "");
