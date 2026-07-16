@@ -1,0 +1,24 @@
+schema: arc/v1
+name: plan-breakdown
+namespace: "@metafactory"
+version: 0.1.0
+type: skill
+tier: custom
+description: Break a detailed plan into an epic + executor-grade sub-issues.
+license: Apache-2.0
+author:
+  name: Jane Doe
+  github: janedoe
+capabilities:
+  filesystem:
+    read: []
+    write: []
+  # The canonical { host, reason } network shape (spec §4.1, arc#335). This
+  # fixture is the live case that exposed the validator↔loader contradiction:
+  # it must BOTH strict-validate AND parse through the install loader.
+  network:
+    - host: github.com
+      reason: "Creates/edits issues, epics, sub-issue links via gh CLI"
+  bash:
+    allowed: true
+  secrets: []

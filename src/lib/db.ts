@@ -134,7 +134,7 @@ export function recordInstall(
   }
   if (caps.network) {
     for (const n of caps.network) {
-      insertCap.run(skill.name, "network", n.domain, n.reason);
+      insertCap.run(skill.name, "network", n.host, n.reason);
     }
   }
   if (caps.bash?.restricted_to) {

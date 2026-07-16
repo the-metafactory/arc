@@ -205,42 +205,66 @@ export function normalizeSchema(manifest: ArcManifest, filename: string): void {
 }
 
 /**
- * Normalize a single network-capability entry to object form.
- * Accepts the legal `{domain, reason}` object shape and the string shorthand
- * `"example.com"` (rewritten to `{domain: "example.com", reason: ""}`).
+ * Normalize a single network-capability entry to the canonical `{host, reason}`
+ * object form (spec §4.1, arc#335). Accepts, in order of preference:
+ *   - the canonical `{host, reason}` object,
+ *   - the deprecated `{domain, reason}` object (folded: `domain` → `host`),
+ *   - the bare string shorthand `"example.com"` (→ `{host, reason: ""}`).
  * Returns null for anything else so the caller can surface a clear error.
+ *
+ * This is the lenient-loader half of the arc#335 contract: the strict validator
+ * (validate-manifest.ts) requires `{host, reason}` and rejects `domain`, while
+ * the loader keeps accepting the deprecated shape so un-migrated packages still
+ * install — the same loader-lenient/validator-strict posture as the pai/v1
+ * schema alias (arc#280).
  */
 export function normalizeNetworkEntry(
   entry: unknown,
-): { domain: string; reason: string } | null {
+): { host: string; reason: string } | null {
   if (typeof entry === "string") {
-    return { domain: entry, reason: "" };
+    return { host: entry, reason: "" };
   }
   if (entry && typeof entry === "object") {
-    const obj = entry as { domain?: unknown; reason?: unknown };
+    const obj = entry as { host?: unknown; domain?: unknown; reason?: unknown };
+    const reason = typeof obj.reason === "string" ? obj.reason : "";
+    // Canonical shape first.
+    if (typeof obj.host === "string") {
+      return { host: obj.host, reason };
+    }
+    // Deprecated { domain, reason } — fold `domain` into the canonical `host`.
     if (typeof obj.domain === "string") {
-      return { domain: obj.domain, reason: typeof obj.reason === "string" ? obj.reason : "" };
+      return { host: obj.domain, reason };
     }
   }
   return null;
 }
 
 /**
- * Normalize `capabilities.network` in place. Rewrites string shorthand
- * (`- example.com`) to `{domain, reason: ""}` and emits a one-shot stderr
- * warning naming each shorthand entry so publishers can add a reason.
- * No-op when capabilities or network are absent.
+ * Normalize `capabilities.network` in place to the canonical `{host, reason}`
+ * shape (arc#335). Folds the deprecated `{domain, reason}` map and the bare
+ * string shorthand (`- example.com`) into `{host, reason}`, and emits one-shot
+ * stderr warnings naming the deprecated entries so publishers can migrate to
+ * the canonical shape the strict validator requires. No-op when capabilities or
+ * network are absent.
  */
 export function normalizeCapabilities(manifest: ArcManifest, filename: string): void {
   const caps = manifest.capabilities;
   if (!caps || !Array.isArray(caps.network) || caps.network.length === 0) return;
 
   const shorthand: string[] = [];
+  const deprecatedDomain: string[] = [];
   const invalid: unknown[] = [];
-  const normalized: { domain: string; reason: string }[] = [];
+  const normalized: { host: string; reason: string }[] = [];
 
   for (const entry of caps.network as unknown[]) {
     if (typeof entry === "string") shorthand.push(entry);
+    else if (
+      entry && typeof entry === "object" &&
+      typeof (entry as { host?: unknown }).host !== "string" &&
+      typeof (entry as { domain?: unknown }).domain === "string"
+    ) {
+      deprecatedDomain.push((entry as { domain: string }).domain);
+    }
     const result = normalizeNetworkEntry(entry);
     if (result === null) {
       invalid.push(entry);
@@ -251,7 +275,8 @@ export function normalizeCapabilities(manifest: ArcManifest, filename: string): 
 
   if (invalid.length > 0) {
     throw new Error(
-      `Invalid ${filename}: capabilities.network entries must be a string domain or {domain, reason} object; got ${JSON.stringify(invalid)}`,
+      `Invalid ${filename}: capabilities.network entries must be a {host, reason} object ` +
+      `(the deprecated {domain, reason} map and a bare string are also accepted); got ${JSON.stringify(invalid)}`,
     );
   }
 
@@ -260,7 +285,13 @@ export function normalizeCapabilities(manifest: ArcManifest, filename: string): 
   if (shorthand.length > 0) {
     process.stderr.write(
       `warning: ${filename} capabilities.network uses string shorthand for [${shorthand.join(", ")}] — ` +
-      `add a reason for each domain in the form {domain: "${shorthand[0]}", reason: "why you need this"}.\n`,
+      `add a reason for each host in the form {host: "${shorthand[0]}", reason: "why you need this"}.\n`,
+    );
+  }
+  if (deprecatedDomain.length > 0) {
+    process.stderr.write(
+      `warning: ${filename} capabilities.network uses the deprecated {domain, reason} shape for ` +
+      `[${deprecatedDomain.join(", ")}] — rename 'domain' to 'host' (the canonical shape; arc#335).\n`,
     );
   }
 }
@@ -797,7 +828,7 @@ export function formatCapabilities(manifest: ArcManifest): string[] {
   }
   if (caps.network?.length) {
     for (const n of caps.network) {
-      lines.push(`  🟡 Network: ${n.domain} (${n.reason})`);
+      lines.push(`  🟡 Network: ${n.host} (${n.reason})`);
     }
   }
   if (caps.bash?.allowed) {

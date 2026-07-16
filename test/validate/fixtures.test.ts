@@ -2,6 +2,7 @@ import { describe, test, expect } from "bun:test";
 import { join } from "path";
 import { validate, type ValidateResult } from "../../src/commands/validate.js";
 import type { Violation } from "../../src/lib/validate-manifest.js";
+import { readManifest } from "../../src/lib/manifest.js";
 
 /**
  * Fixture corpus for the strict `arc validate` gate (arc#318, epic arc#316).
@@ -42,6 +43,7 @@ const PASSING_FIXTURES = [
   "metafactory-pipeline-nightly", // pipeline
   "metafactory-action-notify", // action (arc#95)
   "metafactory-bundle-devkit", // bundle-style skill repo w/ provides.cli+commands
+  "metafactory-skill-plan-breakdown", // skill w/ canonical { host, reason } network (arc#335)
 ] as const;
 
 describe("arc#318 fixture corpus — passing (one per artifact type)", () => {
@@ -52,6 +54,44 @@ describe("arc#318 fixture corpus — passing (one per artifact type)", () => {
       expect(result.violations).toEqual([]);
       expect(result.exitCode).toBe(0);
       expect(result.lines[0]).toContain("OK");
+    });
+  }
+});
+
+/**
+ * Validator↔loader parity invariant (arc#335). The strict validator (what CI
+ * gates on) and the install-time loader (`readManifest`, what `arc install`
+ * runs) MUST agree on every shape: a manifest that validates clean must also
+ * parse through the loader without throwing. This closes the contract-drift
+ * family that blocked the skill-estate migration — the {host,reason} vs
+ * {domain,reason} network mismatch (#335) is the case that motivated it; a
+ * fixture with the canonical network shape (metafactory-skill-plan-breakdown)
+ * would have gone validate-✅ / load-❌ before the loader fix.
+ *
+ * Scope note (#334): this parity check is at the LOAD boundary. `readManifest`
+ * does not validate the artifact `type` against the installer's supported set
+ * (that gate lives later, in planArtifactSymlinks), so the sibling `type:
+ * bundle` divergence (#334) is NOT caught here — closing that needs a
+ * validator↔installer TYPE-SET parity assertion, tracked on #334.
+ */
+describe("arc#335 — validator↔loader parity (every passing fixture validates AND loads)", () => {
+  for (const name of PASSING_FIXTURES) {
+    test(`${name}: strict-validates AND parses through the install loader`, async () => {
+      const result = await validate(passingDir(name));
+      expect(result.exitCode).toBe(0);
+
+      // The loader must accept exactly what the validator accepted — no throw,
+      // and a non-null manifest with a normalized capability surface.
+      const manifest = await readManifest(passingDir(name));
+      expect(manifest).not.toBeNull();
+
+      // Where the fixture declares network capabilities, the loader must have
+      // normalized them to the canonical { host, reason } shape (arc#335).
+      for (const entry of manifest!.capabilities?.network ?? []) {
+        expect(typeof entry.host).toBe("string");
+        expect(entry.host.length).toBeGreaterThan(0);
+        expect(typeof entry.reason).toBe("string");
+      }
     });
   }
 });

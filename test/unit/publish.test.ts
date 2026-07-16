@@ -551,12 +551,12 @@ describe("combineError", () => {
 
 // Regression tests for https://github.com/the-metafactory/arc/issues/79
 describe("toServerManifest — network capability coercion", () => {
-  test("object form produces {domain}", () => {
+  test("canonical { host } input produces server {domain}", () => {
     const m = makeManifest({
       capabilities: {
         network: [
-          { domain: "github.com", reason: "clone repos" },
-          { domain: "api.example.com", reason: "telemetry" },
+          { host: "github.com", reason: "clone repos" },
+          { host: "api.example.com", reason: "telemetry" },
         ],
       },
     });
@@ -566,11 +566,25 @@ describe("toServerManifest — network capability coercion", () => {
     });
   });
 
+  test("deprecated { domain } input still produces server {domain} (compat)", () => {
+    const m = makeManifest({
+      capabilities: {
+        network: [
+          { domain: "github.com", reason: "clone repos" },
+        ] as unknown as { host: string; reason: string }[],
+      },
+    });
+    const server = toServerManifest(m, "test");
+    expect(server.capabilities).toEqual({
+      network: [{ domain: "github.com" }],
+    });
+  });
+
   test("string shorthand produces {domain} (defensive path)", () => {
     // Simulates a manifest that bypassed readManifest normalisation.
     const m = makeManifest({
       capabilities: {
-        network: ["github.com", "agentskills.io"] as unknown as { domain: string; reason: string }[],
+        network: ["github.com", "agentskills.io"] as unknown as { host: string; reason: string }[],
       },
     });
     const server = toServerManifest(m, "test");
@@ -584,12 +598,12 @@ describe("toServerManifest — network capability coercion", () => {
       capabilities: {
         network: [
           "github.com",
-          { domain: "good.com", reason: "ok" },
-          { reason: "no domain" },
+          { host: "good.com", reason: "ok" },
+          { reason: "no host" },
           null,
           undefined,
           42,
-        ] as unknown as { domain: string; reason: string }[],
+        ] as unknown as { host: string; reason: string }[],
       },
     });
     const server = toServerManifest(m, "test");

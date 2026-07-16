@@ -373,7 +373,7 @@ describe("assessRisk", () => {
       ...base,
       capabilities: {
         ...base.capabilities,
-        network: [{ domain: "api.example.com", reason: "test" }],
+        network: [{ host: "api.example.com", reason: "test" }],
       },
     };
     expect(assessRisk(m)).toBe("medium");
@@ -392,7 +392,7 @@ describe("assessRisk", () => {
       ...base,
       capabilities: {
         ...base.capabilities,
-        network: [{ domain: "api.example.com", reason: "test" }],
+        network: [{ host: "api.example.com", reason: "test" }],
         filesystem: { write: ["/output"] },
       },
     };
@@ -404,7 +404,7 @@ describe("assessRisk", () => {
       ...base,
       capabilities: {
         ...base.capabilities,
-        network: [{ domain: "api.example.com", reason: "test" }],
+        network: [{ host: "api.example.com", reason: "test" }],
         secrets: ["API_KEY"],
       },
     };
@@ -421,7 +421,7 @@ describe("formatCapabilities", () => {
       author: { name: "test", github: "test" },
       capabilities: {
         filesystem: { read: ["/read"], write: ["/write"] },
-        network: [{ domain: "api.example.com", reason: "API" }],
+        network: [{ host: "api.example.com", reason: "API" }],
         bash: { allowed: true, restricted_to: ["bun src/tool.ts"] },
         secrets: ["API_KEY"],
       },
@@ -542,36 +542,59 @@ describe("formatAuthor", () => {
 
 // Regression tests for https://github.com/the-metafactory/arc/issues/79
 describe("normalizeNetworkEntry", () => {
-  test("string shorthand becomes object with empty reason", () => {
-    expect(normalizeNetworkEntry("github.com")).toEqual({
-      domain: "github.com",
-      reason: "",
-    });
-  });
-
-  test("object with domain + reason passes through", () => {
-    expect(normalizeNetworkEntry({ domain: "github.com", reason: "clone repos" })).toEqual({
-      domain: "github.com",
+  // Canonical shape (arc#335): { host, reason }. The loader also folds the
+  // deprecated { domain, reason } map and the bare-string shorthand into it.
+  test("canonical { host, reason } passes through", () => {
+    expect(normalizeNetworkEntry({ host: "github.com", reason: "clone repos" })).toEqual({
+      host: "github.com",
       reason: "clone repos",
     });
   });
 
-  test("object missing reason gets empty reason", () => {
-    expect(normalizeNetworkEntry({ domain: "github.com" })).toEqual({
-      domain: "github.com",
+  test("canonical { host } without reason gets empty reason", () => {
+    expect(normalizeNetworkEntry({ host: "github.com" })).toEqual({
+      host: "github.com",
       reason: "",
+    });
+  });
+
+  test("string shorthand becomes { host } with empty reason", () => {
+    expect(normalizeNetworkEntry("github.com")).toEqual({
+      host: "github.com",
+      reason: "",
+    });
+  });
+
+  test("deprecated { domain, reason } folds domain → host", () => {
+    expect(normalizeNetworkEntry({ domain: "github.com", reason: "clone repos" })).toEqual({
+      host: "github.com",
+      reason: "clone repos",
+    });
+  });
+
+  test("deprecated { domain } without reason folds to { host, reason: '' }", () => {
+    expect(normalizeNetworkEntry({ domain: "github.com" })).toEqual({
+      host: "github.com",
+      reason: "",
+    });
+  });
+
+  test("host wins when both host and domain are present", () => {
+    expect(normalizeNetworkEntry({ host: "canonical.com", domain: "legacy.com", reason: "x" })).toEqual({
+      host: "canonical.com",
+      reason: "x",
     });
   });
 
   test("object with non-string reason gets empty reason", () => {
-    expect(normalizeNetworkEntry({ domain: "github.com", reason: 42 })).toEqual({
-      domain: "github.com",
+    expect(normalizeNetworkEntry({ host: "github.com", reason: 42 })).toEqual({
+      host: "github.com",
       reason: "",
     });
   });
 
-  test("object missing domain rejected", () => {
-    expect(normalizeNetworkEntry({ reason: "no domain" })).toBeNull();
+  test("object missing both host and domain rejected", () => {
+    expect(normalizeNetworkEntry({ reason: "no host" })).toBeNull();
   });
 
   test("number rejected", () => {
@@ -593,12 +616,12 @@ describe("normalizeCapabilities", () => {
     };
     normalizeCapabilities(m, "arc-manifest.yaml");
     expect(m.capabilities!.network).toEqual([
-      { domain: "github.com", reason: "" },
-      { domain: "agentskills.io", reason: "" },
+      { host: "github.com", reason: "" },
+      { host: "agentskills.io", reason: "" },
     ]);
   });
 
-  test("mixed string + object entries both land as objects", () => {
+  test("mixed string + canonical host + deprecated domain all land as { host }", () => {
     const m: ArcManifest = {
       name: "t",
       version: "1.0.0",
@@ -606,15 +629,39 @@ describe("normalizeCapabilities", () => {
       capabilities: {
         network: [
           "github.com",
+          { host: "canonical.example.com", reason: "api" },
           { domain: "api.example.com", reason: "telemetry" },
         ] as any,
       },
     };
     normalizeCapabilities(m, "arc-manifest.yaml");
     expect(m.capabilities!.network).toEqual([
-      { domain: "github.com", reason: "" },
-      { domain: "api.example.com", reason: "telemetry" },
+      { host: "github.com", reason: "" },
+      { host: "canonical.example.com", reason: "api" },
+      { host: "api.example.com", reason: "telemetry" },
     ]);
+  });
+
+  test("warns on stderr when the deprecated { domain } shape is present", () => {
+    const captured: string[] = [];
+    const orig = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((chunk: any) => {
+      captured.push(String(chunk));
+      return true;
+    }) as any;
+    try {
+      const m: ArcManifest = {
+        name: "t",
+        version: "1.0.0",
+        type: "skill",
+        capabilities: { network: [{ domain: "api.example.com", reason: "x" }] as any },
+      };
+      normalizeCapabilities(m, "arc-manifest.yaml");
+    } finally {
+      process.stderr.write = orig;
+    }
+    expect(captured.join("")).toContain("deprecated {domain, reason} shape");
+    expect(captured.join("")).toContain("api.example.com");
   });
 
   test("no-op when capabilities absent", () => {
@@ -680,7 +727,7 @@ describe("normalizeCapabilities", () => {
         version: "1.0.0",
         type: "skill",
         capabilities: {
-          network: [{ domain: "github.com", reason: "clone" }],
+          network: [{ host: "github.com", reason: "clone" }],
         },
       };
       normalizeCapabilities(m, "arc-manifest.yaml");
@@ -711,8 +758,8 @@ capabilities:
       const manifest = await readManifest(tempDir);
       expect(manifest).not.toBeNull();
       expect(manifest!.capabilities!.network).toEqual([
-        { domain: "github.com", reason: "" },
-        { domain: "agentskills.io", reason: "" },
+        { host: "github.com", reason: "" },
+        { host: "agentskills.io", reason: "" },
       ]);
     } finally {
       process.stderr.write = orig;
