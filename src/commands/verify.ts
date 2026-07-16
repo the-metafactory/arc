@@ -1,11 +1,12 @@
-import { join, relative } from "path";
+import { join, relative, basename } from "path";
 import { existsSync, readdirSync, statSync } from "fs";
 import type { Database } from "bun:sqlite";
-import type { ArcPaths, HostAdapter } from "../types.js";
-import { getSkill } from "../lib/db.js";
+import type { ArcPaths, HostAdapter, LinuxSystemdHostPaths } from "../types.js";
+import { getSkill, listSkills } from "../lib/db.js";
 import { isValidSymlink } from "../lib/symlinks.js";
 import { readManifest } from "../lib/manifest.js";
 import { listPackageHooks, findMissingHookFiles } from "../lib/hooks.js";
+import { resolveHost, type HostOverrides } from "../lib/hosts/registry.js";
 
 export interface VerifyCheck {
   check: string;
@@ -29,12 +30,16 @@ export interface VerifyResult {
  * @param arc Unused until Phase 3c, which adds arc-state checks (db row /
  *   manifest cross-reference, sources.yaml integrity). Kept in the
  *   signature now so that pass doesn't churn every call site twice.
+ * @param hostOverrides Per-host adapter overrides (arc#311 — test
+ *   isolation for the linux-systemd orphaned-unit check below, mirrors
+ *   `InstallOptions.hostOverrides`). Production leaves this absent.
  */
 export async function verify(
   db: Database,
   arc: ArcPaths,
   host: HostAdapter,
-  name: string
+  name: string,
+  hostOverrides?: HostOverrides,
 ): Promise<VerifyResult> {
   const skill = getSkill(db, name);
   if (!skill) {
@@ -127,11 +132,95 @@ export async function verify(
     }
   }
 
+  // Check 6: no orphaned systemd units (arc#311). Scoped to packages that
+  // declare a linux-systemd target -- a plain skill/tool's verify doesn't
+  // pay for a unitDir scan it has no stake in.
+  if (manifest?.targets?.includes("linux-systemd")) {
+    const systemdHost = resolveHost("linux-systemd", hostOverrides);
+    const orphans = await findOrphanedSystemdUnits(db, systemdHost);
+    checks.push({
+      check: `No orphaned systemd units (${orphans.length} found)`,
+      passed: orphans.length === 0,
+      detail: orphans.length ? orphans.map((o) => o.unitPath).join(", ") : undefined,
+    });
+  }
+
   return {
     name,
     checks,
     allPassed: checks.every((c) => c.passed),
   };
+}
+
+/**
+ * A rendered systemd unit file found in `host.paths.unitDir` that a
+ * DB-known arc package once declared but no longer actively claims.
+ */
+export interface OrphanedUnit {
+  unitPath: string;
+  reason: string;
+}
+
+/**
+ * Scan the linux-systemd host's `unitDir` for `*.service` files that arc
+ * once installed but no longer actively owns (arc#311, hardened per PR
+ * #314 review). A unit left behind by an interrupted `arc remove`, or a
+ * package disabled without its supervision side being torn down, shows up
+ * here — none of arc's other checks catch a leftover unit file, since
+ * `verify()` otherwise only inspects the ONE named package's own expected
+ * drop.
+ *
+ * SCOPE (adversarial review, arc#311/PR#314): the first cut of this scan
+ * flagged EVERY `.service` file not claimed by a currently-active package —
+ * including a user's own unrelated, hand-written unit that arc never
+ * touched. That's pure noise arc has no business reporting on. The fix:
+ * a file is only a *candidate* for "orphaned" if its basename matches SOME
+ * package arc's DB has ANY record of (active OR disabled — `listSkills`
+ * returns both), not just currently-active ones. A basename with no DB
+ * record at all — a stranger's unit — is skipped outright, never flagged.
+ *
+ * KNOWN GAP (accepted tradeoff, documented per review instruction): a unit
+ * whose OWNING package's DB ROW has been fully deleted (`arc remove`
+ * completing the DB step but leaving the unit file behind — e.g. an
+ * interrupted teardown) is invisible to this scan, since nothing in the DB
+ * still names its basename. Catching that would need a content-level
+ * "rendered by arc" marker stamped into the unit at install time (the
+ * review's other suggested option) — deferred as a follow-up; false
+ * negatives here are strictly preferable to false-positiving on every
+ * user's unrelated unit.
+ */
+export async function findOrphanedSystemdUnits(
+  db: Database,
+  host: HostAdapter,
+): Promise<OrphanedUnit[]> {
+  const unitDir = (host.paths as Partial<LinuxSystemdHostPaths>).unitDir;
+  if (!unitDir || !existsSync(unitDir)) return [];
+
+  // Basenames arc's DB has ANY record of declaring (active or disabled) --
+  // the universe of files this scan is even allowed to comment on.
+  const everKnown = new Set<string>();
+  // Basenames a currently-ACTIVE package still claims -- not orphaned.
+  const activeOwned = new Set<string>();
+  for (const skill of listSkills(db)) {
+    const skillManifest = await readManifest(skill.install_path);
+    if (!skillManifest?.targets?.includes("linux-systemd")) continue;
+    if (!skillManifest.provides?.systemdUnit) continue;
+    const unitName = basename(skillManifest.provides.systemdUnit);
+    everKnown.add(unitName);
+    if (skill.status === "active") activeOwned.add(unitName);
+  }
+
+  const orphans: OrphanedUnit[] = [];
+  for (const entry of readdirSync(unitDir)) {
+    if (!entry.endsWith(".service")) continue;
+    if (!everKnown.has(entry)) continue; // never arc's business -- skip, no noise
+    if (activeOwned.has(entry)) continue; // still actively claimed
+    orphans.push({
+      unitPath: join(unitDir, entry),
+      reason: "a DB-known arc package declares this unit but no longer actively claims it",
+    });
+  }
+  return orphans;
 }
 
 /**

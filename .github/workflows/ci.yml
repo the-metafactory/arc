@@ -107,9 +107,11 @@ jobs:
   # systemd e2e — plain Actions jobs have no systemd user bus
   # ("systemctl --user" -> "Failed to connect to bus"), so this job
   # boots one before running the linux-systemd HostAdapter's e2e test.
-  # Not in required checks yet; the L2 dispatch issue (arc epic) is
-  # what actually populates test/e2e/systemd*.test.ts, so a zero-match
-  # glob here is expected and not a failure. Keep this step block
+  # test/e2e/systemd-install.test.ts (arc#311, L2 dispatch) now matches
+  # the glob below and runs for real here. The `ls` guard stays so a
+  # future rename/removal fails soft (informative skip) rather than
+  # hard (the job's whole point is exercising a REAL systemctl --user,
+  # not gating merges — not in required checks). Keep this step block
   # byte-similar to cortex's sibling job (design/linux-host-support.md
   # §L2) so the two can be lifted into a shared composite action later.
   # ──────────────────────────────────────────────────────────────────
@@ -135,6 +137,13 @@ jobs:
             sleep 1
           done
           test -S "/run/user/$(id -u)/bus"
+          # arc's linux-systemd HostAdapter detects a usable session by
+          # checking `~/.config/systemd/user` exists (the "a user who has
+          # run systemctl --user has this dir" convention — see
+          # src/lib/hosts/linux-systemd.ts's detect()). loginctl
+          # enable-linger + the bus wait above don't create it themselves,
+          # so make one explicitly — a real systemd-user box has it.
+          mkdir -p "$HOME/.config/systemd/user"
           echo "XDG_RUNTIME_DIR=/run/user/$(id -u)" >> "$GITHUB_ENV"
           echo "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus" >> "$GITHUB_ENV"
 
@@ -145,6 +154,14 @@ jobs:
         run: systemctl --user status --no-pager || systemctl --user list-units --no-pager | head -5
 
       - name: Run systemd e2e tests (if any exist yet)
+        env:
+          # Explicit opt-in (mirrors cortex#2092's sibling job): a plain
+          # ubuntu-latest runner's default user session already has a
+          # working bus, so the test's own bus/platform guard alone can't
+          # tell the systemd-e2e job apart from the ordinary `Test` job.
+          # This var is set ONLY here — the plain `Test` job above never
+          # sets it, so its e2e test SKIPs deterministically there.
+          SYSTEMD_E2E: "1"
         run: |
           if ls test/e2e/systemd*.test.ts >/dev/null 2>&1; then
             bun test test/e2e/systemd*.test.ts

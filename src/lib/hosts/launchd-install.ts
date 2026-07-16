@@ -9,6 +9,7 @@ import type {
 } from "../../types.js";
 import { createSymlink, removeSymlink } from "../symlinks.js";
 import { errorMessage, isErrno } from "../errors.js";
+import { renderTokens } from "./render-tokens.js";
 
 /**
  * Token substitution map for plist rendering.
@@ -55,20 +56,13 @@ export function buildLaunchdTokens(opts: {
 /**
  * Render a plist template by substituting `{{TOKEN}}` markers.
  *
- * Permissive on unknown tokens: a `{{FOO}}` whose key is not in `tokens`
- * is preserved verbatim in the output. This lets a bot package use
- * custom markers that its own lifecycle script resolves before
- * `launchctl bootstrap`.
- *
- * The marker grammar accepts `[A-Za-z0-9_-]+` so hyphenated token names
- * (e.g. `{{LOG-DIR}}`, `{{ai-meta-factory}}`) substitute too. Sage P3
- * review (arc#143): the original `\w` class silently passed hyphenated
- * markers through unsubstituted even when present in the tokens map.
+ * Thin wrapper over the shared `renderTokens` (arc#311) — the systemd
+ * sister (`systemd-install.ts`'s `renderUnit`) uses the exact same
+ * substitution grammar rather than forking it. See `render-tokens.ts` for
+ * the marker grammar and permissive-on-unknown-tokens semantics.
  */
 export function renderPlist(template: string, tokens: LaunchdTokens): string {
-  return template.replace(/\{\{([A-Za-z0-9_-]+)\}\}/g, (match, key: string) => {
-    return key in tokens ? tokens[key] : match;
-  });
+  return renderTokens(template, tokens);
 }
 
 /**
