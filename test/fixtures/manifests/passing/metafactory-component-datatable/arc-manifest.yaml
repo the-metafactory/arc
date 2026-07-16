@@ -1,0 +1,18 @@
+schema: arc/v1
+name: datatable
+version: 0.1.0
+type: component
+tier: official
+description: Reusable sortable data table component.
+license: Apache-2.0
+author:
+  name: Jane Doe
+  github: janedoe
+capabilities:
+  filesystem:
+    read: []
+    write: []
+  network: []
+  bash:
+    allowed: false
+  secrets: []

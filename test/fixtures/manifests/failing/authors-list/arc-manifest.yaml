@@ -1,0 +1,20 @@
+schema: arc/v1
+name: bundle-discord
+version: 0.1.0
+type: bundle
+tier: community
+description: Discord bundle carrying the rejected plural authors list shape.
+license: Apache-2.0
+authors:
+  - name: Jane Doe
+    github: janedoe
+  - name: John Roe
+    github: johnroe
+capabilities:
+  filesystem:
+    read: []
+    write: []
+  network: []
+  bash:
+    allowed: false
+  secrets: []
