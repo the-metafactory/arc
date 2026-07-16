@@ -20,6 +20,7 @@ import {
   rollbackSystemdArtifacts,
   renderUnit,
   buildSystemdTokens,
+  withSpawnTimeout,
   type SystemctlRunner,
   type SystemctlResult,
   type LingerChecker,
@@ -67,6 +68,35 @@ function makeRecorder(responses: Record<string, SystemctlResult> = {}) {
 
 function makeLingerChecker(enabled: boolean, username = "testuser"): LingerChecker {
   return async () => ({ enabled, username });
+}
+
+/**
+ * A runner that THROWS instead of resolving — this is what `Bun.spawn`
+ * actually does synchronously on a missing binary (ENOENT), which the
+ * PR #314 adversarial review proved the original recorder-only test suite
+ * never exercised. `onlyFor` scopes the throw to a specific arg-tuple
+ * (e.g. only `daemon-reload`) so later steps in the same test can still be
+ * asserted as "never reached"; omit it to throw on every call.
+ */
+function makeThrowingRunner(message: string, onlyFor?: string[]): {
+  runner: SystemctlRunner;
+  calls: string[][];
+} {
+  const calls: string[][] = [];
+  const runner: SystemctlRunner = async (args) => {
+    calls.push(args);
+    if (!onlyFor || args.join(" ") === onlyFor.join(" ")) {
+      throw new Error(message);
+    }
+    return { code: 0, stderr: "" };
+  };
+  return { runner, calls };
+}
+
+function makeThrowingLingerChecker(message: string): LingerChecker {
+  return async () => {
+    throw new Error(message);
+  };
 }
 
 describe("renderUnit", () => {
@@ -432,5 +462,231 @@ describe("rollbackSystemdArtifacts", () => {
     await rollbackSystemdArtifacts(rec, { systemctlRunner: runner });
     await rollbackSystemdArtifacts(rec, { systemctlRunner: runner });
     expect(true).toBe(true);
+  });
+});
+
+/**
+ * PR #314 adversarial review, BLOCKER: the original suite only ever
+ * resolved `SystemctlRunner`/`LingerChecker` with a `{code, stderr}`
+ * value — never THREW, which is exactly what `Bun.spawn` does
+ * synchronously on a missing binary (ENOENT). A throw used to bypass
+ * `cleanupPartial()` entirely and propagate uncaught. These tests pin the
+ * fix: `safeRun`/`safeCheckLinger` normalize a throw into the same
+ * `{code: -1, stderr}` / `{enabled: false}` shape every non-zero-exit
+ * branch already handled.
+ */
+describe("installSystemdArtifacts — throwing runner (arc#311/PR#314 BLOCKER)", () => {
+  test("a throwing systemctl call at daemon-reload cleans up the unit + symlink and throws a meaningful error", async () => {
+    const binSrc = join(installDir, "bin", "fake-bot");
+    await mkdir(join(installDir, "bin"), { recursive: true });
+    await writeFile(binSrc, "#!/bin/bash\n");
+    await chmod(binSrc, 0o755);
+    const unitSrc = join(installDir, "services", "fake-bot.service");
+    await mkdir(join(installDir, "services"), { recursive: true });
+    await writeFile(unitSrc, `[Service]\nExecStart={{BIN}}\n`);
+
+    const { runner, calls } = makeThrowingRunner("spawn systemctl ENOENT");
+    const host = createLinuxSystemdHost({ unitDir, binDir, forcePlatform: "linux" });
+
+    await expect(
+      installSystemdArtifacts({
+        host,
+        manifest: fakeAgentManifest({
+          provides: { binary: "bin/fake-bot", systemdUnit: "services/fake-bot.service" },
+        }),
+        installDir,
+        quiet: true,
+        systemctlRunner: runner,
+      }),
+    ).rejects.toThrow(/daemon-reload failed \(exit -1\): spawn systemctl ENOENT/);
+
+    // No leak: the rendered unit AND the binary symlink are both gone.
+    expect(existsSync(join(unitDir, "fake-bot.service"))).toBe(false);
+    expect(existsSync(join(binDir, "fake-bot"))).toBe(false);
+    // Never reached enable --now — the throw at daemon-reload stopped the sequence.
+    expect(calls).toEqual([["--user", "daemon-reload"]]);
+  });
+
+  test("a throwing systemctl call at enable --now cleans up, attempting a best-effort disable first", async () => {
+    const unitSrc = join(installDir, "services", "fake-bot.service");
+    await mkdir(join(installDir, "services"), { recursive: true });
+    await writeFile(unitSrc, `[Service]\nExecStart=/bin/true\n`);
+
+    const { runner, calls } = makeThrowingRunner("spawn systemctl ENOENT", [
+      "--user",
+      "enable",
+      "--now",
+      "fake-bot.service",
+    ]);
+    const host = createLinuxSystemdHost({ unitDir, binDir, forcePlatform: "linux" });
+
+    await expect(
+      installSystemdArtifacts({
+        host,
+        manifest: fakeAgentManifest({ provides: { systemdUnit: "services/fake-bot.service" } }),
+        installDir,
+        quiet: true,
+        systemctlRunner: runner,
+        lingerChecker: makeLingerChecker(true),
+      }),
+    ).rejects.toThrow(/enable --now fake-bot\.service failed \(exit -1\): spawn systemctl ENOENT/);
+
+    expect(existsSync(join(unitDir, "fake-bot.service"))).toBe(false);
+    expect(calls).toEqual([
+      ["--user", "daemon-reload"],
+      ["--user", "enable", "--now", "fake-bot.service"],
+      ["--user", "disable", "--now", "fake-bot.service"], // best-effort undo attempt
+    ]);
+  });
+
+  test("a throwing linger checker fails CLOSED (never proceeds to enable --now) and reports the underlying reason", async () => {
+    const unitSrc = join(installDir, "services", "fake-bot.service");
+    await mkdir(join(installDir, "services"), { recursive: true });
+    await writeFile(unitSrc, `[Service]\nExecStart=/bin/true\n`);
+
+    const { runner, calls } = makeRecorder();
+    const host = createLinuxSystemdHost({ unitDir, binDir, forcePlatform: "linux" });
+
+    await expect(
+      installSystemdArtifacts({
+        host,
+        manifest: fakeAgentManifest({ provides: { systemdUnit: "services/fake-bot.service" } }),
+        installDir,
+        quiet: true,
+        systemctlRunner: runner,
+        lingerChecker: makeThrowingLingerChecker("spawn loginctl ENOENT"),
+      }),
+    ).rejects.toThrow(/requires linger enabled.*could not confirm linger status: spawn loginctl ENOENT/s);
+
+    expect(existsSync(join(unitDir, "fake-bot.service"))).toBe(false);
+    // enable --now never called — the linger gate stopped the sequence.
+    expect(calls).toEqual([["--user", "daemon-reload"]]);
+  });
+});
+
+describe("removeSystemdArtifacts — throwing runner completes without crashing (arc#311/PR#314 BLOCKER)", () => {
+  test("a throwing disable/daemon-reload still removes the unit file and binary symlink", async () => {
+    const unitSrc = join(installDir, "services", "fake-bot.service");
+    await mkdir(join(installDir, "services"), { recursive: true });
+    await writeFile(unitSrc, `[Service]\nExecStart=/bin/true\n`);
+    const binSrc = join(installDir, "bin", "fake-bot");
+    await mkdir(join(installDir, "bin"), { recursive: true });
+    await writeFile(binSrc, "#!/bin/bash\n");
+    await chmod(binSrc, 0o755);
+
+    const host = createLinuxSystemdHost({ unitDir, binDir, forcePlatform: "linux" });
+    const { runner: installRunner } = makeRecorder();
+    await installSystemdArtifacts({
+      host,
+      manifest: fakeAgentManifest({
+        provides: { binary: "bin/fake-bot", systemdUnit: "services/fake-bot.service" },
+      }),
+      installDir,
+      quiet: true,
+      systemctlRunner: installRunner,
+      lingerChecker: makeLingerChecker(true),
+    });
+    expect(existsSync(join(unitDir, "fake-bot.service"))).toBe(true);
+    expect(existsSync(join(binDir, "fake-bot"))).toBe(true);
+
+    const { runner: throwingRunner } = makeThrowingRunner("spawn systemctl ENOENT");
+    // No throw is the primary assertion — a wedged/absent systemctl must not
+    // crash `removeSystemdArtifacts`.
+    const removed = await removeSystemdArtifacts({
+      host,
+      manifest: fakeAgentManifest({
+        provides: { binary: "bin/fake-bot", systemdUnit: "services/fake-bot.service" },
+      }),
+      quiet: true,
+      systemctlRunner: throwingRunner,
+    });
+
+    expect(removed.unitPath).toBe(join(unitDir, "fake-bot.service"));
+    expect(removed.binSymlink).toBe(join(binDir, "fake-bot"));
+    expect(existsSync(join(unitDir, "fake-bot.service"))).toBe(false);
+    expect(existsSync(join(binDir, "fake-bot"))).toBe(false);
+  });
+});
+
+/**
+ * PR #314 adversarial review, MINOR (a): a typo'd/unsupported token in
+ * `provides.systemdUnit` must never reach `systemctl enable --now` — unlike
+ * darwin (activation deferred to a reviewable lifecycle script), this
+ * dispatch inlines activation.
+ */
+describe("installSystemdArtifacts — unrendered-token gate (arc#311/PR#314 MINOR)", () => {
+  test("a typo'd token aborts BEFORE the unit file is written and BEFORE any systemctl call", async () => {
+    const unitSrc = join(installDir, "services", "fake-bot.service");
+    await mkdir(join(installDir, "services"), { recursive: true });
+    // {{BINN}} is a typo for {{BIN}} -- not in the tokens map, so it survives
+    // substitution verbatim.
+    await writeFile(unitSrc, `[Service]\nExecStart={{BINN}}\n`);
+
+    const { runner, calls } = makeRecorder();
+    const host = createLinuxSystemdHost({ unitDir, binDir, forcePlatform: "linux" });
+
+    await expect(
+      installSystemdArtifacts({
+        host,
+        manifest: fakeAgentManifest({ provides: { systemdUnit: "services/fake-bot.service" } }),
+        installDir,
+        quiet: true,
+        systemctlRunner: runner,
+        lingerChecker: makeLingerChecker(true),
+      }),
+    ).rejects.toThrow(/unrendered token\(s\).*\{\{BINN\}\}/s);
+
+    expect(existsSync(join(unitDir, "fake-bot.service"))).toBe(false);
+    expect(calls.length).toBe(0);
+  });
+
+  test("a fully-resolved unit (no leftover tokens) installs normally", async () => {
+    const unitSrc = join(installDir, "services", "fake-bot.service");
+    await mkdir(join(installDir, "services"), { recursive: true });
+    await writeFile(unitSrc, `[Service]\nExecStart=/bin/true\n`);
+
+    const { runner } = makeRecorder();
+    const host = createLinuxSystemdHost({ unitDir, binDir, forcePlatform: "linux" });
+    const rec = await installSystemdArtifacts({
+      host,
+      manifest: fakeAgentManifest({ provides: { systemdUnit: "services/fake-bot.service" } }),
+      installDir,
+      quiet: true,
+      systemctlRunner: runner,
+      lingerChecker: makeLingerChecker(true),
+    });
+
+    expect(existsSync(rec.unitPath!)).toBe(true);
+  });
+});
+
+/**
+ * PR #314 adversarial review, MAJOR: the default runner/checker had no
+ * timeout — a stuck D-Bus session would hang `arc install`/`arc remove`
+ * forever (`proc.exited` and the pipe reads never resolve on a hung
+ * process). `withSpawnTimeout` is the shared mechanism both defaults use;
+ * exercised directly here with a short `ms` and a `kill`-spy stand-in
+ * process object rather than a real 30s wait or a real spawned process.
+ */
+describe("withSpawnTimeout (arc#311/PR#314 MAJOR)", () => {
+  test("a work promise that never resolves times out, kills the process, and throws", async () => {
+    let killed = false;
+    const fakeProc = { kill: () => { killed = true; } };
+    const neverResolves = new Promise<{ code: number; stderr: string }>(() => {});
+
+    await expect(
+      withSpawnTimeout(fakeProc, neverResolves, "systemctl", 20),
+    ).rejects.toThrow(/systemctl timed out after 0s/);
+    expect(killed).toBe(true);
+  });
+
+  test("a work promise that resolves before the timeout wins the race, no kill", async () => {
+    let killed = false;
+    const fakeProc = { kill: () => { killed = true; } };
+    const fastWork = Promise.resolve({ code: 0, stderr: "" });
+
+    const result = await withSpawnTimeout(fakeProc, fastWork, "systemctl", 5_000);
+    expect(result).toEqual({ code: 0, stderr: "" });
+    expect(killed).toBe(false);
   });
 });

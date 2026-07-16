@@ -223,4 +223,39 @@ lifecycle:
     expect(calls).toContainEqual(["--user", "disable", "--now", "delta-bot.service"]);
     expect(getSkill(env.db, "delta-bot")).toBeNull();
   });
+
+  test("detect-gate (PR #314 review, root-cause fix): a host with no systemd user session fails cleanly BEFORE any disk mutation", async () => {
+    // forcePlatform: "darwin" makes createLinuxSystemdHost's detect() return
+    // false regardless of unitDir existing (the adapter's detect() is
+    // `onLinux && existsSync(unitDir)`) -- exactly the "targets:
+    // [linux-systemd] reached real systemd dispatch on macOS" scenario the
+    // reviewer's repro demonstrated. Before this fix, dispatch never
+    // consulted host.detect() at all and would spawn a real `systemctl`.
+    const repo = await createStandaloneBotRepo({ parent: env.root, name: "epsilon-bot" });
+    const { runner, calls } = makeRecorder();
+
+    const result = await install({
+      arc: env.arc,
+      host: env.host,
+      db: env.db,
+      repoUrl: repo.url,
+      yes: true,
+      hostOverrides: {
+        "linux-systemd": { unitDir, binDir: systemdBinDir, forcePlatform: "darwin" },
+      },
+      systemctlRunner: runner,
+      lingerChecker: makeLingerChecker(true),
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(
+      /linux-systemd target requires a systemd user session \(systemctl \+ ~\/\.config\/systemd\/user\); not available on this host/,
+    );
+
+    // Zero disk mutation: no binary symlink, no unit file, no systemctl call.
+    expect(existsSync(join(unitDir, "epsilon-bot.service"))).toBe(false);
+    expect(existsSync(join(systemdBinDir, "epsilon-bot"))).toBe(false);
+    expect(calls.length).toBe(0);
+    expect(getSkill(env.db, "epsilon-bot")).toBeNull();
+  });
 });

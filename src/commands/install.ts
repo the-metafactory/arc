@@ -1313,6 +1313,20 @@ async function installPerTarget(opts: {
             `Internal error: 'linux-systemd' resolved to a host adapter without systemd paths`,
         };
       }
+      // Root-cause fix (PR #314 review, BLOCKER): dispatch never consulted
+      // host.detect() before this — on a host with no systemd user session
+      // (e.g. macOS, or a Linux box that never ran `systemctl --user`),
+      // installSystemdArtifacts would still spawn `systemctl` for real,
+      // throw on ENOENT, and only THEN discover there was nothing to do
+      // here. Gate BEFORE any disk mutation instead — a clear, targeted
+      // failure beats a throw deep inside a spawn call.
+      if (!targetHost.detect()) {
+        await rollbackAll();
+        return {
+          error:
+            `linux-systemd target requires a systemd user session (systemctl + ~/.config/systemd/user); not available on this host`,
+        };
+      }
       try {
         const rec = await installSystemdArtifacts({
           host: targetHost,

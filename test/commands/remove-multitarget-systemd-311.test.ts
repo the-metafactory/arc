@@ -146,6 +146,59 @@ describe("remove: linux-systemd multi-target uninstall", () => {
     expect(existsSync(join(systemdBinDir, "beta-bot"))).toBe(false);
   });
 
+  test("detect-gate (PR #314 review, root-cause fix): remove with no systemd user session still deletes files, skips systemctl, and succeeds", async () => {
+    // Install normally with a real session available...
+    await installBot("zeta-bot");
+    const unitPath = join(unitDir, "zeta-bot.service");
+    const binLink = join(systemdBinDir, "zeta-bot");
+    expect(existsSync(unitPath)).toBe(true);
+    expect(existsSync(binLink)).toBe(true);
+
+    // ...then remove as if the session is gone (forcePlatform: "darwin" makes
+    // detect() false regardless of unitDir existing) -- remove semantics
+    // differ from install's fail-clearly gate: it must still tear down
+    // whatever files ARE on disk rather than aborting.
+    const { runner, calls } = makeRecorder();
+    const result = await remove(env.db, env.arc, env.host, "zeta-bot", {
+      quiet: true,
+      hostOverrides: { "linux-systemd": { unitDir, binDir: systemdBinDir, forcePlatform: "darwin" } },
+      systemctlRunner: runner,
+    });
+
+    expect(result.success).toBe(true);
+    expect(existsSync(unitPath)).toBe(false);
+    expect(existsSync(binLink)).toBe(false);
+    // No systemctl calls at all -- skipSystemctl suppressed disable/reload.
+    expect(calls.length).toBe(0);
+    expect(getSkill(env.db, "zeta-bot")).toBeNull();
+  });
+
+  test("throwing runner (PR #314 review, BLOCKER): remove completes, files gone, DB row removed, no crash", async () => {
+    await installBot("eta-bot");
+    const unitPath = join(unitDir, "eta-bot.service");
+    const binLink = join(systemdBinDir, "eta-bot");
+    expect(existsSync(unitPath)).toBe(true);
+    expect(existsSync(binLink)).toBe(true);
+
+    const throwingRunner: SystemctlRunner = async () => {
+      throw new Error("spawn systemctl ENOENT");
+    };
+
+    // No throw is the primary assertion -- a wedged systemctl must not abort
+    // `arc remove` before it reaches DB/repo cleanup (the reviewer verified
+    // the OLD code aborted here, before the DB row was deleted).
+    const result = await remove(env.db, env.arc, env.host, "eta-bot", {
+      quiet: true,
+      hostOverrides: hostOverrides(),
+      systemctlRunner: throwingRunner,
+    });
+
+    expect(result.success).toBe(true);
+    expect(existsSync(unitPath)).toBe(false);
+    expect(existsSync(binLink)).toBe(false);
+    expect(getSkill(env.db, "eta-bot")).toBeNull();
+  });
+
   test("legacy single-target remove path is unaffected (regression check)", async () => {
     const repoDir = join(env.root, "mock-legacy");
     await mkdir(join(repoDir, "skill"), { recursive: true });

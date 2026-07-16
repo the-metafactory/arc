@@ -190,12 +190,38 @@ async function removePerTarget(opts: {
         }
         continue;
       }
-      await removeSystemdArtifacts({
-        host: targetHost,
-        manifest: opts.manifest,
-        quiet: opts.quiet,
-        systemctlRunner: opts.systemctlRunner,
-      });
+      // Root-cause fix (PR #314 review, BLOCKER): detect() gate, mirroring
+      // the install-side guard — remove semantics differ though: install
+      // FAILS the target outright (nothing mutated yet to clean up), but
+      // remove must still tear down whatever IS on disk even with no
+      // systemd user session to talk to (skipSystemctl: true — the unit
+      // file + binary symlink still get deleted; only the doomed
+      // disable/daemon-reload spawn attempts are skipped).
+      const available = targetHost.detect();
+      if (!available && !opts.quiet) {
+        console.warn(
+          `  ⚠ linux-systemd: no systemd user session detected on this host — removing unit file/symlink directly, skipping systemctl teardown`,
+        );
+      }
+      // Defense in depth (PR #314 review, BLOCKER): removeSystemdArtifacts
+      // itself no longer throws (every systemctl call is normalized
+      // best-effort), but a throw here must NEVER abort the surrounding
+      // `arc remove` before it reaches DB/repo cleanup — degrade to a
+      // logged warning and keep going, same contract as every other
+      // best-effort step in this loop.
+      try {
+        await removeSystemdArtifacts({
+          host: targetHost,
+          manifest: opts.manifest,
+          quiet: opts.quiet,
+          systemctlRunner: opts.systemctlRunner,
+          skipSystemctl: !available,
+        });
+      } catch (err) {
+        if (!opts.quiet) {
+          console.warn(`  ⚠ linux-systemd remove failed: ${errorMessage(err)}; continuing`);
+        }
+      }
       continue;
     }
 

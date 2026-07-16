@@ -153,9 +153,8 @@ export async function verify(
 }
 
 /**
- * A rendered systemd unit file found in `host.paths.unitDir` that does not
- * correspond to any currently-active installed package's declared
- * `provides.systemdUnit`.
+ * A rendered systemd unit file found in `host.paths.unitDir` that a
+ * DB-known arc package once declared but no longer actively claims.
  */
 export interface OrphanedUnit {
   unitPath: string;
@@ -163,12 +162,32 @@ export interface OrphanedUnit {
 }
 
 /**
- * Scan the linux-systemd host's `unitDir` for `*.service` files that no
- * ACTIVE installed package owns (arc#311). A unit left behind by an
- * interrupted `arc remove`, a manually-deleted DB row, or a package
- * disabled without its supervision side being torn down all show up here
- * — none of arc's other checks catch a leftover unit file, since `verify()`
- * otherwise only inspects the ONE named package's own expected drop.
+ * Scan the linux-systemd host's `unitDir` for `*.service` files that arc
+ * once installed but no longer actively owns (arc#311, hardened per PR
+ * #314 review). A unit left behind by an interrupted `arc remove`, or a
+ * package disabled without its supervision side being torn down, shows up
+ * here — none of arc's other checks catch a leftover unit file, since
+ * `verify()` otherwise only inspects the ONE named package's own expected
+ * drop.
+ *
+ * SCOPE (adversarial review, arc#311/PR#314): the first cut of this scan
+ * flagged EVERY `.service` file not claimed by a currently-active package —
+ * including a user's own unrelated, hand-written unit that arc never
+ * touched. That's pure noise arc has no business reporting on. The fix:
+ * a file is only a *candidate* for "orphaned" if its basename matches SOME
+ * package arc's DB has ANY record of (active OR disabled — `listSkills`
+ * returns both), not just currently-active ones. A basename with no DB
+ * record at all — a stranger's unit — is skipped outright, never flagged.
+ *
+ * KNOWN GAP (accepted tradeoff, documented per review instruction): a unit
+ * whose OWNING package's DB ROW has been fully deleted (`arc remove`
+ * completing the DB step but leaving the unit file behind — e.g. an
+ * interrupted teardown) is invisible to this scan, since nothing in the DB
+ * still names its basename. Catching that would need a content-level
+ * "rendered by arc" marker stamped into the unit at install time (the
+ * review's other suggested option) — deferred as a follow-up; false
+ * negatives here are strictly preferable to false-positiving on every
+ * user's unrelated unit.
  */
 export async function findOrphanedSystemdUnits(
   db: Database,
@@ -177,23 +196,28 @@ export async function findOrphanedSystemdUnits(
   const unitDir = (host.paths as Partial<LinuxSystemdHostPaths>).unitDir;
   if (!unitDir || !existsSync(unitDir)) return [];
 
-  const owned = new Set<string>();
+  // Basenames arc's DB has ANY record of declaring (active or disabled) --
+  // the universe of files this scan is even allowed to comment on.
+  const everKnown = new Set<string>();
+  // Basenames a currently-ACTIVE package still claims -- not orphaned.
+  const activeOwned = new Set<string>();
   for (const skill of listSkills(db)) {
-    if (skill.status !== "active") continue;
     const skillManifest = await readManifest(skill.install_path);
     if (!skillManifest?.targets?.includes("linux-systemd")) continue;
-    if (skillManifest.provides?.systemdUnit) {
-      owned.add(basename(skillManifest.provides.systemdUnit));
-    }
+    if (!skillManifest.provides?.systemdUnit) continue;
+    const unitName = basename(skillManifest.provides.systemdUnit);
+    everKnown.add(unitName);
+    if (skill.status === "active") activeOwned.add(unitName);
   }
 
   const orphans: OrphanedUnit[] = [];
   for (const entry of readdirSync(unitDir)) {
     if (!entry.endsWith(".service")) continue;
-    if (owned.has(entry)) continue;
+    if (!everKnown.has(entry)) continue; // never arc's business -- skip, no noise
+    if (activeOwned.has(entry)) continue; // still actively claimed
     orphans.push({
       unitPath: join(unitDir, entry),
-      reason: "no active installed package declares this unit",
+      reason: "a DB-known arc package declares this unit but no longer actively claims it",
     });
   }
   return orphans;

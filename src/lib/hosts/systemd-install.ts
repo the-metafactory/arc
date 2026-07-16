@@ -108,11 +108,71 @@ export interface SystemctlResult {
  */
 export type SystemctlRunner = (args: string[]) => Promise<SystemctlResult>;
 
+/**
+ * Hard budget for a single `systemctl`/`loginctl` invocation (default
+ * runner/checker only — injected test runners are not subject to this).
+ * Closes a real hang: a stuck D-Bus session would otherwise leave
+ * `proc.exited` (and the stderr/stdout pipe reads, which only complete on
+ * process exit) unresolved forever, hanging `arc install`/`arc remove`
+ * indefinitely (arc#311/PR#314 review, MAJOR).
+ */
+const SPAWN_TIMEOUT_MS = 30_000;
+
+/**
+ * Race a spawned process's output-read + exit-wait against a timeout,
+ * killing the process (and so unblocking its pipe reads too) if it fires.
+ * Timing out THROWS — callers normalize that the same way they normalize
+ * any other spawn failure (`safeRun/safeCheckLinger`), so a hang surfaces
+ * as a regular, actionable error instead of wedging the CLI.
+ */
+export async function withSpawnTimeout<T>(
+  proc: { kill(): void },
+  work: Promise<T>,
+  binName: string,
+  ms: number = SPAWN_TIMEOUT_MS,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      proc.kill();
+      reject(new Error(`${binName} timed out after ${Math.round(ms / 1000)}s`));
+    }, ms);
+  });
+  try {
+    return await Promise.race([work, timeout]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
 async function defaultSystemctlRunner(args: string[]): Promise<SystemctlResult> {
   const proc = Bun.spawn(["systemctl", ...args], { stdout: "pipe", stderr: "pipe" });
-  const stderr = await new Response(proc.stderr).text();
-  const code = await proc.exited;
-  return { code, stderr };
+  return withSpawnTimeout(
+    proc,
+    (async () => {
+      const stderr = await new Response(proc.stderr).text();
+      const code = await proc.exited;
+      return { code, stderr };
+    })(),
+    "systemctl",
+  );
+}
+
+/**
+ * Normalize a `SystemctlRunner` call so a THROW (e.g. `Bun.spawn` throwing
+ * synchronously on a missing `systemctl` binary — ENOENT — or a
+ * `withSpawnTimeout` timeout) takes the EXACT same path as a resolved
+ * non-zero exit. Every downstream `.code !== 0` branch then handles both
+ * uniformly, and cleanup always runs (arc#311/PR#314 review, BLOCKER: a
+ * throwing runner previously bypassed `cleanupPartial()` entirely and
+ * propagated uncaught).
+ */
+async function safeRun(run: SystemctlRunner, args: string[]): Promise<SystemctlResult> {
+  try {
+    return await run(args);
+  } catch (err) {
+    return { code: -1, stderr: errorMessage(err) };
+  }
 }
 
 /** Outcome of a linger check — whether `enable --now` is safe to run. */
@@ -135,14 +195,57 @@ async function defaultLingerChecker(): Promise<LingerStatus> {
     ["loginctl", "show-user", username, "--property=Linger", "--value"],
     { stdout: "pipe", stderr: "pipe" },
   );
-  const stdout = (await new Response(proc.stdout).text()).trim();
-  await proc.exited;
-  return { enabled: stdout === "yes", username };
+  return withSpawnTimeout(
+    proc,
+    (async () => {
+      const stdout = (await new Response(proc.stdout).text()).trim();
+      await proc.exited;
+      return { enabled: stdout === "yes", username };
+    })(),
+    "loginctl",
+  );
+}
+
+/**
+ * Normalize a `LingerChecker` call so a THROW fails CLOSED — `enabled:
+ * false` — rather than silently proceeding as if linger were confirmed on.
+ * Sister to `safeRun`; same BLOCKER class (arc#311/PR#314 review): the
+ * account's ACTUAL linger state is unknown when the check itself throws
+ * (missing `loginctl`, timeout, …), and STOP-AND-ASK's whole point is
+ * never enabling a unit without a confirmed-safe precondition. The
+ * underlying failure reason is threaded into the eventual error message
+ * via `checkError` rather than swallowed.
+ */
+async function safeCheckLinger(
+  check: LingerChecker,
+): Promise<LingerStatus & { checkError?: string }> {
+  try {
+    return await check();
+  } catch (err) {
+    return { enabled: false, username: userInfo().username, checkError: errorMessage(err) };
+  }
 }
 
 /** systemctl's "unit not loaded" family of messages — not a real remove failure. */
 function isNotLoadedError(stderr: string): boolean {
   return /not (be )?found|not loaded|does not exist|no such file|not been loaded/i.test(stderr);
+}
+
+/**
+ * Find any `{{TOKEN}}` markers still present after `renderUnit` substitution
+ * (arc#311/PR#314 review, MINOR): a typo'd or unsupported token in
+ * `provides.systemdUnit` must not silently reach `systemctl enable --now`
+ * — unlike launchd (activation deferred to the package's own reviewable
+ * `lifecycle.postinstall`), this dispatch inlines activation, so a
+ * template bug goes disk-to-running-process with nothing catching it.
+ * Deliberately NOT added to the shared `renderTokens` (used by
+ * `launchd-install.ts`'s `renderPlist` too) — launchd's permissive
+ * unknown-token pass-through is documented, intentional behavior for that
+ * host's deferred-activation model and must not change here.
+ */
+function findUnrenderedTokens(rendered: string): string[] {
+  const matches = rendered.match(/\{\{[A-Za-z0-9_-]+\}\}/g);
+  return matches ? Array.from(new Set(matches)) : [];
 }
 
 /**
@@ -258,6 +361,19 @@ export async function installSystemdArtifacts(opts: {
     });
     const rendered = renderUnit(template, tokens);
 
+    // 2b. Unrendered-token gate — BEFORE anything lands on disk. See
+    // findUnrenderedTokens' doc comment: a typo'd/unsupported token must
+    // not reach `enable --now`.
+    const unrendered = findUnrenderedTokens(rendered);
+    if (unrendered.length) {
+      await cleanupPartial();
+      throw new Error(
+        `provides.systemdUnit '${provides.systemdUnit}' has unrendered token(s) after substitution: ` +
+          `${unrendered.join(", ")} — refusing to enable a unit with unresolved template markers. ` +
+          `Fix the manifest/template and reinstall.`,
+      );
+    }
+
     const unitName = basename(provides.systemdUnit);
     const unitTargetPath = join(opts.host.paths.unitDir, unitName);
     await mkdir(dirname(unitTargetPath), { recursive: true });
@@ -269,7 +385,10 @@ export async function installSystemdArtifacts(opts: {
     }
 
     // 3. daemon-reload so systemd picks up the freshly-rendered unit file.
-    const reload = await runSystemctl(["--user", "daemon-reload"]);
+    // safeRun: a THROW (missing systemctl binary, timeout, …) must hit
+    // cleanupPartial() exactly like a resolved non-zero exit does — see
+    // safeRun's doc comment (arc#311/PR#314 review, BLOCKER).
+    const reload = await safeRun(runSystemctl, ["--user", "daemon-reload"]);
     if (reload.code !== 0) {
       await cleanupPartial();
       throw new Error(
@@ -279,28 +398,30 @@ export async function installSystemdArtifacts(opts: {
 
     // 4. STOP-AND-ASK: see doc comment above. Check linger BEFORE enabling
     // so a disabled-linger account never ends up with a unit that LOOKS
-    // enabled but silently stops at logout.
-    const linger = await checkLinger();
+    // enabled but silently stops at logout. safeCheckLinger: a throwing
+    // check fails CLOSED (enabled: false), never silently proceeds.
+    const linger = await safeCheckLinger(checkLinger);
     if (!linger.enabled) {
       await cleanupPartial();
+      const reasonSuffix = linger.checkError
+        ? ` (could not confirm linger status: ${linger.checkError})`
+        : "";
       throw new Error(
         `linux-systemd install for '${opts.manifest.name}' requires linger enabled for user ` +
           `'${linger.username}' so the '${unitName}' unit survives logout. arc never invokes ` +
           `sudo — run this yourself, then re-run the install:\n` +
-          `  sudo loginctl enable-linger ${linger.username}`,
+          `  sudo loginctl enable-linger ${linger.username}${reasonSuffix}`,
       );
     }
 
-    const enable = await runSystemctl(["--user", "enable", "--now", unitName]);
+    const enable = await safeRun(runSystemctl, ["--user", "enable", "--now", unitName]);
     if (enable.code !== 0) {
       // Best-effort undo of a partial enable/start before removing the unit
       // file — enable --now can fail after having already enabled (but not
-      // started) the unit, or vice versa.
-      try {
-        await runSystemctl(["--user", "disable", "--now", unitName]);
-      } catch {
-        // best-effort; the unit file removal below is the load-bearing cleanup.
-      }
+      // started) the unit, or vice versa. safeRun here too: this is
+      // itself best-effort, so its own throw must not skip the load-bearing
+      // cleanupPartial() below.
+      await safeRun(runSystemctl, ["--user", "disable", "--now", unitName]);
       await cleanupPartial();
       throw new Error(
         `systemctl --user enable --now ${unitName} failed (exit ${enable.code}): ${enable.stderr.trim()}`,
@@ -322,15 +443,28 @@ export async function installSystemdArtifacts(opts: {
  * install that never reached `enable`), delete the unit file,
  * `daemon-reload`, then remove the binary symlink from `host.binDir`.
  *
- * Best-effort across all steps: an ENOENT on the unit/symlink path is
- * swallowed (idempotent removal), non-ENOENT errors surface via
- * console.warn so the user sees orphans they need to inspect manually.
+ * Best-effort across ALL steps, including the systemctl calls themselves
+ * (arc#311/PR#314 review, BLOCKER): every `systemctl` invocation goes
+ * through `safeRun`, so a THROW (missing binary, timeout, …) degrades to a
+ * logged warning exactly like a non-zero exit — disable, unit unlink,
+ * daemon-reload, and binary unlink each proceed independently regardless
+ * of whether an earlier step failed. `arc remove` must reach its DB/repo
+ * cleanup even when the systemd side is completely wedged.
  */
 export async function removeSystemdArtifacts(opts: {
   host: HostAdapter & { paths: LinuxSystemdHostPaths };
   manifest: ArcManifest;
   quiet?: boolean;
   systemctlRunner?: SystemctlRunner;
+  /**
+   * Skip the `systemctl` calls entirely — used when the caller has already
+   * determined (via `host.detect()`) that there is no systemd user session
+   * to talk to. File removal (unit + binary symlink) still happens
+   * unconditionally; this only suppresses the doomed-to-fail disable/
+   * daemon-reload spawn attempts (and their warnings) so remove degrades
+   * to one clear message instead of two confusing spawn errors.
+   */
+  skipSystemctl?: boolean;
 }): Promise<SystemdInstallRecord> {
   const removed: SystemdInstallRecord = {};
   const provides = opts.manifest.provides ?? {};
@@ -340,11 +474,13 @@ export async function removeSystemdArtifacts(opts: {
     const unitName = basename(provides.systemdUnit);
     const unitPath = join(opts.host.paths.unitDir, unitName);
 
-    const disable = await runSystemctl(["--user", "disable", "--now", unitName]);
-    if (disable.code !== 0 && !isNotLoadedError(disable.stderr)) {
-      console.warn(
-        `  ⚠ remove: systemctl --user disable --now ${unitName} exited ${disable.code}: ${disable.stderr.trim()}`,
-      );
+    if (!opts.skipSystemctl) {
+      const disable = await safeRun(runSystemctl, ["--user", "disable", "--now", unitName]);
+      if (disable.code !== 0 && !isNotLoadedError(disable.stderr)) {
+        console.warn(
+          `  ⚠ remove: systemctl --user disable --now ${unitName} exited ${disable.code}: ${disable.stderr.trim()}`,
+        );
+      }
     }
 
     try {
@@ -362,11 +498,13 @@ export async function removeSystemdArtifacts(opts: {
       }
     }
 
-    const reload = await runSystemctl(["--user", "daemon-reload"]);
-    if (reload.code !== 0) {
-      console.warn(
-        `  ⚠ remove: systemctl --user daemon-reload failed (exit ${reload.code}): ${reload.stderr.trim()}`,
-      );
+    if (!opts.skipSystemctl) {
+      const reload = await safeRun(runSystemctl, ["--user", "daemon-reload"]);
+      if (reload.code !== 0) {
+        console.warn(
+          `  ⚠ remove: systemctl --user daemon-reload failed (exit ${reload.code}): ${reload.stderr.trim()}`,
+        );
+      }
     }
   }
 
@@ -409,16 +547,10 @@ export async function rollbackSystemdArtifacts(
   const runSystemctl = opts?.systemctlRunner ?? defaultSystemctlRunner;
 
   if (record.unitName) {
-    try {
-      const disable = await runSystemctl(["--user", "disable", "--now", record.unitName]);
-      if (disable.code !== 0 && !isNotLoadedError(disable.stderr)) {
-        console.warn(
-          `  ⚠ rollback: systemctl --user disable --now ${record.unitName} exited ${disable.code}: ${disable.stderr.trim()}`,
-        );
-      }
-    } catch (err) {
+    const disable = await safeRun(runSystemctl, ["--user", "disable", "--now", record.unitName]);
+    if (disable.code !== 0 && !isNotLoadedError(disable.stderr)) {
       console.warn(
-        `  ⚠ rollback: failed to disable systemd unit ${record.unitName}: ${errorMessage(err)}`,
+        `  ⚠ rollback: systemctl --user disable --now ${record.unitName} exited ${disable.code}: ${disable.stderr.trim()}`,
       );
     }
   }
@@ -434,10 +566,9 @@ export async function rollbackSystemdArtifacts(
     }
   }
   if (record.unitName) {
-    try {
-      await runSystemctl(["--user", "daemon-reload"]);
-    } catch (err) {
-      console.warn(`  ⚠ rollback: systemd daemon-reload failed: ${errorMessage(err)}`);
+    const reload = await safeRun(runSystemctl, ["--user", "daemon-reload"]);
+    if (reload.code !== 0) {
+      console.warn(`  ⚠ rollback: systemd daemon-reload failed: ${reload.stderr.trim()}`);
     }
   }
   if (record.binSymlink) {
