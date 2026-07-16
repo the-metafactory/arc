@@ -23,7 +23,7 @@ function manifest(over: Partial<ArcManifest> = {}): ArcManifest {
     description: "A widget skill",
     author: { name: "Andreas Aastroem", github: "mellanon" },
     ...over,
-  } as ArcManifest;
+  };
 }
 
 function repo(over: Partial<ScannedRepo> = {}): ScannedRepo {
@@ -96,7 +96,7 @@ describe("manifestDerivedFields", () => {
 
 describe("mergeEntry", () => {
   test("new entry gets the default status", () => {
-    const e = mergeEntry({ name: "widget", version: "1.0.0" } as Partial<RegistryEntry>, undefined);
+    const e = mergeEntry(manifestDerivedFields(repo({ manifest: manifest({ name: "widget", version: "1.0.0" }) })), undefined);
     expect(e.status).toBe(DEFAULT_STATUS);
     expect(e.name).toBe("widget");
   });
