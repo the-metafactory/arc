@@ -31,9 +31,10 @@ function violation(result: ValidateResult, field: string): Violation {
   return v;
 }
 
-// One PASSING manifest per artifact type, plus a bundle-style skill repo. Each
-// dir name is chosen so the §4.2 derivation either matches (skill/bundle) or is
-// skipped (the dir does not match the metafactory grammar) — never violated.
+// One PASSING manifest per artifact type, plus a bundle-CLASS repo (which ships
+// an installable manifest type, not `type: bundle` — arc#334). Each dir name is
+// chosen so the §4.2 derivation either matches (skill) or is skipped (the dir
+// does not match the metafactory grammar) — never violated.
 const PASSING_FIXTURES = [
   "metafactory-skill-code-review", // skill (+ PascalCase SKILL.md)
   "metafactory-tool-formatter", // tool
@@ -42,7 +43,7 @@ const PASSING_FIXTURES = [
   "metafactory-component-datatable", // component
   "metafactory-pipeline-nightly", // pipeline
   "metafactory-action-notify", // action (arc#95)
-  "metafactory-bundle-devkit", // bundle-style skill repo w/ provides.cli+commands
+  "metafactory-bundle-devkit", // bundle-CLASS repo shipping type: tool (CLI + commands) — arc#334
   "metafactory-skill-plan-breakdown", // skill w/ canonical { host, reason } network (arc#335)
 ] as const;
 

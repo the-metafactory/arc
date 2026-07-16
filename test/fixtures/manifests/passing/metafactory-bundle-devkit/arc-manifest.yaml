@@ -1,9 +1,12 @@
 schema: arc/v1
 name: devkit
 version: 0.1.0
-type: bundle
+# A bundle-CLASS repo (metafactory-bundle-<name>) ships an installable manifest
+# type — here `tool` (CLI + slash commands), the content-filter precedent.
+# `bundle` is a repo-name class, not a manifest type (arc#334, decision b).
+type: tool
 tier: official
-description: Bundle-style skill repo shipping a CLI plus slash commands.
+description: Bundle-style CLI repo shipping a CLI plus slash commands.
 license: Apache-2.0
 author:
   name: Jane Doe
