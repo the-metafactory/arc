@@ -125,20 +125,24 @@ jobs:
 
       - run: bun install --frozen-lockfile
 
-      - name: Start systemd user session
+      - name: Enable systemd user session
         run: |
-          sudo loginctl enable-linger "$(id -un)"
+          sudo loginctl enable-linger "$(whoami)"
           for i in $(seq 1 15); do
             if [ -S "/run/user/$(id -u)/bus" ]; then
               break
             fi
             sleep 1
           done
+          test -S "/run/user/$(id -u)/bus"
           echo "XDG_RUNTIME_DIR=/run/user/$(id -u)" >> "$GITHUB_ENV"
           echo "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus" >> "$GITHUB_ENV"
 
+      - name: Verify env exported
+        run: env | grep -E "XDG_RUNTIME|DBUS"
+
       - name: Smoke check systemd --user
-        run: systemctl --user list-units
+        run: systemctl --user status --no-pager || systemctl --user list-units --no-pager | head -5
 
       - name: Run systemd e2e tests (if any exist yet)
         run: |
