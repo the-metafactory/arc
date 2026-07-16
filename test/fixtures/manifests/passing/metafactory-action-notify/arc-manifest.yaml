@@ -1,0 +1,18 @@
+schema: arc/v1
+name: notify
+version: 0.1.0
+type: action
+tier: official
+description: Pulse action that posts a notification.
+license: Apache-2.0
+author:
+  name: Jane Doe
+  github: janedoe
+capabilities:
+  filesystem:
+    read: []
+    write: []
+  network: []
+  bash:
+    allowed: false
+  secrets: []

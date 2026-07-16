@@ -1,0 +1,21 @@
+schema: arc/v1
+name: legacy-net
+version: 0.1.0
+type: skill
+tier: community
+description: Skill carrying both rejected network entry shapes.
+license: Apache-2.0
+author:
+  name: Jane Doe
+  github: janedoe
+capabilities:
+  filesystem:
+    read: []
+    write: []
+  network:
+    - domain: api.example.com
+      reason: fetch data
+    - https://api.example.com
+  bash:
+    allowed: false
+  secrets: []

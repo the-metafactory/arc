@@ -1,0 +1,23 @@
+schema: arc/v1
+name: devkit
+version: 0.1.0
+type: bundle
+tier: official
+description: Bundle-style skill repo shipping a CLI plus slash commands.
+license: Apache-2.0
+author:
+  name: Jane Doe
+  github: janedoe
+provides:
+  cli: devkit
+  commands:
+    - build
+    - test
+capabilities:
+  filesystem:
+    read: []
+    write: []
+  network: []
+  bash:
+    allowed: false
+  secrets: []

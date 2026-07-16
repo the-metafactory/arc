@@ -1,0 +1,17 @@
+name: pai-skill-sop
+version: 0.1.0
+type: skill
+tier: official
+description: Standard operating procedure skill missing its schema key.
+license: Apache-2.0
+author:
+  name: Jane Doe
+  github: janedoe
+capabilities:
+  filesystem:
+    read: []
+    write: []
+  network: []
+  bash:
+    allowed: false
+  secrets: []

@@ -1,0 +1,18 @@
+schema: arc/v1
+name: scout
+version: 0.1.0
+type: agent
+tier: official
+description: Read-only reconnaissance subagent.
+license: Apache-2.0
+author:
+  name: Jane Doe
+  github: janedoe
+capabilities:
+  filesystem:
+    read: []
+    write: []
+  network: []
+  bash:
+    allowed: false
+  secrets: []
