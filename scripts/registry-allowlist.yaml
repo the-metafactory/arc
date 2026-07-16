@@ -1,0 +1,16 @@
+# Category-B external allowlist — personal-org repos referenced by REGISTRY.yaml
+# (skill-estate migration spec §5.2). These stay EXTERNAL and are listed with
+# their real source URL and tier `community` (forced by the generator regardless
+# of the manifest's own tier). No repo is transferred into the org without an
+# explicit per-repo owner decision — that list is being finalized by the
+# principal in arc#328. Until then these are the spec §5.2 defaults; add/remove
+# a line here (owner/repo) as that decision lands. A repo listed here that has
+# no fetchable arc-manifest.yaml is simply skipped (its existing curated entry,
+# if any, is preserved).
+external:
+  - mellanon/pai-skill-doc
+  - jcfischer/specflow-bundle
+  - jcfischer/pii-pseudonymizer
+  - mellanon/pai-agent-contributor
+  - mellanon/pai-prompt-explain
+  - mellanon/pai-tool-hello

@@ -8,6 +8,7 @@
   },
   "scripts": {
     "start": "bun src/cli.ts",
+    "registry:generate": "bun scripts/generate-registry.ts",
     "test": "bun test",
     "test:unit": "bun test test/unit/",
     "test:commands": "bun test test/commands/",
