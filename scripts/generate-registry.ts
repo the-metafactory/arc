@@ -100,26 +100,32 @@ function fetchManifest(owner: string, repo: string): ArcManifest | null {
 }
 
 /**
- * A publishable package name has no whitespace (the naming standard requires
- * lowercase-hyphenated or PascalCase). A spaced name signals a template/example
- * manifest that must not enter the registry — we skip it and REPORT it (never
- * silently), so a real non-conformant repo still gets surfaced.
+ * Is a manifest fit for a registry entry? It must carry the fields every entry
+ * (and arc's own `arc search`) require: a whitespace-free name (the naming
+ * standard is lowercase-hyphenated or PascalCase — a spaced name is a template/
+ * example) and a non-empty description. The strict validator requires both, so a
+ * failure here is a non-conformant manifest — we skip it and REPORT the reason
+ * (never silently) so the owner fixes it and it lands next run.
  */
-function isPublishableName(name: string): boolean {
-  return name.length > 0 && !/\s/.test(name);
+function publishabilityReason(manifest: ArcManifest): string | null {
+  if (!manifest.name || /\s/.test(manifest.name)) return "non-publishable name (whitespace/empty)";
+  if (typeof manifest.description !== "string" || manifest.description.trim() === "")
+    return "missing description";
+  return null;
 }
 
 /** Live org scan + external allowlist via gh. Collects skipped repos for the report. */
 function liveScan(
   org: string,
   external: { owner: string; repo: string }[],
-  skipped: { source: string; name: string }[],
+  skipped: { source: string; name: string; reason: string }[],
 ): ScannedRepo[] {
   const scanned: ScannedRepo[] = [];
   const consider = (source: string, manifest: ArcManifest | null, isExternal: boolean) => {
     if (!manifest) return;
-    if (!isPublishableName(manifest.name)) {
-      skipped.push({ source, name: manifest.name });
+    const reason = publishabilityReason(manifest);
+    if (reason) {
+      skipped.push({ source, name: manifest.name || "(unnamed)", reason });
       return;
     }
     scanned.push({ source, manifest, external: isExternal || undefined });
@@ -145,7 +151,10 @@ async function loadAllowlist(path: string): Promise<{ owner: string; repo: strin
   }
 }
 
-function reportLines(res: GenerateResult, skipped: { source: string; name: string }[]): string[] {
+function reportLines(
+  res: GenerateResult,
+  skipped: { source: string; name: string; reason: string }[],
+): string[] {
   const lines: string[] = [];
   const fmt = (xs: { section: string; name: string }[]) =>
     xs.map((x) => `${x.section}/${x.name}`).sort().join(", ") || "none";
@@ -154,7 +163,7 @@ function reportLines(res: GenerateResult, skipped: { source: string; name: strin
   lines.push(`preserved: ${res.preserved.length} entr${res.preserved.length === 1 ? "y" : "ies"} not scanned (curated/aspirational or manifest-less)`);
   if (skipped.length) {
     lines.push(
-      `skipped:   ${skipped.map((s) => `${s.name} (${s.source})`).sort().join(", ")} — non-publishable name (whitespace); fix the manifest to include`,
+      `skipped:   ${skipped.map((s) => `${s.name} — ${s.reason} (${s.source})`).sort().join("; ")}`,
     );
   }
   // recall (arc#322 note): the generator keys off manifests, not repos.yaml, so a
@@ -172,7 +181,7 @@ function reportLines(res: GenerateResult, skipped: { source: string; name: strin
 async function main() {
   const args = parseArgs(process.argv.slice(2));
 
-  const skipped: { source: string; name: string }[] = [];
+  const skipped: { source: string; name: string; reason: string }[] = [];
   let scanned: ScannedRepo[];
   if (args.scanInput) {
     scanned = JSON.parse(await readFile(args.scanInput, "utf-8")) as ScannedRepo[];
