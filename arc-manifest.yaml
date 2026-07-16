@@ -1,7 +1,7 @@
 # arc-manifest.yaml — capability declaration
 schema: arc/v1
 name: arc
-version: 0.40.2
+version: 0.40.3
 type: tool
 tier: core
 description: Agentic component package manager — install, manage, and distribute AI agent skills
@@ -15,27 +15,26 @@ provides:
   cli:
     - command: "bun src/cli.ts"
       name: "arc"
-  skill:
-    - name: PackageBuilder
-      path: skill/
-      trigger: build package
-    - name: PackageBuilder
-      path: skill/
-      trigger: create package
-    - name: PackageBuilder
-      path: skill/
-      trigger: package skill
-    - name: PackageBuilder
-      path: skill/
-      trigger: metafactory package
-    - name: PackageBuilder
-      path: skill/
-      trigger: author-builder
+  # The PackageBuilder skill is no longer provided in-tree by arc. It was
+  # extracted to its own repo and is consumed as a dependency instead — see
+  # depends_on.packages below (arc#319, WS3, ADR-0024 D2).
 
 depends_on:
   tools:
     - name: bun
       version: ">=1.0.0"
+  # metafactory-skill-package-builder (arc#319, WS3, ADR-0024 D2): the canonical
+  # PackageBuilder skill (formerly the in-tree skill/ dir, a 985-line SKILL.md +
+  # workflows) now lives in its own repo; arc consumes it as a dependency — the same
+  # auto-install pattern cortex uses for its surface-plugin bundles (cortex#2028).
+  # arc's installer reads depends_on.packages ({name, repo}) to clone + install
+  # each dep on `arc install arc` / `arc upgrade arc`; the in-tree copy is deleted
+  # in this SAME release, no fallback copy. Version intent >=0.1.0 (the
+  # PackageDependency shape carries no version field — arc installs the repo head).
+  # Distribution is repo-first (ADR-0017).
+  packages:
+    - name: "metafactory-skill-package-builder"
+      repo: "https://github.com/the-metafactory/metafactory-skill-package-builder"
 
 bundle:
   exclude:
