@@ -1,50 +1,24 @@
 // arc core types
 
-// ── Catalog types ──────────────────────────────────────────────
+// ── Artifact types ─────────────────────────────────────────────
 
-/** Artifact types in the catalog */
+/** The artifact classes arc installs. */
 export type ArtifactType = "skill" | "agent" | "prompt" | "tool" | "component" | "pipeline" | "process" | "rules" | "library" | "action";
-
-/** Catalog entry type — controls trust level and install behavior */
-export type CatalogEntryType = "builtin" | "community" | "system" | "custom";
-
-/** A single entry in catalog.yaml */
-export interface CatalogEntry {
-  name: string;
-  description: string;
-  source: string;
-  type: CatalogEntryType;
-  has_cli?: boolean;
-  bundle?: boolean;
-  requires?: string[]; // typed refs: "skill:Thinking", "agent:Architect"
-}
-
-/** Default directories for artifact installation */
-export interface CatalogDefaults {
-  skills_dir: string;
-  agents_dir: string;
-  prompts_dir: string;
-  tools_dir: string;
-  components_dir?: string;
-}
-
-/** Top-level catalog.yaml structure */
-export interface CatalogConfig {
-  defaults: CatalogDefaults;
-  catalog: {
-    skills: CatalogEntry[];
-    agents: CatalogEntry[];
-    prompts: CatalogEntry[];
-    tools: CatalogEntry[];
-    components?: CatalogEntry[];
-    rules?: CatalogEntry[];
-  };
-}
 
 // ── Registry types ────────────────────────────────────────────
 
-/** A registry entry extends CatalogEntry with community metadata */
-export interface RegistryEntry extends CatalogEntry {
+/** Registry entry trust tier — controls trust level and install behavior. */
+export type RegistryEntryType = "builtin" | "community" | "system" | "custom";
+
+/** A single entry in REGISTRY.yaml. */
+export interface RegistryEntry {
+  name: string;
+  description: string;
+  source: string;
+  type: RegistryEntryType;
+  has_cli?: boolean;
+  bundle?: boolean;
+  requires?: string[]; // typed refs: "skill:Thinking", "agent:Architect"
   author: string;
   version?: string;
   status: "shipped" | "beta" | "deprecated";
@@ -853,8 +827,6 @@ export interface ArcPaths {
   actionsDir: string;
   /** PATH-accessible shim directory (~/.local/bin by default) — shared across hosts */
   shimDir: string;
-  /** Catalog file path (repo-root/catalog.yaml) */
-  catalogPath: string;
   /** Registry file path (repo-root/registry.yaml) */
   registryPath: string;
 }

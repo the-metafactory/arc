@@ -4,10 +4,7 @@ import type {
   RegistryConfig,
   RegistryEntry,
   ArtifactType,
-  CatalogConfig,
-  CatalogEntry,
 } from "../types.js";
-import { findEntry } from "./catalog.js";
 import { isErrno } from "./errors.js";
 
 /**
@@ -100,58 +97,6 @@ export function findRegistryEntry(
     if (entry.name.toLowerCase() === lower) return { entry, artifactType: "rules" };
   }
   return null;
-}
-
-/**
- * Copy an entry from the registry into a personal catalog.
- * Strips registry-specific fields (author, status, reviewed_by)
- * to produce a CatalogEntry.
- *
- * Returns the catalog entry and artifact type, or throws if not found
- * or already in catalog.
- */
-export function addFromRegistry(
-  registry: RegistryConfig,
-  catalog: CatalogConfig,
-  name: string
-): { entry: CatalogEntry; artifactType: ArtifactType } {
-  const found = findRegistryEntry(registry, name);
-  if (!found) {
-    throw new Error(`"${name}" not found in registry`);
-  }
-
-  const existing = findEntry(catalog, name);
-  if (existing) {
-    throw new Error(`"${name}" already exists in your catalog`);
-  }
-
-  // Strip registry-specific fields to create a CatalogEntry
-  const catalogEntry: CatalogEntry = {
-    name: found.entry.name,
-    description: found.entry.description,
-    source: found.entry.source,
-    type: found.entry.type,
-    ...(found.entry.has_cli ? { has_cli: true } : {}),
-    ...(found.entry.bundle ? { bundle: true } : {}),
-    ...(found.entry.requires?.length ? { requires: found.entry.requires } : {}),
-  };
-
-  const section =
-    found.artifactType === "skill"
-      ? catalog.catalog.skills
-      : found.artifactType === "agent"
-        ? catalog.catalog.agents
-        : found.artifactType === "tool"
-          ? catalog.catalog.tools
-          : found.artifactType === "component"
-            ? (catalog.catalog.components ??= [])
-            : found.artifactType === "rules"
-              ? (catalog.catalog.rules ??= [])
-              : catalog.catalog.prompts;
-
-  section.push(catalogEntry);
-
-  return { entry: catalogEntry, artifactType: found.artifactType };
 }
 
 /**

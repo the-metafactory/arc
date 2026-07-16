@@ -20,7 +20,6 @@
 | `upgrade-core.ts` | `arc upgrade-core` | Upgrade PAI core version (symlink management) |
 | `self-update.ts` | `arc self-update` | Update arc itself (git pull + bun install) |
 | `init.ts` | `arc init` | Scaffold new package repo |
-| `catalog.ts` | `arc catalog *` | Catalog management (list, search, add, remove, use, sync, push) |
 
 ### Libraries (`src/lib/`)
 
@@ -30,7 +29,6 @@
 | `db.ts` | SQLite database (bun:sqlite) for installed package tracking — WAL mode, transactions for writes |
 | `paths.ts` | Path resolution and directory creation. Configurable via overrides (enables test isolation) |
 | `symlinks.ts` | Symlink creation/removal for skills, agents, prompts, tools. CLI shim generation for PATH-accessible tools |
-| `catalog.ts` | Load/save/search catalog.yaml, dependency resolution, install-status enrichment |
 | `registry.ts` | Load and search local REGISTRY.yaml files |
 | `remote-registry.ts` | Fetch, cache, search, and update remote registry sources (apt-update model) |
 | `sources.ts` | Manage sources.yaml configuration (add/remove/list registry sources) |

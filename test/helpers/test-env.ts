@@ -56,7 +56,6 @@ export async function createTestEnv(): Promise<TestEnv> {
     runtimeDir: join(configRoot, "skills"),
     actionsDir: join(configRoot, "actions"),
     shimDir: join(root, "bin"),
-    catalogPath: join(root, "catalog.yaml"),
     registryPath: join(root, "registry.yaml"),
   });
   const host = getDefaultHost({ root: claudeRoot });

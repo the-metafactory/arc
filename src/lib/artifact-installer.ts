@@ -68,7 +68,7 @@ export function resolveArtifactSourceDir(type: ArtifactType | "rules" | "system"
  *
  * Handles all artifact types: rules (template generation), pipeline, component,
  * tool, agent, prompt, and skill. Extracted from install() to allow reuse
- * across install, catalog use, and single-artifact install flows.
+ * across install and single-artifact install flows.
  */
 /**
  * Aggregate of every filesystem artifact a single createArtifactSymlinks call

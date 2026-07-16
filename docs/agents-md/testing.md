@@ -12,10 +12,10 @@ bun test:e2e                # End-to-end lifecycle tests (test/e2e/)
 ### Test Categories
 
 **Unit tests** (`test/unit/`): Pure function tests for libraries.
-- `catalog.test.ts`, `db.test.ts`, `hooks.test.ts`, `manifest.test.ts`, `paths.test.ts`, `registry.test.ts`, `remote-registry.test.ts`, `source-resolver.test.ts`, `sources.test.ts`
+- `db.test.ts`, `hooks.test.ts`, `manifest.test.ts`, `paths.test.ts`, `registry.test.ts`, `registry-generator.test.ts`, `remote-registry.test.ts`, `source-resolver.test.ts`, `sources.test.ts`
 
 **Command tests** (`test/commands/`): Integration tests for CLI commands.
-- `audit.test.ts`, `catalog.test.ts`, `disable.test.ts`, `init.test.ts`, `install.test.ts`, `lifecycle-hooks.test.ts`, `list.test.ts`, `remove.test.ts`, `upgrade-core.test.ts`, `upgrade.test.ts`, `verify.test.ts`
+- `audit.test.ts`, `disable.test.ts`, `init.test.ts`, `install.test.ts`, `lifecycle-hooks.test.ts`, `list.test.ts`, `remove.test.ts`, `upgrade-core.test.ts`, `upgrade.test.ts`, `verify.test.ts`
 
 **E2E tests** (`test/e2e/`): Full lifecycle tests.
 - `lifecycle.test.ts`
