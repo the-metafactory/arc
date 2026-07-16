@@ -1,4 +1,4 @@
-import { join, dirname } from "path";
+import { join, dirname, basename } from "path";
 import { existsSync, readdirSync } from "fs";
 import { mkdir } from "fs/promises";
 import { readFileSync } from "fs";
@@ -9,6 +9,7 @@ import type {
   ArcPaths,
   CortexHostPaths,
   HostAdapter,
+  HostId,
   LibraryArtifactEntry,
 } from "../types.js";
 import { errorMessage, isErrno } from "./errors.js";
@@ -24,6 +25,8 @@ import { generateRules } from "./rules.js";
 import { requireHostDir } from "./hosts/dispatch.js";
 import { resolveHost, type HostOverrides } from "./hosts/registry.js";
 import { resolveProvidesTarget } from "./provides-target.js";
+import { isDarwinLaunchdHost } from "./hosts/darwin-launchd.js";
+import { isLinuxSystemdHost } from "./hosts/linux-systemd.js";
 
 /**
  * Maps an artifact type to its conventional source subdirectory within a cloned repo.
@@ -332,20 +335,25 @@ function resolveBotPackAgentId(fragmentPath: string, manifestName: string): stri
  * artifact is installed but the filesystem disagrees, so a skip-on-active guard
  * must NOT honor the skip (it would be a silent no-op reinstall).
  *
- * SCOPE (v1): launchd plist presence for darwin-launchd / linux-systemd targets
- * is NOT checked -- those targets are skipped here. The failure mode arc#248
- * documents is the symlink/fragment drop diverging from the DB; the
- * supervision-host side is a follow-up. The symlink/fragment drops on registry
- * hosts (cortex, claude-code) are the load-bearing check.
+ * v2 (arc#250): supervision hosts (darwin-launchd, linux-systemd) are no
+ * longer skipped -- the rendered plist/unit's presence at its computed path
+ * (mirroring installLaunchdArtifacts / installSystemdArtifacts' basename-based
+ * target) is checked, same as the symlink/fragment presence check registry
+ * hosts get. `provides.binary`'s symlink into that host's `binDir` is checked
+ * too when declared. This closes the false-positive arc#248 originally
+ * scoped out (v1): a manifest whose `targets` is ONLY supervision hosts no
+ * longer skips verification entirely -- a wiped plist/unit now reads as
+ * "not present", so the skip-on-active guard re-runs the install instead of
+ * silently trusting a stale DB row.
  *
- * KNOWN v1 LIMITATION (consequence of the above): a manifest whose `targets`
- * is ONLY supervision hosts (e.g. `targets: [darwin-launchd]`) resolves to an
- * EMPTY host list here, so the verify loop runs zero checks and returns
- * `true` UNCONDITIONALLY -- a wiped plist reads as "present". This is the
- * narrow false-positive the supervision-host follow-up will close (check plist
- * presence for those targets). Until then, a launchd-only artifact whose plist
- * was wiped will still be skipped on reinstall. Registry-host targets (the
- * arc#248 case) are unaffected.
+ * FAIL-SAFE (arc#250): resolving `manifest.targets` can never legitimately
+ * produce ZERO checks when `targets.length > 0` -- every declared HostId is
+ * either a registry host (resolveHost, which throws on an unknown id) or one
+ * of the two known supervision ids. But should that invariant ever be wrong
+ * (a future HostId this function hasn't been taught to classify), returning
+ * `true` from an empty-checks run would be the exact arc#248/#250 failure
+ * mode again -- a DB row nothing here actually verified. So an empty result
+ * fails safe to `false`, not `true`.
  */
 export async function artifactDropPresent(opts: {
   type: ArtifactType | "rules" | "system";
@@ -365,19 +373,29 @@ export async function artifactDropPresent(opts: {
     (opts.manifest.provides?.files ?? []).map((f) => resolveProvidesTarget(f.target)),
   );
 
-  // Resolve the set of hosts the drop lands on -- mirror installPerTarget.
-  const hosts: HostAdapter[] = [];
+  // Split declared targets into registry hosts (symlink/fragment check below)
+  // and supervision targets (plist/unit + binary check below) -- mirrors
+  // installPerTarget's own per-target dispatch.
+  const registryHosts: HostAdapter[] = [];
+  const supervisionTargets: HostId[] = [];
   if (opts.manifest.targets && opts.manifest.targets.length > 0) {
     for (const targetId of opts.manifest.targets) {
-      // launchd/systemd are out of scope for v1 (see doc comment); skip them.
-      if (targetId === "darwin-launchd" || targetId === "linux-systemd") continue;
-      hosts.push(resolveHost(targetId, opts.hostOverrides));
+      if (targetId === "darwin-launchd" || targetId === "linux-systemd") {
+        supervisionTargets.push(targetId);
+      } else {
+        registryHosts.push(resolveHost(targetId, opts.hostOverrides));
+      }
     }
   } else {
-    hosts.push(opts.host);
+    registryHosts.push(opts.host);
   }
 
-  for (const targetHost of hosts) {
+  // Fail-safe backstop -- see doc comment above.
+  if (registryHosts.length === 0 && supervisionTargets.length === 0) {
+    return false;
+  }
+
+  for (const targetHost of registryHosts) {
     let plan: ArtifactSymlinkPlan;
     try {
       plan = planArtifactSymlinks({
@@ -403,6 +421,30 @@ export async function artifactDropPresent(opts: {
         // Primary per-type drop: must be a valid (non-dangling) symlink.
         if (!(await isValidSymlink(link.target))) return false;
       }
+    }
+  }
+
+  for (const targetId of supervisionTargets) {
+    const targetHost = resolveHost(targetId, opts.hostOverrides);
+    const provides = opts.manifest.provides ?? {};
+
+    if (targetId === "darwin-launchd") {
+      if (!isDarwinLaunchdHost(targetHost)) return false;
+      if (provides.plist) {
+        const plistPath = join(targetHost.paths.plistDir, basename(provides.plist));
+        if (!existsSync(plistPath)) return false;
+      }
+    } else {
+      if (!isLinuxSystemdHost(targetHost)) return false;
+      if (provides.systemdUnit) {
+        const unitPath = join(targetHost.paths.unitDir, basename(provides.systemdUnit));
+        if (!existsSync(unitPath)) return false;
+      }
+    }
+
+    if (provides.binary) {
+      const binPath = join(targetHost.paths.binDir, basename(provides.binary));
+      if (!(await isValidSymlink(binPath))) return false;
     }
   }
 

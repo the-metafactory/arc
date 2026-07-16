@@ -1,5 +1,5 @@
 import { describe, test, expect, afterEach } from "bun:test";
-import { mkdir, rm, unlink, writeFile } from "fs/promises";
+import { mkdir, rm, unlink, writeFile, chmod } from "fs/promises";
 import { existsSync } from "fs";
 import { join } from "path";
 import {
@@ -12,6 +12,8 @@ import { createTestEnv, createMockSkillRepo, type TestEnv } from "../helpers/tes
 import { resolveHost } from "../../src/lib/hosts/registry.js";
 import { readManifest } from "../../src/lib/manifest.js";
 import type { ArcManifest, HostAdapter } from "../../src/types.js";
+import { installSystemdArtifacts, type SystemctlRunner } from "../../src/lib/hosts/systemd-install.js";
+import { installLaunchdArtifacts } from "../../src/lib/hosts/launchd-install.js";
 
 let env: TestEnv;
 
@@ -324,6 +326,191 @@ describe("artifactDropPresent", () => {
         arc: env.arc,
         host: env.host,
         installDir: repo.path,
+      }),
+    ).toBe(false);
+  });
+});
+
+/**
+ * arc#250 (v2 fix, closed alongside arc#311): a manifest whose `targets` is
+ * ONLY supervision hosts (darwin-launchd / linux-systemd) used to resolve to
+ * an EMPTY registry-host list, so the verify loop ran zero checks and
+ * `artifactDropPresent` returned `true` UNCONDITIONALLY — a wiped plist/unit
+ * read as "present". These tests pin the fix: supervision targets now get a
+ * real presence check (rendered unit/plist + binary symlink), and the
+ * fail-safe backstop never lets an empty-checks run report "present".
+ */
+describe("artifactDropPresent — arc#250 supervision-host regression", () => {
+  const noopRunner: SystemctlRunner = async () => ({ code: 0, stderr: "" });
+
+  test("linux-systemd-only manifest: present after install, false after the unit is wiped (was: always true)", async () => {
+    env = await createTestEnv();
+    const unitDir = join(env.root, ".config", "systemd", "user");
+    const binDir = join(env.root, "systemd-bin");
+    await mkdir(unitDir, { recursive: true });
+    await mkdir(binDir, { recursive: true });
+
+    const installDir = join(env.root, "mock-sysd-bot");
+    await mkdir(join(installDir, "bin"), { recursive: true });
+    await writeFile(join(installDir, "bin", "sysd-bot"), "#!/bin/bash\n");
+    await chmod(join(installDir, "bin", "sysd-bot"), 0o755);
+    await mkdir(join(installDir, "services"), { recursive: true });
+    await writeFile(join(installDir, "services", "sysd-bot.service"), `[Service]\nExecStart={{BIN}}\n`);
+
+    const manifest: ArcManifest = {
+      name: "sysd-bot",
+      version: "0.1.0",
+      type: "agent",
+      targets: ["linux-systemd"],
+      provides: { binary: "bin/sysd-bot", systemdUnit: "services/sysd-bot.service" },
+    };
+
+    const host = resolveHost("linux-systemd", {
+      "linux-systemd": { unitDir, binDir, forcePlatform: "linux" },
+    });
+    await installSystemdArtifacts({
+      host: host as HostAdapter & { paths: { unitDir: string; binDir: string } },
+      manifest,
+      installDir,
+      quiet: true,
+      systemctlRunner: noopRunner,
+      lingerChecker: async () => ({ enabled: true, username: "test" }),
+    });
+
+    const hostOverrides = { "linux-systemd": { unitDir, binDir, forcePlatform: "linux" as const } };
+
+    // Present immediately after install — BEFORE the fix this was already
+    // `true`, but for the WRONG reason (zero checks ran).
+    expect(
+      await artifactDropPresent({
+        type: "agent",
+        manifest,
+        arc: env.arc,
+        host: env.host,
+        installDir,
+        hostOverrides,
+      }),
+    ).toBe(true);
+
+    // Wipe the rendered unit — the DB row would still say "active".
+    await unlink(join(unitDir, "sysd-bot.service"));
+    expect(
+      await artifactDropPresent({
+        type: "agent",
+        manifest,
+        arc: env.arc,
+        host: env.host,
+        installDir,
+        hostOverrides,
+      }),
+    ).toBe(false);
+  });
+
+  test("darwin-launchd-only manifest: present after install, false after the plist is wiped", async () => {
+    env = await createTestEnv();
+    const plistDir = join(env.root, "Library", "LaunchAgents");
+    const binDir = join(env.root, "launchd-bin");
+    await mkdir(plistDir, { recursive: true });
+    await mkdir(binDir, { recursive: true });
+
+    const installDir = join(env.root, "mock-launchd-bot");
+    await mkdir(join(installDir, "bin"), { recursive: true });
+    await writeFile(join(installDir, "bin", "launchd-bot"), "#!/bin/bash\n");
+    await chmod(join(installDir, "bin", "launchd-bot"), 0o755);
+    await mkdir(join(installDir, "services"), { recursive: true });
+    await writeFile(join(installDir, "services", "launchd-bot.plist"), `<plist></plist>`);
+
+    const manifest: ArcManifest = {
+      name: "launchd-bot",
+      version: "0.1.0",
+      type: "agent",
+      targets: ["darwin-launchd"],
+      provides: { binary: "bin/launchd-bot", plist: "services/launchd-bot.plist" },
+    };
+
+    const host = resolveHost("darwin-launchd", {
+      "darwin-launchd": { plistDir, binDir, forcePlatform: "darwin" },
+    });
+    await installLaunchdArtifacts({
+      host: host as HostAdapter & { paths: { plistDir: string; binDir: string } },
+      manifest,
+      installDir,
+      quiet: true,
+    });
+
+    const hostOverrides = { "darwin-launchd": { plistDir, binDir, forcePlatform: "darwin" as const } };
+
+    expect(
+      await artifactDropPresent({
+        type: "agent",
+        manifest,
+        arc: env.arc,
+        host: env.host,
+        installDir,
+        hostOverrides,
+      }),
+    ).toBe(true);
+
+    await unlink(join(plistDir, "launchd-bot.plist"));
+    expect(
+      await artifactDropPresent({
+        type: "agent",
+        manifest,
+        arc: env.arc,
+        host: env.host,
+        installDir,
+        hostOverrides,
+      }),
+    ).toBe(false);
+  });
+
+  test("regression: a supervision-only artifact whose unit was wiped re-drops on reinstall (skip-guard consults the real fix)", async () => {
+    // This is the exact arc#250 scenario the skip-on-active install guard
+    // hits: a manifest with `targets: [linux-systemd]` gets recorded active,
+    // its unit is later wiped (e.g. a manual `rm`), and a re-install must
+    // NOT silently skip because artifactDropPresent still says "present".
+    env = await createTestEnv();
+    const unitDir = join(env.root, ".config", "systemd", "user");
+    const binDir = join(env.root, "systemd-bin");
+    await mkdir(unitDir, { recursive: true });
+    await mkdir(binDir, { recursive: true });
+
+    const installDir = join(env.root, "mock-resurrect-bot");
+    await mkdir(join(installDir, "services"), { recursive: true });
+    await writeFile(join(installDir, "services", "resurrect-bot.service"), `[Service]\nExecStart=/bin/true\n`);
+
+    const manifest: ArcManifest = {
+      name: "resurrect-bot",
+      version: "0.1.0",
+      type: "agent",
+      targets: ["linux-systemd"],
+      provides: { systemdUnit: "services/resurrect-bot.service" },
+    };
+    const hostOverrides = { "linux-systemd": { unitDir, binDir, forcePlatform: "linux" as const } };
+    const host = resolveHost("linux-systemd", hostOverrides);
+    await installSystemdArtifacts({
+      host: host as HostAdapter & { paths: { unitDir: string; binDir: string } },
+      manifest,
+      installDir,
+      quiet: true,
+      systemctlRunner: noopRunner,
+      lingerChecker: async () => ({ enabled: true, username: "test" }),
+    });
+
+    // Simulate the wipe.
+    await unlink(join(unitDir, "resurrect-bot.service"));
+
+    // The skip-on-active install guard is exactly `artifactDropPresent` —
+    // it must report `false` so the caller re-runs install instead of
+    // silently trusting the stale "active" DB row.
+    expect(
+      await artifactDropPresent({
+        type: "agent",
+        manifest,
+        arc: env.arc,
+        host: env.host,
+        installDir,
+        hostOverrides,
       }),
     ).toBe(false);
   });
