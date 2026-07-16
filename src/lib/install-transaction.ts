@@ -7,6 +7,8 @@ import {
 } from "./artifact-installer.js";
 import type { LaunchdInstallRecord } from "./hosts/launchd-install.js";
 import { rollbackLaunchdArtifacts } from "./hosts/launchd-install.js";
+import type { SystemctlRunner, SystemdInstallRecord } from "./hosts/systemd-install.js";
+import { rollbackSystemdArtifacts } from "./hosts/systemd-install.js";
 import {
   findMissingHookFiles,
   registerHooks,
@@ -37,6 +39,7 @@ export type LandedArtifact =
   | { kind: "hook"; settingsPath: string; count: number }
   | { kind: "extension"; name: string }
   | { kind: "launchd"; plistPath?: string; binSymlink?: string }
+  | { kind: "systemd"; unitPath?: string; binSymlink?: string }
   | { kind: "soma-projection"; skillDir: string }
   | { kind: "db-row"; name: string };
 
@@ -54,6 +57,7 @@ export interface InstallTransaction {
   readonly evidence: InstallTransactionEvidence;
   recordSymlinks(record: ArtifactSymlinkRecord): void;
   recordLaunchd(records: LaunchdInstallRecord[]): void;
+  recordSystemd(records: SystemdInstallRecord[]): void;
   recordHookRegistration(settingsPath: string, count: number): void;
   recordExtensions(names: string[], claudeRoot: string): void;
   recordSomaProjection(installPath: string, manifest: ArcManifest): void;
@@ -223,6 +227,8 @@ export function beginLibraryInstallTransaction(opts: {
 export function beginInstallTransaction(opts: {
   packageName: string;
   authorization: InstallAuthorization;
+  /** Injectable systemctl seam for systemd rollback (test isolation, arc#311). */
+  systemctlRunner?: SystemctlRunner;
 }): InstallTransaction {
   if (!opts.authorization.approved) {
     throw new Error("Install Transaction requires Install Authorization");
@@ -230,6 +236,7 @@ export function beginInstallTransaction(opts: {
 
   const symlinkRecords: ArtifactSymlinkRecord[] = [];
   const launchdRecords: LaunchdInstallRecord[] = [];
+  const systemdRecords: SystemdInstallRecord[] = [];
   const hookRegistrations: { settingsPath: string; packageName: string }[] = [];
   const extensionRecords: { names: string[]; claudeRoot: string }[] = [];
   const somaProjectionRecords: { installPath: string; manifest: ArcManifest }[] = [];
@@ -266,6 +273,17 @@ export function beginInstallTransaction(opts: {
         evidence.landedArtifacts.push({
           kind: "launchd",
           plistPath: record.plistPath,
+          binSymlink: record.binSymlink,
+        });
+      }
+    },
+
+    recordSystemd(records) {
+      systemdRecords.push(...records);
+      for (const record of records) {
+        evidence.landedArtifacts.push({
+          kind: "systemd",
+          unitPath: record.unitPath,
           binSymlink: record.binSymlink,
         });
       }
@@ -341,6 +359,13 @@ export function beginInstallTransaction(opts: {
           warn(`failed to roll back launchd artifacts: ${errorMessage(err)}`);
         }
       }
+      for (const record of systemdRecords) {
+        try {
+          await rollbackSystemdArtifacts(record, { systemctlRunner: opts.systemctlRunner });
+        } catch (err) {
+          warn(`failed to roll back systemd artifacts: ${errorMessage(err)}`);
+        }
+      }
       return evidence;
     },
   };
@@ -355,6 +380,9 @@ export interface CompleteInstallTransactionOptions {
   authorization: InstallAuthorization;
   symlinks: ArtifactSymlinkRecord;
   launchdRecords?: LaunchdInstallRecord[];
+  systemdRecords?: SystemdInstallRecord[];
+  /** Injectable systemctl seam threaded to the transaction's rollback (test isolation, arc#311). */
+  systemctlRunner?: SystemctlRunner;
   quiet?: boolean;
   sourceName?: string | null;
   sourceTier?: PackageTier;
@@ -388,10 +416,12 @@ export async function completeInstallTransaction(
   const tx = beginInstallTransaction({
     packageName: manifest.name,
     authorization: opts.authorization,
+    systemctlRunner: opts.systemctlRunner,
   });
   opts.onTransaction?.(tx);
   tx.recordSymlinks(opts.symlinks);
   tx.recordLaunchd(opts.launchdRecords ?? []);
+  tx.recordSystemd(opts.systemdRecords ?? []);
 
   const resolvedHooks = resolveHooksFromManifest(
     manifest.provides?.hooks,

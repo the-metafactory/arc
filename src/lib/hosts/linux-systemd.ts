@@ -32,12 +32,11 @@ import type {
  * sysadmin-stripped layout is exotic enough to defer to install-time
  * error surfacing.
  *
- * Install/remove dispatch (rendering `provides.systemdUnit`, copying
- * `provides.binary`, `systemctl --user enable --now`) is NOT in this
- * PR — landing the adapter surface unblocks `targets: [..., linux-systemd]`
- * manifests from rejecting at parse, and the install dispatch for systemd
- * will follow once the first Linux host enters the deployment topology
- * (per design doc §11 Phase C.3, also noted in P6).
+ * Install/remove dispatch (rendering `provides.systemdUnit`, symlinking
+ * `provides.binary`, `systemctl --user daemon-reload` + `enable --now` /
+ * `disable --now`) lives in `systemd-install.ts` (arc#311, L2) — the
+ * systemd sister to `launchd-install.ts`. This file remains the adapter
+ * surface only: `id`, `paths`, `detect()`, `supports()`.
  *
  * `supports()` matches darwin-launchd (`agent` + `tool`).
  */
@@ -86,4 +85,23 @@ export function createLinuxSystemdHost(
     detect: () => onLinux && existsSync(paths.unitDir),
     supports: (type: ArtifactType) => type === "agent" || type === "tool",
   };
+}
+
+/**
+ * Type guard for the linux-systemd host's narrowed paths shape.
+ *
+ * Sister to `isDarwinLaunchdHost` (darwin-launchd.ts). Use this in
+ * multi-target dispatch instead of a blanket `as` cast — if
+ * `createLinuxSystemdHost()` is ever refactored to drop the `unitDir`
+ * extension, this guard fails fast at runtime with a clear message
+ * instead of letting a downstream `.paths.unitDir` access surface as
+ * `undefined`. Sage P3 review (arc#143) established the pattern.
+ */
+export function isLinuxSystemdHost(
+  host: HostAdapter,
+): host is HostAdapter & { paths: LinuxSystemdHostPaths } {
+  return (
+    host.id === "linux-systemd" &&
+    typeof (host.paths as Partial<LinuxSystemdHostPaths>).unitDir === "string"
+  );
 }

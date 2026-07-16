@@ -107,9 +107,11 @@ jobs:
   # systemd e2e — plain Actions jobs have no systemd user bus
   # ("systemctl --user" -> "Failed to connect to bus"), so this job
   # boots one before running the linux-systemd HostAdapter's e2e test.
-  # Not in required checks yet; the L2 dispatch issue (arc epic) is
-  # what actually populates test/e2e/systemd*.test.ts, so a zero-match
-  # glob here is expected and not a failure. Keep this step block
+  # test/e2e/systemd-install.test.ts (arc#311, L2 dispatch) now matches
+  # the glob below and runs for real here. The `ls` guard stays so a
+  # future rename/removal fails soft (informative skip) rather than
+  # hard (the job's whole point is exercising a REAL systemctl --user,
+  # not gating merges — not in required checks). Keep this step block
   # byte-similar to cortex's sibling job (design/linux-host-support.md
   # §L2) so the two can be lifted into a shared composite action later.
   # ──────────────────────────────────────────────────────────────────

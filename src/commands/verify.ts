@@ -1,11 +1,12 @@
-import { join, relative } from "path";
+import { join, relative, basename } from "path";
 import { existsSync, readdirSync, statSync } from "fs";
 import type { Database } from "bun:sqlite";
-import type { ArcPaths, HostAdapter } from "../types.js";
-import { getSkill } from "../lib/db.js";
+import type { ArcPaths, HostAdapter, LinuxSystemdHostPaths } from "../types.js";
+import { getSkill, listSkills } from "../lib/db.js";
 import { isValidSymlink } from "../lib/symlinks.js";
 import { readManifest } from "../lib/manifest.js";
 import { listPackageHooks, findMissingHookFiles } from "../lib/hooks.js";
+import { resolveHost, type HostOverrides } from "../lib/hosts/registry.js";
 
 export interface VerifyCheck {
   check: string;
@@ -29,12 +30,16 @@ export interface VerifyResult {
  * @param arc Unused until Phase 3c, which adds arc-state checks (db row /
  *   manifest cross-reference, sources.yaml integrity). Kept in the
  *   signature now so that pass doesn't churn every call site twice.
+ * @param hostOverrides Per-host adapter overrides (arc#311 — test
+ *   isolation for the linux-systemd orphaned-unit check below, mirrors
+ *   `InstallOptions.hostOverrides`). Production leaves this absent.
  */
 export async function verify(
   db: Database,
   arc: ArcPaths,
   host: HostAdapter,
-  name: string
+  name: string,
+  hostOverrides?: HostOverrides,
 ): Promise<VerifyResult> {
   const skill = getSkill(db, name);
   if (!skill) {
@@ -127,11 +132,71 @@ export async function verify(
     }
   }
 
+  // Check 6: no orphaned systemd units (arc#311). Scoped to packages that
+  // declare a linux-systemd target -- a plain skill/tool's verify doesn't
+  // pay for a unitDir scan it has no stake in.
+  if (manifest?.targets?.includes("linux-systemd")) {
+    const systemdHost = resolveHost("linux-systemd", hostOverrides);
+    const orphans = await findOrphanedSystemdUnits(db, systemdHost);
+    checks.push({
+      check: `No orphaned systemd units (${orphans.length} found)`,
+      passed: orphans.length === 0,
+      detail: orphans.length ? orphans.map((o) => o.unitPath).join(", ") : undefined,
+    });
+  }
+
   return {
     name,
     checks,
     allPassed: checks.every((c) => c.passed),
   };
+}
+
+/**
+ * A rendered systemd unit file found in `host.paths.unitDir` that does not
+ * correspond to any currently-active installed package's declared
+ * `provides.systemdUnit`.
+ */
+export interface OrphanedUnit {
+  unitPath: string;
+  reason: string;
+}
+
+/**
+ * Scan the linux-systemd host's `unitDir` for `*.service` files that no
+ * ACTIVE installed package owns (arc#311). A unit left behind by an
+ * interrupted `arc remove`, a manually-deleted DB row, or a package
+ * disabled without its supervision side being torn down all show up here
+ * — none of arc's other checks catch a leftover unit file, since `verify()`
+ * otherwise only inspects the ONE named package's own expected drop.
+ */
+export async function findOrphanedSystemdUnits(
+  db: Database,
+  host: HostAdapter,
+): Promise<OrphanedUnit[]> {
+  const unitDir = (host.paths as Partial<LinuxSystemdHostPaths>).unitDir;
+  if (!unitDir || !existsSync(unitDir)) return [];
+
+  const owned = new Set<string>();
+  for (const skill of listSkills(db)) {
+    if (skill.status !== "active") continue;
+    const skillManifest = await readManifest(skill.install_path);
+    if (!skillManifest?.targets?.includes("linux-systemd")) continue;
+    if (skillManifest.provides?.systemdUnit) {
+      owned.add(basename(skillManifest.provides.systemdUnit));
+    }
+  }
+
+  const orphans: OrphanedUnit[] = [];
+  for (const entry of readdirSync(unitDir)) {
+    if (!entry.endsWith(".service")) continue;
+    if (owned.has(entry)) continue;
+    orphans.push({
+      unitPath: join(unitDir, entry),
+      reason: "no active installed package declares this unit",
+    });
+  }
+  return orphans;
 }
 
 /**

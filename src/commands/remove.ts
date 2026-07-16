@@ -23,6 +23,8 @@ import {
 } from "../lib/hosts/registry.js";
 import { removeLaunchdArtifacts } from "../lib/hosts/launchd-install.js";
 import { isDarwinLaunchdHost } from "../lib/hosts/darwin-launchd.js";
+import { type SystemctlRunner, removeSystemdArtifacts } from "../lib/hosts/systemd-install.js";
+import { isLinuxSystemdHost } from "../lib/hosts/linux-systemd.js";
 import { errorMessage, isErrno } from "../lib/errors.js";
 
 export interface RemoveResult {
@@ -45,6 +47,12 @@ export interface RemoveOptions {
    * Mirrors `InstallOptions.hostOverrides`.
    */
   hostOverrides?: HostOverrides;
+  /**
+   * Injectable `systemctl --user` seam for linux-systemd removes (arc#311).
+   * Mirrors `InstallOptions.systemctlRunner` — production leaves this
+   * absent (real spawn); tests inject a recorder.
+   */
+  systemctlRunner?: SystemctlRunner;
 }
 
 /**
@@ -134,6 +142,7 @@ function runPostuninstallPhase(
  *
  * For each target:
  *   - darwin-launchd → removeLaunchdArtifacts (plist + binary symlink)
+ *   - linux-systemd → removeSystemdArtifacts (unit + binary symlink)
  *   - cortex / claude-code → remove the type-appropriate artifact
  *     symlink from that host's directory
  *
@@ -146,6 +155,7 @@ async function removePerTarget(opts: {
   packageName: string;
   hostOverrides?: HostOverrides;
   quiet?: boolean;
+  systemctlRunner?: SystemctlRunner;
 }): Promise<void> {
   const reverseOrder = [...orderTargetsForInstall(opts.targets)].reverse();
 
@@ -171,14 +181,21 @@ async function removePerTarget(opts: {
     }
 
     if (targetId === "linux-systemd") {
-      // arc#140 P6: matched install-side behavior — the adapter exists
-      // but remove dispatch isn't yet wired. Skip with a warning rather
-      // than aborting; the operator can clean up manually.
-      if (!opts.quiet) {
-        console.warn(
-          `  ⚠ Skipping linux-systemd remove: dispatch not yet implemented (arc#140 Phase C)`,
-        );
+      // Sister to the darwin-launchd branch above (arc#311, L2).
+      if (!isLinuxSystemdHost(targetHost)) {
+        if (!opts.quiet) {
+          console.warn(
+            `  ⚠ Skipping linux-systemd remove: adapter did not expose unitDir`,
+          );
+        }
+        continue;
       }
+      await removeSystemdArtifacts({
+        host: targetHost,
+        manifest: opts.manifest,
+        quiet: opts.quiet,
+        systemctlRunner: opts.systemctlRunner,
+      });
       continue;
     }
 
@@ -327,6 +344,7 @@ export async function remove(
       packageName: name,
       hostOverrides: opts.hostOverrides,
       quiet: opts.quiet,
+      systemctlRunner: opts.systemctlRunner,
     });
   } else if (isAction) {
     // Actions: remove action symlink

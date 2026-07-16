@@ -35,6 +35,14 @@ import {
 } from "../lib/hosts/launchd-install.js";
 import { isDarwinLaunchdHost } from "../lib/hosts/darwin-launchd.js";
 import {
+  type SystemctlRunner,
+  type LingerChecker,
+  type SystemdInstallRecord,
+  installSystemdArtifacts,
+  rollbackSystemdArtifacts,
+} from "../lib/hosts/systemd-install.js";
+import { isLinuxSystemdHost } from "../lib/hosts/linux-systemd.js";
+import {
   ArtifactInstallState,
   beginLibraryInstallTransaction,
   completeInstallTransaction,
@@ -113,6 +121,20 @@ export interface InstallOptions {
    * to sandboxed temp dirs. Production calls leave this absent.
    */
   hostOverrides?: HostOverrides;
+  /**
+   * Injectable `systemctl --user` seam for linux-systemd installs (arc#311).
+   * Production leaves this absent (real spawn). Tests inject a recorder so
+   * a linux-systemd multi-target install/rollback never spawns a real
+   * `systemctl` process.
+   */
+  systemctlRunner?: SystemctlRunner;
+  /**
+   * Injectable linger-check seam for linux-systemd installs (arc#311's
+   * STOP-AND-ASK: `enable --now` requires `loginctl enable-linger` on the
+   * account, and arc never invokes `sudo` to fix that itself). Production
+   * leaves this absent (real `loginctl` query). Tests inject a fixed result.
+   */
+  lingerChecker?: LingerChecker;
   /**
    * F-6e (arc#229) — secret provisioning controls.
    *
@@ -587,6 +609,7 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
   //   - manifest.targets absent → existing single-host flow against opts.host.
   let symlinkResult: { record: ArtifactSymlinkRecord; filesMissingSource: { source: string; target: string }[] };
   let launchdRecords: LaunchdInstallRecord[] = [];
+  let systemdRecords: SystemdInstallRecord[] = [];
   if (manifest.targets && manifest.targets.length > 0) {
     const multi = await installPerTarget({
       targets: manifest.targets,
@@ -596,12 +619,15 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
       consumerDir: opts.consumerDir,
       quiet: opts.yes,
       hostOverrides: opts.hostOverrides,
+      systemctlRunner: opts.systemctlRunner,
+      lingerChecker: opts.lingerChecker,
     });
     if ("error" in multi) {
       return { success: false, error: multi.error };
     }
     symlinkResult = { record: multi.symlinks, filesMissingSource: [] };
     launchdRecords = multi.launchd;
+    systemdRecords = multi.systemd;
   } else {
     symlinkResult = await createArtifactSymlinks({
       type: manifest.type,
@@ -648,6 +674,8 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
     authorization: { approved: true },
     symlinks: symlinkResult.record,
     launchdRecords,
+    systemdRecords,
+    systemctlRunner: opts.systemctlRunner,
     quiet: opts.yes,
     sourceName: opts.sourceName ?? null,
     sourceTier: opts.sourceTier ?? manifest.tier ?? "custom",
@@ -1060,6 +1088,7 @@ export async function installSingleArtifact(
   //     (plain skills/tools/prompts — byte-identical to before).
   let symlinkResult: { record: ArtifactSymlinkRecord; filesMissingSource: { source: string; target: string }[] };
   let artifactLaunchdRecords: LaunchdInstallRecord[] = [];
+  let artifactSystemdRecords: SystemdInstallRecord[] = [];
   if (manifest.targets && manifest.targets.length > 0) {
     const multi = await installPerTarget({
       targets: manifest.targets,
@@ -1069,12 +1098,15 @@ export async function installSingleArtifact(
       consumerDir: opts.consumerDir,
       quiet: opts.yes,
       hostOverrides: opts.hostOverrides,
+      systemctlRunner: opts.systemctlRunner,
+      lingerChecker: opts.lingerChecker,
     });
     if ("error" in multi) {
       return { success: false, error: multi.error };
     }
     symlinkResult = { record: multi.symlinks, filesMissingSource: [] };
     artifactLaunchdRecords = multi.launchd;
+    artifactSystemdRecords = multi.systemd;
   } else {
     symlinkResult = await createArtifactSymlinks({
       type: manifest.type,
@@ -1121,6 +1153,8 @@ export async function installSingleArtifact(
     authorization: { approved: true },
     symlinks: symlinkResult.record,
     launchdRecords: artifactLaunchdRecords,
+    systemdRecords: artifactSystemdRecords,
+    systemctlRunner: opts.systemctlRunner,
     quiet: opts.yes,
     sourceName: opts.sourceName ?? `library:${libraryName}`,
     sourceTier: opts.sourceTier ?? manifest.tier ?? "custom",
@@ -1183,13 +1217,13 @@ export async function installSingleArtifact(
  *   - all symlinks created across registry hosts (one merged
  *     ArtifactSymlinkRecord — same rollback path as the single-host case
  *     since the existing `rollbackArtifactSymlinks` walks the list)
- *   - per-host LaunchdInstallRecords (one per supervision target) so the
- *     downstream postinstall-failure or hook-gate-failure path can also
- *     roll back the launchd side.
+ *   - per-host LaunchdInstallRecords / SystemdInstallRecords (one per
+ *     supervision target) so the downstream postinstall-failure or
+ *     hook-gate-failure path can also roll back the supervision side.
  *
- * On `provides.files` validation failure or launchd-side install failure
- * inside the loop, this function rolls back ALL accumulated state before
- * returning so the caller never sees partial multi-target state.
+ * On `provides.files` validation failure or supervision-side install
+ * failure inside the loop, this function rolls back ALL accumulated state
+ * before returning so the caller never sees partial multi-target state.
  *
  * Hooks registration (`provides.hooks`) is the caller's responsibility —
  * arc#140 P3 keeps hooks on the existing `opts.host` (typically claude-code),
@@ -1199,6 +1233,7 @@ export async function installSingleArtifact(
 interface MultiTargetInstallResult {
   symlinks: ArtifactSymlinkRecord;
   launchd: LaunchdInstallRecord[];
+  systemd: SystemdInstallRecord[];
 }
 
 async function installPerTarget(opts: {
@@ -1209,6 +1244,8 @@ async function installPerTarget(opts: {
   consumerDir?: string;
   quiet?: boolean;
   hostOverrides?: HostOverrides;
+  systemctlRunner?: SystemctlRunner;
+  lingerChecker?: LingerChecker;
 }): Promise<MultiTargetInstallResult | { error: string }> {
   const ordered = orderTargetsForInstall(opts.targets);
   const merged: ArtifactSymlinkRecord = {
@@ -1216,11 +1253,15 @@ async function installPerTarget(opts: {
     shims: { dir: opts.arc.shimDir, names: [] },
   };
   const launchd: LaunchdInstallRecord[] = [];
+  const systemd: SystemdInstallRecord[] = [];
 
   const rollbackAll = async () => {
     await rollbackArtifactSymlinks(merged);
     for (const r of launchd) {
       await rollbackLaunchdArtifacts(r);
+    }
+    for (const r of systemd) {
+      await rollbackSystemdArtifacts(r, { systemctlRunner: opts.systemctlRunner });
     }
   };
 
@@ -1262,19 +1303,33 @@ async function installPerTarget(opts: {
     }
 
     if (targetId === "linux-systemd") {
-      // arc#140 P6: the adapter surface exists so `targets: [..., linux-systemd]`
-      // manifests parse cleanly, but rendering the systemd unit + binary
-      // install lands "once the first Linux host enters the deployment
-      // topology" per cortex `docs/design-arc-agent-bots.md` §3.2 / §11
-      // Phase C.3. Fail clearly so an operator on macOS doesn't see a
-      // silent half-install when a manifest happens to declare both
-      // darwin-launchd AND linux-systemd targets.
-      await rollbackAll();
-      return {
-        error:
-          `Target 'linux-systemd' is recognized but its install dispatch is not yet implemented (arc#140 Phase C). ` +
-          `Install on macOS, or wait for the linux-systemd install path to land.`,
-      };
+      // Sister to the darwin-launchd branch above (arc#311, L2): type guard
+      // replaces a blanket `as` cast so a future refactor that drops the
+      // unitDir extension surfaces here instead of at runtime.
+      if (!isLinuxSystemdHost(targetHost)) {
+        await rollbackAll();
+        return {
+          error:
+            `Internal error: 'linux-systemd' resolved to a host adapter without systemd paths`,
+        };
+      }
+      try {
+        const rec = await installSystemdArtifacts({
+          host: targetHost,
+          manifest: opts.manifest,
+          installDir: opts.installPath,
+          quiet: opts.quiet,
+          systemctlRunner: opts.systemctlRunner,
+          lingerChecker: opts.lingerChecker,
+        });
+        systemd.push(rec);
+      } catch (err) {
+        await rollbackAll();
+        return {
+          error: `linux-systemd install failed: ${errorMessage(err)}`,
+        };
+      }
+      continue;
     }
 
     // registry hosts (cortex, claude-code) take the existing symlink path.
@@ -1310,7 +1365,7 @@ async function installPerTarget(opts: {
     merged.shims.names.push(...r.record.shims.names);
   }
 
-  return { symlinks: merged, launchd };
+  return { symlinks: merged, launchd, systemd };
 }
 
 /**
