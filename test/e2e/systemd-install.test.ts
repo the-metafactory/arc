@@ -21,9 +21,17 @@
  * `~/.config/systemd/user` + shared bin dir, exactly as a genuine install
  * would on the ephemeral CI runner.
  *
- * Guarded by `RUN_E2E` so it never runs on macOS dev machines or in the
- * plain `Test` CI job (no systemd user session there) — mirrors the
- * `test.skipIf(!NSC_AVAILABLE)` idiom in test/commands/nats.test.ts.
+ * Guarded by `RUN_E2E` — an EXPLICIT opt-in (`SYSTEMD_E2E=1`, set only by
+ * the systemd-e2e job in ci.yml), AND'd with a bus/platform sanity check.
+ * The explicit opt-in is load-bearing, not decorative: a plain
+ * `ubuntu-latest` runner's default user session already has a working
+ * XDG_RUNTIME_DIR + bus by default, so the bus/platform check ALONE can't
+ * tell the systemd-e2e job apart from the ordinary `Test` job — this test
+ * would otherwise run (and fail, no `~/.config/systemd/user`) in the
+ * plain lane too. Mirrors cortex#2092's sibling job's same fix. Never runs
+ * on macOS dev machines either way (`process.platform !== "linux"` alone
+ * already excludes those). Mirrors the `test.skipIf(!NSC_AVAILABLE)` idiom
+ * in test/commands/nats.test.ts.
  */
 
 import { describe, test, expect } from "bun:test";
@@ -41,6 +49,9 @@ function systemctlUser(args: string[]) {
 }
 
 function canRunSystemdE2E(): boolean {
+  // Explicit opt-in FIRST — see the doc comment above for why this is the
+  // load-bearing check, not the bus/platform sanity checks that follow.
+  if (process.env.SYSTEMD_E2E !== "1") return false;
   if (process.platform !== "linux") return false;
   const runtimeDir = process.env.XDG_RUNTIME_DIR;
   if (!runtimeDir || !existsSync(join(runtimeDir, "bus"))) return false;
