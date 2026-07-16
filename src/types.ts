@@ -7,16 +7,24 @@ export type ArtifactType = "skill" | "agent" | "prompt" | "tool" | "component" |
 
 // ── Registry types ────────────────────────────────────────────
 
-/** Registry entry trust tier — controls trust level and install behavior. */
-export type RegistryEntryType = "builtin" | "community" | "system" | "custom";
+/**
+ * Registry entry SOURCE-TRUST level (arc#324). This is the trust axis — how much
+ * the registry vouches for the entry's origin — and is DISTINCT from the manifest
+ * `tier` (the package's own self-declared class). The field is named `trust:` in
+ * REGISTRY.yaml so the two vocabularies are not conflated in one word set. See
+ * docs/registry-schema.md.
+ */
+export type RegistryTrust = "builtin" | "community" | "system" | "custom";
 
-/** A single entry in REGISTRY.yaml. */
+/** A single entry in REGISTRY.yaml. See docs/registry-schema.md for the schema. */
 export interface RegistryEntry {
   name: string;
   description: string;
   source: string;
-  type: RegistryEntryType;
+  /** Source-trust level (NOT the manifest tier). Emitted as `trust:` (arc#324). */
+  trust: RegistryTrust;
   has_cli?: boolean;
+  /** Multi-artifact bundle repo (the single meaning of "bundle" — arc#63/#324). */
   bundle?: boolean;
   requires?: string[]; // typed refs: "skill:Thinking", "agent:Architect"
   author: string;

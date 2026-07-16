@@ -145,8 +145,8 @@ Each scaffold includes `arc-manifest.yaml`, `package.json`, `README.md`, `.gitig
 ### Bundle and Publish
 
 ```bash
-arc bundle [path]             # Create a .tar.gz from a package directory
-arc bundle --output out.tar.gz  # Custom output path
+arc pack [path]             # Create a .tar.gz from a package directory
+arc pack --output out.tar.gz  # Custom output path
 arc publish [path]            # Bundle, upload, and register on metafactory
 arc publish --dry-run         # Validate without uploading
 arc publish --tarball f.tar.gz  # Publish from existing tarball
@@ -536,7 +536,7 @@ bundle:
 
 #### `bundle.include` is not an allowlist
 
-`bundle.include` only **cancels** a matching default exclusion — an entry must appear verbatim in the default list above to have any effect. It does not filter the tarball down to a subset of files. Use `bundle.exclude` for that, or bundle a subdirectory directly (`arc bundle packages/my-pkg`). arc will warn when an `include` entry does not match any default.
+`bundle.include` only **cancels** a matching default exclusion — an entry must appear verbatim in the default list above to have any effect. It does not filter the tarball down to a subset of files. Use `bundle.exclude` for that, or bundle a subdirectory directly (`arc pack packages/my-pkg`). arc will warn when an `include` entry does not match any default.
 
 ### Bundling a Monorepo
 
@@ -544,10 +544,10 @@ If your repo is a monorepo with multiple publishable packages, there are two sup
 
 **1. Bundle one package at a time**
 
-Each package directory has its own `arc-manifest.yaml`. Run `arc bundle` against the subdirectory:
+Each package directory has its own `arc-manifest.yaml`. Run `arc pack` against the subdirectory:
 
 ```bash
-arc bundle packages/my-skill
+arc pack packages/my-skill
 arc publish packages/my-skill
 ```
 
@@ -567,7 +567,7 @@ artifacts:
     description: Tool B
 ```
 
-With the library pattern, `arc install` installs every artifact, and `arc bundle packages/skill-a` bundles only that subtree — ignoring the rest of the monorepo (including `node_modules`, build caches, sibling packages, etc.).
+With the library pattern, `arc install` installs every artifact, and `arc pack packages/skill-a` bundles only that subtree — ignoring the rest of the monorepo (including `node_modules`, build caches, sibling packages, etc.).
 
 ### Dry Run
 
@@ -585,7 +585,7 @@ arc publish --dry-run
 Skip the bundle step and publish an existing tarball:
 
 ```bash
-arc bundle --output my-skill-1.0.0.tar.gz
+arc pack --output my-skill-1.0.0.tar.gz
 # ... inspect tarball contents ...
 arc publish --tarball my-skill-1.0.0.tar.gz
 ```

@@ -2,7 +2,7 @@
  * REGISTRY.yaml generator (skill-estate migration WS6, arc#322).
  *
  * Manifests are the source of truth for the *derivable* fields (name,
- * description, version, source, tier, has_cli, bundle). But the hand-maintained
+ * description, version, source, trust, has_cli, bundle). But the hand-maintained
  * REGISTRY.yaml also carries curated metadata that no arc-manifest contains —
  * agent capability schemas (cortex Q2: category, risk_level, substrate, mode,
  * capabilities[]), `contributors`, `core`, `reviewed_by`, and the curated
@@ -24,7 +24,7 @@
  */
 
 import YAML from "yaml";
-import type { ArcManifest, RegistryConfig, RegistryEntry } from "../types.js";
+import type { ArcManifest, RegistryConfig, RegistryEntry, RegistryTrust } from "../types.js";
 
 /** A repo discovered by the scan, paired with its parsed manifest. */
 export interface ScannedRepo {
@@ -75,19 +75,17 @@ export function sectionForType(type: string | undefined): RegistrySection {
   }
 }
 
-/** Registry `type` (trust word) enum in the existing file. */
-export type RegistryTier = "builtin" | "community" | "system" | "custom";
-
 /**
- * Map a manifest `tier` to the registry `type` (trust) word. The two vocabularies
- * differ (manifest: official|community|custom|core; registry: builtin|community|
- * system|custom) — reconciling them is deliberately OUT of scope (a separate
- * trust-vocabulary issue). Here we collapse to the registry's established
- * convention: `community` stays `community`; everything org-internal
- * (custom/official/core) is `custom`. External repos are forced `community` by
- * the caller before this runs.
+ * Map a manifest `tier` (the package's self-declared class) to the registry
+ * `trust:` word (the registry's source-trust axis, arc#324). The two vocabularies
+ * are deliberately kept on SEPARATE fields now — `trust:` in REGISTRY.yaml, `tier`
+ * in the manifest — so one word set no longer means two things. The value mapping
+ * collapses to the registry's established trust words: `community` stays
+ * `community`; everything org-internal (custom/official/core) is `custom`.
+ * External repos are forced `community` by the caller before this runs.
+ * See docs/registry-schema.md.
  */
-export function tierToRegistryType(tier: string | undefined): RegistryTier {
+export function tierToTrust(tier: string | undefined): RegistryTrust {
   return tier === "community" ? "community" : "custom";
 }
 
@@ -106,7 +104,7 @@ const BUNDLE_TYPE_NAMES: ReadonlySet<string> = new Set(["bundle"]);
 /** The manifest-authoritative slice — the fields the generator OWNS. */
 export type DerivedFields = Pick<
   RegistryEntry,
-  "name" | "description" | "author" | "version" | "source" | "type"
+  "name" | "description" | "author" | "version" | "source" | "trust"
 > & { has_cli?: boolean; bundle?: boolean };
 
 export function manifestDerivedFields(scanned: ScannedRepo): DerivedFields {
@@ -117,7 +115,7 @@ export function manifestDerivedFields(scanned: ScannedRepo): DerivedFields {
     author: m.author?.github ?? "the-metafactory",
     version: m.version,
     source: scanned.source,
-    type: scanned.external ? "community" : tierToRegistryType(m.tier),
+    trust: scanned.external ? "community" : tierToTrust(m.tier),
   };
   if (m.provides?.cli && m.provides.cli.length > 0) fields.has_cli = true;
   if (BUNDLE_TYPE_NAMES.has(m.type)) fields.bundle = true;
@@ -237,9 +235,23 @@ export function generateRegistry(
     }
   }
 
-  for (const section of REGISTRY_SECTIONS) out[section].sort(byName);
+  // arc#324 one-time migration: the trust axis moved from the legacy `type:`
+  // field to `trust:`. Preserved entries still carry `type`; merged entries carry
+  // both (old `type` + new `trust`). Fold `type` into `trust` (when `trust` is
+  // absent) and drop the legacy key from every entry so the output has one field.
+  for (const section of REGISTRY_SECTIONS) {
+    for (const e of out[section]) migrateLegacyTrust(e);
+    out[section].sort(byName);
+  }
 
   return { config: { registry: out }, added, updated, preserved };
+}
+
+/** Fold a legacy `type:` trust value into `trust:` and drop the legacy key. */
+function migrateLegacyTrust(entry: RegistryEntry): void {
+  const r = entry as unknown as Record<string, unknown>;
+  if (r.trust === undefined && typeof r.type === "string") r.trust = r.type;
+  delete r.type;
 }
 
 function shallowEqual(a: Record<string, unknown>, b: Record<string, unknown>): boolean {
@@ -255,7 +267,7 @@ export const GENERATED_HEADER =
   "#\n" +
   "# GENERATED from org scan + arc-manifest.yaml files by arc's registry generator\n" +
   "# (arc#322, `bun run registry:generate`). Do NOT hand-edit the manifest-derived\n" +
-  "# fields (name, description, version, source, type, has_cli, bundle) — they are\n" +
+  "# fields (name, description, version, source, trust, has_cli, bundle) — they are\n" +
   "# overwritten on regeneration. Curated fields (contributors, core, reviewed_by,\n" +
   "# status, and the agents' cortex-Q2 capability schema) are preserved across runs.\n" +
   "# Regenerate + check: `bun run registry:generate --check`.\n";
@@ -285,7 +297,7 @@ const KEY_ORDER = [
   "contributors",
   "version",
   "source",
-  "type",
+  "trust",
   "status",
   "core",
   "has_cli",

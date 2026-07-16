@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.42.0 — 2026-07-17
+
+### Changed
+
+- **Registry vocabulary de-conflated + `arc bundle` → `arc pack`** ([#324](https://github.com/the-metafactory/arc/issues/324), [#63](https://github.com/the-metafactory/arc/issues/63); skill-estate migration epic [#315](https://github.com/the-metafactory/arc/issues/315)). REGISTRY.yaml entries stored the registry's **source-trust** in a field named `type:` that reused the manifest **`tier`** words — one word set meaning two things. The field is now **`trust:`** (`RegistryEntry.trust`, type `RegistryTrust`); the generator emits it, `metafactory-api` produces it, and a one-time migration folds any legacy `type:` into `trust:` on regeneration. Documented in the new [`docs/registry-schema.md`](docs/registry-schema.md), which fixes the two-axis model: **artifact class** = the entry's section (mirrors manifest `type`), **source trust** = `trust:`, and **`bundle`** now means exactly one thing — a multi-artifact repo (the `bundle: true` flag), never a packaging verb.
+- To keep `bundle` on that single meaning, the packaging command **`arc bundle` is renamed to `arc pack`** (npm-familiar). `arc bundle` remains as a hidden, deprecated alias for one release — it warns and delegates to `arc pack`. Internal function/file names (`bundle()`, `createBundle`, `lib/bundle.ts`) are unchanged as an implementation detail; the manifest `bundle.exclude`/`bundle.include` fields are unchanged. Decision recorded on #63.
+
 ## 0.41.0 — 2026-07-17
 
 ### Removed

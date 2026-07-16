@@ -98,7 +98,7 @@ describe("arc bundle command", () => {
     };
 
     const output = formatBundle(result);
-    expect(output).toContain("Bundled my-skill v1.0.0");
+    expect(output).toContain("Packed my-skill v1.0.0");
     expect(output).toContain("Type:     skill");
     expect(output).toContain("Files:    12");
     expect(output).toContain("SHA-256:  abc123def456");

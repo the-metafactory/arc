@@ -30,7 +30,7 @@ export function mapApiPackageToRegistryEntry(pkg: MetafactoryPackageListItem): {
     author: pkg.publisher.display_name ?? "unknown",
     version: pkg.latest_version ?? "0.0.0",
     source: "", // Not available from list endpoint; resolved in detail fetch
-    type: "community",
+    trust: "community",
     status: "shipped",
   };
 
