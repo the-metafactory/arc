@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.40.3 — 2026-07-17
+
+### Changed
+
+- **PackageBuilder now ships via a dependency edge, not in-tree** ([#319](https://github.com/the-metafactory/arc/issues/319), WS3 of the skill-estate migration epic [#315](https://github.com/the-metafactory/arc/issues/315); ADR-0024 D2). The canonical PackageBuilder skill (the 985-line `SKILL.md` + four workflows) moved to its own repo, `the-metafactory/metafactory-skill-package-builder`, and arc consumes it as a dependency — the same auto-install pattern cortex uses for its surface-plugin bundles ([cortex#2028](https://github.com/the-metafactory/cortex/issues/2028)). arc's `arc-manifest.yaml` now declares it under `depends_on.packages` (`{name, repo}`), which arc's installer clones + installs on `arc install arc` / `arc upgrade arc`; the `provides.skill` PackageBuilder entries and the in-tree `skill/` directory are removed in this same release, with no fallback copy (no component keeps two sources of truth). No user-facing capability change — PackageBuilder is still installed after an upgrade, now from its own repo.
+
 ## 0.40.0 — 2026-07-14
 
 ### Added
