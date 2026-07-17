@@ -143,6 +143,13 @@ export async function createMockSkillRepo(
      * always renders.
      */
     dependsOnSkills?: { name: string; version?: string; reason?: string }[];
+    /**
+     * depends_on.packages entries (arc#346 upgrade cascade / arc#306 install).
+     * Each `{ name, repo }` names a first-party arc package this one pulls in —
+     * e.g. cortex declaring its surface-adapter bundles. Rendered additively to
+     * the fixed `depends_on.tools`.
+     */
+    dependsOnPackages?: { name: string; repo: string }[];
   }
 ): Promise<MockSkillRepo> {
   const repoDir = join(root, `mock-${opts.name}`);
@@ -253,6 +260,7 @@ export async function createMockSkillRepo(
       depends_on: {
         tools: [{ name: "bun", version: ">=1.0.0" }],
         ...(opts.dependsOnSkills?.length ? { skills: opts.dependsOnSkills } : {}),
+        ...(opts.dependsOnPackages?.length ? { packages: opts.dependsOnPackages } : {}),
       },
       capabilities: {
         filesystem: caps.filesystem ?? { read: [], write: [] },

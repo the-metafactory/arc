@@ -783,6 +783,11 @@ program
           } else {
             console.log(`${result.name}: ${result.oldVersion} → ${result.newVersion}`);
           }
+          // Show any cascaded surface-adapter / dependency upgrades (arc#346).
+          if (result.cascaded?.length) {
+            console.log("Cascaded dependency upgrades:");
+            console.log(formatUpgradeResults(result.cascaded, { force: opts.force }));
+          }
         } else {
           console.error(`${result.error}`);
           process.exit(1);

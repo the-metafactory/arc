@@ -40,6 +40,16 @@ export interface UpgradeResult {
   oldVersion: string;
   newVersion?: string;
   error?: string;
+  /**
+   * Results of cascading the upgrade to this package's already-installed
+   * `depends_on.packages` (arc#346). Populated only for a package that both
+   * declares package dependencies AND has them installed — e.g. `arc upgrade
+   * cortex` cascades to its surface-adapter bundles so the whole stack advances
+   * together. A dependency that fails to upgrade lands here with success:false
+   * but does NOT fail the parent (adapters are independent packages with their
+   * own rollback; a stale-but-working adapter is not a broken parent).
+   */
+  cascaded?: UpgradeResult[];
 }
 
 /**
@@ -247,15 +257,62 @@ async function copyKnownOverlayEntries(srcDir: string, destDir: string): Promise
 }
 
 /**
+ * Cascade an upgrade to a package's already-installed `depends_on.packages`
+ * (arc#346). Complements `installPackageDependencies` (install.ts), which only
+ * INSTALLS missing declared deps on upgrade — it deliberately skips deps already
+ * present, so an `arc upgrade cortex` advanced cortex but left its surface-adapter
+ * bundles pinned at their old versions. This upgrades the present ones so the
+ * whole stack moves together.
+ *
+ * Semantics:
+ *  - Only deps that are installed + active + on-disk are cascaded (a MISSING dep
+ *    is `installPackageDependencies`' job, not this one).
+ *  - `seen` guards against re-upgrading a package already handled this command
+ *    (shared deps, and dependency cycles): a dep in `seen` is skipped.
+ *  - Best-effort: a failed dep upgrade is RETURNED (success:false) but never
+ *    thrown — the caller records it under `cascaded` without failing the parent.
+ */
+async function cascadeDependencyUpgrades(
+  db: Database,
+  arc: ArcPaths,
+  host: HostAdapter,
+  manifest: { depends_on?: { packages?: { name: string }[] } },
+  seen: Set<string>,
+  opts?: { force?: boolean },
+): Promise<UpgradeResult[]> {
+  const cascaded: UpgradeResult[] = [];
+  for (const dep of manifest.depends_on?.packages ?? []) {
+    if (seen.has(dep.name)) continue;
+    const existing = getSkill(db, dep.name);
+    // Only cascade to deps that are actually installed + active + on-disk.
+    // A missing/disabled dep is not this function's concern (install path).
+    if (existing?.status !== "active" || !existsSync(existing.install_path)) continue;
+    cascaded.push(
+      await upgradePackage(db, arc, host, dep.name, { force: opts?.force, _seen: seen }),
+    );
+  }
+  return cascaded;
+}
+
+/**
  * Upgrade a single installed package.
  * Pulls latest from git, re-reads manifest, updates DB version.
+ *
+ * After the package itself commits, cascades the upgrade to its already-installed
+ * `depends_on.packages` (arc#346) so a component and its bundles (e.g. cortex +
+ * its surface adapters) advance together. `_seen` threads the set of packages
+ * already upgraded this command so a shared dep / cycle is upgraded at most once.
  */
 export async function upgradePackage(
   db: Database,
   arc: ArcPaths, host: HostAdapter,
   name: string,
-  opts?: { force?: boolean }
+  opts?: { force?: boolean; _seen?: Set<string> }
 ): Promise<UpgradeResult> {
+  const seen = opts?._seen ?? new Set<string>();
+  // Mark self BEFORE the cascade so a dependency that (transitively) depends
+  // back on this package can't re-enter and loop.
+  seen.add(name);
   const skill = getSkill(db, name);
   if (!skill) {
     return { success: false, name, oldVersion: "?", error: `"${name}" is not installed` };
@@ -410,7 +467,17 @@ export async function upgradePackage(
       }
     }
     commitSwap();
-    return { success: true, name, oldVersion, newVersion: oldVersion };
+    // Cascade even when this package is already current: a dependency (e.g. a
+    // surface adapter) may still have a newer version, and `arc upgrade cortex`
+    // should advance the whole stack (arc#346).
+    const cascaded = await cascadeDependencyUpgrades(db, arc, host, manifest, seen, opts);
+    return {
+      success: true,
+      name,
+      oldVersion,
+      newVersion: oldVersion,
+      ...(cascaded.length ? { cascaded } : {}),
+    };
   }
 
   // Run preupgrade script if declared
@@ -579,7 +646,18 @@ export async function upgradePackage(
     );
   }
 
-  return { success: true, name, oldVersion, newVersion };
+  // Cascade the upgrade to this package's already-installed depends_on.packages
+  // (arc#346) — AFTER commitSwap()/DB bump so the parent is fully committed
+  // before any dependency moves, and best-effort so a dependency failure is
+  // reported (under cascaded) without undoing the parent's successful upgrade.
+  const cascaded = await cascadeDependencyUpgrades(db, arc, host, manifest, seen, opts);
+  return {
+    success: true,
+    name,
+    oldVersion,
+    newVersion,
+    ...(cascaded.length ? { cascaded } : {}),
+  };
 }
 
 /**
@@ -593,19 +671,26 @@ export async function upgradeAll(
   opts?: { force?: boolean }
 ): Promise<UpgradeResult[]> {
   const results: UpgradeResult[] = [];
+  // One shared set across the whole run: when a package cascades an upgrade to
+  // a dependency (arc#346), that dependency is marked seen, so the top-level
+  // loop below skips it rather than upgrading it a second time. It still appears
+  // in the output nested under its parent's `cascaded`.
+  const seen = new Set<string>();
 
   if (opts?.force) {
     // Skip checkUpgrades entirely — just get all active packages from DB
     const active = listSkills(db).filter((s) => s.status === "active");
     for (const pkg of active) {
-      const result = await upgradePackage(db, arc, host, pkg.name, opts);
+      if (seen.has(pkg.name)) continue;
+      const result = await upgradePackage(db, arc, host, pkg.name, { ...opts, _seen: seen });
       results.push(result);
     }
   } else {
     const checks = await checkUpgrades(db, arc, host);
     const upgradable = checks.filter((c) => c.upgradable);
     for (const check of upgradable) {
-      const result = await upgradePackage(db, arc, host, check.name);
+      if (seen.has(check.name)) continue;
+      const result = await upgradePackage(db, arc, host, check.name, { _seen: seen });
       results.push(result);
     }
   }
@@ -643,21 +728,30 @@ export function formatUpgradeResults(results: UpgradeResult[], opts?: { force?: 
 
   const lines: string[] = [];
 
-  for (const r of results) {
+  // Format one result at a given indent, then recurse into its cascaded
+  // dependency upgrades (arc#346) one level deeper so the stack reads as a tree:
+  //   cortex: 6.10.0 → 6.11.0
+  //     ↳ metafactory-cortex-adapter-web: 1.2.0 → 1.3.0
+  const emit = (r: UpgradeResult, indent: string): void => {
     if (r.success) {
       if (r.oldVersion === r.newVersion) {
-        if (opts?.force) {
-          lines.push(`  ${r.name}: force-upgraded at ${r.oldVersion}`);
-        } else {
-          lines.push(`  ${r.name}: already at ${r.oldVersion}`);
-        }
+        lines.push(
+          opts?.force
+            ? `${indent}${r.name}: force-upgraded at ${r.oldVersion}`
+            : `${indent}${r.name}: already at ${r.oldVersion}`,
+        );
       } else {
-        lines.push(`  ${r.name}: ${r.oldVersion} → ${r.newVersion}`);
+        lines.push(`${indent}${r.name}: ${r.oldVersion} → ${r.newVersion}`);
       }
     } else {
-      lines.push(`  ${r.name}: failed — ${r.error}`);
+      lines.push(`${indent}${r.name}: failed — ${r.error}`);
     }
-  }
+    for (const c of r.cascaded ?? []) {
+      emit(c, `${indent}  ↳ `);
+    }
+  };
+
+  for (const r of results) emit(r, "  ");
 
   return lines.join("\n");
 }
