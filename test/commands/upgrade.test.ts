@@ -8,6 +8,7 @@ import {
   upgradeLibrary,
   formatCheckResults,
   formatUpgradeResults,
+  type UpgradeResult,
 } from "../../src/commands/upgrade.js";
 import { saveSources } from "../../src/lib/sources.js";
 import { getSkill } from "../../src/lib/db.js";
@@ -975,5 +976,141 @@ describe("upgradePackage — installs depends_on.packages (arc#306)", () => {
 
     // The bogus dependency was never recorded.
     expect(getSkill(env.db, "MissingDep")).toBeNull();
+  });
+});
+
+describe("upgradePackage — dependency upgrade cascade (arc#346)", () => {
+  // Bump a mock repo's version in its SOURCE repo + commit, so the installed
+  // clone's `git pull --ff-only` advances it (mirrors the existing upgrade tests).
+  async function bumpRepo(repoPath: string, from: string, to: string): Promise<void> {
+    const manifestPath = join(repoPath, "arc-manifest.yaml");
+    const content = await Bun.file(manifestPath).text();
+    await writeFile(manifestPath, content.replace(`version: ${from}`, `version: ${to}`));
+    Bun.spawnSync(["git", "add", "."], { cwd: repoPath, stdout: "pipe", stderr: "pipe" });
+    Bun.spawnSync(
+      ["git", "-c", "user.name=Test", "-c", "user.email=test@test.com", "commit", "-m", `bump ${to}`],
+      { cwd: repoPath, stdout: "pipe", stderr: "pipe" },
+    );
+  }
+
+  // Count every occurrence of a package name across the result tree (top-level
+  // + nested cascaded), so "upgraded at most once" is order-independent.
+  function countOccurrences(rs: UpgradeResult[], name: string): number {
+    return rs.reduce(
+      (n, r) => n + (r.name === name ? 1 : 0) + countOccurrences(r.cascaded ?? [], name),
+      0,
+    );
+  }
+
+  test("upgrading a component cascades to its already-installed depends_on.packages", async () => {
+    const child = await createMockSkillRepo(env.root, { name: "adapter-child", version: "1.0.0" });
+    const parent = await createMockSkillRepo(env.root, {
+      name: "parent-comp",
+      version: "1.0.0",
+      dependsOnPackages: [{ name: "adapter-child", repo: child.url }],
+    });
+    // Installing the parent installs the declared dependency too (arc#306).
+    await install({ arc: env.arc, host: env.host, db: env.db, repoUrl: parent.url, yes: true });
+    expect(getSkill(env.db, "adapter-child")?.status).toBe("active");
+
+    // Bump BOTH upstreams.
+    await bumpRepo(parent.path, "1.0.0", "1.1.0");
+    await bumpRepo(child.path, "1.0.0", "1.1.0");
+
+    const result = await upgradePackage(env.db, env.arc, env.host, "parent-comp");
+    expect(result.success).toBe(true);
+    expect(result.newVersion).toBe("1.1.0");
+    // The adapter cascaded up with it.
+    expect(result.cascaded?.length).toBe(1);
+    expect(result.cascaded?.[0]).toMatchObject({
+      name: "adapter-child",
+      oldVersion: "1.0.0",
+      newVersion: "1.1.0",
+      success: true,
+    });
+    expect(getSkill(env.db, "adapter-child")?.version).toBe("1.1.0");
+  });
+
+  test("cascade runs even when the parent is already current", async () => {
+    const child = await createMockSkillRepo(env.root, { name: "adapter-only", version: "1.0.0" });
+    const parent = await createMockSkillRepo(env.root, {
+      name: "parent-current",
+      version: "1.0.0",
+      dependsOnPackages: [{ name: "adapter-only", repo: child.url }],
+    });
+    await install({ arc: env.arc, host: env.host, db: env.db, repoUrl: parent.url, yes: true });
+
+    // Only the CHILD has a new version; the parent stays at 1.0.0.
+    await bumpRepo(child.path, "1.0.0", "1.2.0");
+
+    const result = await upgradePackage(env.db, env.arc, env.host, "parent-current");
+    expect(result.success).toBe(true);
+    expect(result.newVersion).toBe(result.oldVersion); // parent unchanged
+    expect(result.cascaded?.[0]).toMatchObject({ name: "adapter-only", newVersion: "1.2.0" });
+    expect(getSkill(env.db, "adapter-only")?.version).toBe("1.2.0");
+  });
+
+  test("a failed dependency upgrade is reported but does NOT fail the parent", async () => {
+    const child = await createMockSkillRepo(env.root, { name: "adapter-brk", version: "1.0.0" });
+    const parent = await createMockSkillRepo(env.root, {
+      name: "parent-brk",
+      version: "1.0.0",
+      dependsOnPackages: [{ name: "adapter-brk", repo: child.url }],
+    });
+    await install({ arc: env.arc, host: env.host, db: env.db, repoUrl: parent.url, yes: true });
+
+    await bumpRepo(parent.path, "1.0.0", "1.1.0");
+    // Rewrite the child's upstream history so the installed clone can't
+    // fast-forward → its upgrade's `git pull --ff-only` fails.
+    Bun.spawnSync(
+      ["git", "-c", "user.name=Test", "-c", "user.email=test@test.com", "commit", "--amend", "-m", "diverge"],
+      { cwd: child.path, stdout: "pipe", stderr: "pipe" },
+    );
+
+    const result = await upgradePackage(env.db, env.arc, env.host, "parent-brk");
+    expect(result.success).toBe(true); // parent still succeeds
+    expect(result.newVersion).toBe("1.1.0");
+    expect(result.cascaded?.length).toBe(1);
+    expect(result.cascaded?.[0].success).toBe(false); // dep failure surfaced, not swallowed
+    expect(result.cascaded?.[0].name).toBe("adapter-brk");
+  });
+
+  test("upgradeAll upgrades a shared dependency at most once (no double-upgrade)", async () => {
+    const child = await createMockSkillRepo(env.root, { name: "adapter-shared", version: "1.0.0" });
+    const parent = await createMockSkillRepo(env.root, {
+      name: "parent-all",
+      version: "1.0.0",
+      dependsOnPackages: [{ name: "adapter-shared", repo: child.url }],
+    });
+    await install({ arc: env.arc, host: env.host, db: env.db, repoUrl: parent.url, yes: true });
+    await bumpRepo(parent.path, "1.0.0", "1.1.0");
+    await bumpRepo(child.path, "1.0.0", "1.1.0");
+
+    const results = await upgradeAll(env.db, env.arc, env.host, { force: true });
+    // Upgraded exactly once across the whole tree (top-level OR nested, never both).
+    expect(countOccurrences(results, "adapter-shared")).toBe(1);
+    expect(countOccurrences(results, "parent-all")).toBe(1);
+    expect(getSkill(env.db, "adapter-shared")?.version).toBe("1.1.0");
+  });
+
+  test("formatUpgradeResults renders cascaded upgrades as an indented tree", () => {
+    const out = formatUpgradeResults([
+      {
+        success: true,
+        name: "cortex",
+        oldVersion: "6.10.0",
+        newVersion: "6.11.0",
+        cascaded: [
+          {
+            success: true,
+            name: "metafactory-cortex-adapter-web",
+            oldVersion: "1.2.0",
+            newVersion: "1.3.0",
+          },
+        ],
+      },
+    ]);
+    expect(out).toContain("cortex: 6.10.0 → 6.11.0");
+    expect(out).toContain("↳ metafactory-cortex-adapter-web: 1.2.0 → 1.3.0");
   });
 });
