@@ -18,7 +18,7 @@
 | `remove.ts` | `arc remove` | Completely uninstall a package |
 | `upgrade.ts` | `arc upgrade` | Upgrade packages (supports `--check`) |
 | `upgrade-core.ts` | `arc upgrade-core` | Upgrade PAI core version (symlink management) |
-| `self-update.ts` | `arc self-update` | Update arc itself (git pull + bun install) |
+| `self-update.ts` | `arc self-upgrade` (alias: `arc self-update`) | Update arc itself (git pull + bun install) |
 | `init.ts` | `arc init` | Scaffold new package repo |
 
 ### Libraries (`src/lib/`)

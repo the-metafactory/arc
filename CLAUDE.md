@@ -24,7 +24,7 @@ Agentic Component Package Manager — CLI package manager for agentic skills, to
 | `remove.ts` | `arc remove` | Completely uninstall a package |
 | `upgrade.ts` | `arc upgrade` | Upgrade packages (supports `--check`) |
 | `upgrade-core.ts` | `arc upgrade-core` | Upgrade PAI core version (symlink management) |
-| `self-update.ts` | `arc self-update` | Update arc itself (git pull + bun install) |
+| `self-update.ts` | `arc self-upgrade` (alias: `arc self-update`) | Update arc itself (git pull + bun install) |
 | `init.ts` | `arc init` | Scaffold new package repo |
 | `catalog.ts` | `arc catalog *` | Catalog management (list, search, add, remove, use, sync, push) |
 
@@ -352,7 +352,7 @@ arc remove <name>             # Completely uninstall
 arc upgrade --check           # Check for available upgrades
 arc upgrade                   # Upgrade all packages
 arc upgrade <name>            # Upgrade a specific package
-arc self-update               # Update arc itself (git pull + bun install)
+arc self-upgrade              # Update arc itself (git pull + bun install)
 arc upgrade-core <version>    # Upgrade PAI core version (symlink management)
 ```
 

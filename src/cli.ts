@@ -903,7 +903,8 @@ program
   );
 
 program
-  .command("self-update")
+  .command("self-upgrade")
+  .alias("self-update")
   .description("Update arc itself (git pull + bun install)")
   .action(async () => {
     const result = await selfUpdate();

@@ -31,7 +31,8 @@ arc remove <name>             # Completely uninstall
 arc upgrade --check           # Check for available upgrades
 arc upgrade                   # Upgrade all packages
 arc upgrade <name>            # Upgrade a specific package
-arc self-update               # Update arc itself (git pull + bun install)
+arc self-upgrade              # Update arc itself (git pull + bun install)
+arc self-update               # Alias for self-upgrade
 arc upgrade-core <version>    # Upgrade PAI core version (symlink management)
 ```
 
