@@ -89,8 +89,8 @@ arc verify <name>             # Verify manifest integrity
 arc upgrade --check           # Check for available upgrades (compares against registry)
 arc upgrade                   # Upgrade all packages
 arc upgrade <name>            # Upgrade a specific package
-arc self-upgrade               # Update arc itself (git pull + bun install)
-arc self-update                # Alias for self-upgrade
+arc self-upgrade              # Update arc itself (git pull + bun install)
+arc self-update               # Alias for self-upgrade
 arc upgrade-core <version>    # Upgrade core (symlink management)
 ```
 
