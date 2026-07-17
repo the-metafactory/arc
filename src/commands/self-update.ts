@@ -178,9 +178,9 @@ export function checkSelfUpdate(): SelfUpdateCheck {
 export function formatSelfUpdateCheck(check: SelfUpdateCheck): string {
   if (!check.updateAvailable) return "";
   if (check.latestVersion) {
-    return `arc update available: v${check.currentVersion} → v${check.latestVersion} (run \`arc self-update\`)`;
+    return `arc update available: v${check.currentVersion} → v${check.latestVersion} (run \`arc self-upgrade\`)`;
   }
-  return `arc update available (run \`arc self-update\`)`;
+  return `arc update available (run \`arc self-upgrade\`)`;
 }
 
 export function formatSelfUpdate(result: SelfUpdateResult): string {
