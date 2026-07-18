@@ -326,3 +326,144 @@ describe("remove parity with install (arc#138)", () => {
     expect(getSkill(env.db, "NoPreRemove")).toBeNull();
   });
 });
+
+describe("remove — dependency removal cascade (arc#348)", () => {
+  // Assert NO symlink ENTRY (dangling or otherwise) remains at `path`. lstat
+  // succeeds on a dangling symlink, so a plain existsSync (which follows the
+  // link) would pass even when an orphaned symlink is left behind — this checks
+  // the directory entry itself is gone.
+  async function expectNoSymlinkEntry(path: string): Promise<void> {
+    let threw = false;
+    try {
+      await lstat(path);
+    } catch (err) {
+      threw = true;
+      expect((err as NodeJS.ErrnoException).code).toBe("ENOENT");
+    }
+    expect(threw).toBe(true);
+  }
+
+  test("removing a component removes its exclusively-owned depends_on.packages", async () => {
+    const dep = await createMockSkillRepo(env.root, { name: "adapter-excl", version: "1.0.0" });
+    const parent = await createMockSkillRepo(env.root, {
+      name: "comp-excl",
+      version: "1.0.0",
+      dependsOnPackages: [{ name: "adapter-excl", repo: dep.url }],
+    });
+    // Installing the parent installs the declared dependency too (arc#306).
+    await install({ arc: env.arc, host: env.host, db: env.db, repoUrl: parent.url, yes: true });
+    expect(getSkill(env.db, "adapter-excl")?.status).toBe("active");
+
+    const result = await remove(env.db, env.arc, env.host, "comp-excl", { yes: true });
+
+    expect(result.success).toBe(true);
+    // The exclusively-owned adapter cascaded out with the parent.
+    expect(result.cascaded?.length).toBe(1);
+    expect(result.cascaded?.[0]).toMatchObject({ name: "adapter-excl", success: true });
+    expect(getSkill(env.db, "comp-excl")).toBeNull();
+    expect(getSkill(env.db, "adapter-excl")).toBeNull();
+    // Repo clone for the dep is gone too.
+    expect(existsSync(join(env.arc.reposDir, "mock-adapter-excl"))).toBe(false);
+  });
+
+  test("a dependency still required by another installed package is RETAINED (refcount)", async () => {
+    const dep = await createMockSkillRepo(env.root, { name: "adapter-shared", version: "1.0.0" });
+    const parentA = await createMockSkillRepo(env.root, {
+      name: "comp-a",
+      version: "1.0.0",
+      dependsOnPackages: [{ name: "adapter-shared", repo: dep.url }],
+    });
+    const parentB = await createMockSkillRepo(env.root, {
+      name: "comp-b",
+      version: "1.0.0",
+      dependsOnPackages: [{ name: "adapter-shared", repo: dep.url }],
+    });
+    await install({ arc: env.arc, host: env.host, db: env.db, repoUrl: parentA.url, yes: true });
+    // Installing B reuses the already-installed shared adapter (arc#306 skip).
+    await install({ arc: env.arc, host: env.host, db: env.db, repoUrl: parentB.url, yes: true });
+    expect(getSkill(env.db, "adapter-shared")?.status).toBe("active");
+
+    const result = await remove(env.db, env.arc, env.host, "comp-a", { yes: true });
+
+    expect(result.success).toBe(true);
+    // The shared adapter was NOT removed — comp-b still requires it.
+    expect(result.cascaded).toBeUndefined();
+    expect(result.retained?.length).toBe(1);
+    expect(result.retained?.[0]).toEqual({ name: "adapter-shared", requiredBy: ["comp-b"] });
+    // Still installed + active + on disk.
+    expect(getSkill(env.db, "adapter-shared")?.status).toBe("active");
+    expect(existsSync(join(env.host.paths.skillsDir, "adapter-shared"))).toBe(true);
+    expect(existsSync(join(env.arc.reposDir, "mock-adapter-shared"))).toBe(true);
+  });
+
+  test("a failed dependency removal is reported but does NOT abort the parent", async () => {
+    // The dep declares a preuninstall lifecycle script that exits non-zero →
+    // its own remove() ABORTS (D7), surfacing success:false under `cascaded`
+    // without undoing the already-committed parent removal.
+    const dep = await createMockSkillRepo(env.root, {
+      name: "adapter-brk",
+      version: "1.0.0",
+      lifecycle: {
+        preuninstall: [{ path: "scripts/fail.sh", content: "#!/bin/sh\nexit 1\n" }],
+      },
+    });
+    const parent = await createMockSkillRepo(env.root, {
+      name: "comp-brk",
+      version: "1.0.0",
+      dependsOnPackages: [{ name: "adapter-brk", repo: dep.url }],
+    });
+    await install({ arc: env.arc, host: env.host, db: env.db, repoUrl: parent.url, yes: true });
+    expect(getSkill(env.db, "adapter-brk")?.status).toBe("active");
+
+    const result = await remove(env.db, env.arc, env.host, "comp-brk", { yes: true });
+
+    expect(result.success).toBe(true); // parent still succeeds
+    expect(getSkill(env.db, "comp-brk")).toBeNull();
+    expect(result.cascaded?.length).toBe(1);
+    expect(result.cascaded?.[0].success).toBe(false); // dep failure surfaced, not swallowed
+    expect(result.cascaded?.[0].name).toBe("adapter-brk");
+    // The dep's preuninstall aborted its teardown → it is still installed.
+    expect(getSkill(env.db, "adapter-brk")?.status).toBe("active");
+  });
+
+  test("no orphaned symlinks remain after a cascade removal", async () => {
+    const dep = await createMockSkillRepo(env.root, { name: "adapter-orph", version: "1.0.0" });
+    const parent = await createMockSkillRepo(env.root, {
+      name: "comp-orph",
+      version: "1.0.0",
+      dependsOnPackages: [{ name: "adapter-orph", repo: dep.url }],
+    });
+    await install({ arc: env.arc, host: env.host, db: env.db, repoUrl: parent.url, yes: true });
+
+    // Both symlinks exist before removal.
+    const parentLink = join(env.host.paths.skillsDir, "comp-orph");
+    const depLink = join(env.host.paths.skillsDir, "adapter-orph");
+    expect(existsSync(parentLink)).toBe(true);
+    expect(existsSync(depLink)).toBe(true);
+
+    await remove(env.db, env.arc, env.host, "comp-orph", { yes: true });
+
+    // Neither the parent nor the cascaded dep leaves a symlink entry behind.
+    await expectNoSymlinkEntry(parentLink);
+    await expectNoSymlinkEntry(depLink);
+  });
+
+  test("--keep-deps (keepDeps) leaves depends_on.packages installed", async () => {
+    const dep = await createMockSkillRepo(env.root, { name: "adapter-keep", version: "1.0.0" });
+    const parent = await createMockSkillRepo(env.root, {
+      name: "comp-keep",
+      version: "1.0.0",
+      dependsOnPackages: [{ name: "adapter-keep", repo: dep.url }],
+    });
+    await install({ arc: env.arc, host: env.host, db: env.db, repoUrl: parent.url, yes: true });
+
+    const result = await remove(env.db, env.arc, env.host, "comp-keep", { yes: true, keepDeps: true });
+
+    expect(result.success).toBe(true);
+    expect(result.cascaded).toBeUndefined();
+    expect(result.retained).toBeUndefined();
+    // Dep left in place.
+    expect(getSkill(env.db, "adapter-keep")?.status).toBe("active");
+    expect(existsSync(join(env.host.paths.skillsDir, "adapter-keep"))).toBe(true);
+  });
+});

@@ -22,8 +22,14 @@ arc validate [path]           # Strictly validate an arc/v1 manifest (default: c
 ```bash
 arc disable <name>            # Disable (preserves repo clone)
 arc enable <name>             # Re-enable a disabled package
-arc remove <name>             # Completely uninstall
+arc remove <name>             # Completely uninstall (cascades to exclusively-owned depends_on.packages)
+arc remove <name> --keep-deps # Uninstall only the named package; leave its depends_on.packages installed
 ```
+
+`arc remove` cascades removal to the package's `depends_on.packages` (arc#348),
+but only those not still required by another installed package (shared-dependency
+refcounting). A dependency another active package still declares is kept and
+reported. Pass `--keep-deps` to opt out and remove only the named package.
 
 ### Upgrades
 
