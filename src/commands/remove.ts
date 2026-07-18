@@ -112,9 +112,13 @@ export interface RemoveOptions {
  *    excluded from the refcount denominator.
  *  - Only deps that are installed + active + on-disk are considered (a missing
  *    or disabled dep is nothing to remove).
- *  - `seen` guards against re-processing a dep already handled this command
- *    (shared deps, cycles). Packages in `seen` are excluded from the refcount
- *    denominator (they are the parent, or deps already being removed).
+ *  - Refcount is computed from DB truth only: it counts every active package
+ *    still in the DB except the dep itself. The parent and any successfully-
+ *    removed deps are already gone from the DB so they don't self-count, while
+ *    a still-installed FAILED sibling correctly counts (it still needs the dep).
+ *  - `seen` is ONLY the cycle/recursion guard — it stops a dep already handled
+ *    this command (shared deps, cycles) from being re-processed. It is NOT used
+ *    in the refcount denominator.
  *  - Best-effort: a failed dep removal is RETURNED (success:false) under
  *    `cascaded` but never thrown — the parent removal still succeeds.
  */
