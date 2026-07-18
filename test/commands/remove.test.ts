@@ -466,4 +466,80 @@ describe("remove — dependency removal cascade (arc#348)", () => {
     expect(getSkill(env.db, "adapter-keep")?.status).toBe("active");
     expect(existsSync(join(env.host.paths.skillsDir, "adapter-keep"))).toBe(true);
   });
+
+  test("failed-intermediate diamond: a dep the FAILED sibling still needs is retained (refcount from DB truth)", async () => {
+    // A → [B, X] (in that order); B → X; B's preuninstall exits 1 so B's own
+    // removal ABORTS and B stays installed. When the cascade then reaches X, the
+    // refcount must count STILL-INSTALLED B (its removal failed) as a requirer —
+    // so X is RETAINED, not wrongly removed. This is the fail-open the exclude
+    // set caused: `seen` had B in it, so B was excluded from X's denominator.
+    const x = await createMockSkillRepo(env.root, { name: "shared-x", version: "1.0.0" });
+    const b = await createMockSkillRepo(env.root, {
+      name: "mid-b",
+      version: "1.0.0",
+      dependsOnPackages: [{ name: "shared-x", repo: x.url }],
+      lifecycle: {
+        preuninstall: [{ path: "scripts/fail.sh", content: "#!/bin/sh\nexit 1\n" }],
+      },
+    });
+    const a = await createMockSkillRepo(env.root, {
+      name: "top-a",
+      version: "1.0.0",
+      dependsOnPackages: [
+        { name: "mid-b", repo: b.url },
+        { name: "shared-x", repo: x.url },
+      ],
+    });
+    await install({ arc: env.arc, host: env.host, db: env.db, repoUrl: a.url, yes: true });
+    expect(getSkill(env.db, "mid-b")?.status).toBe("active");
+    expect(getSkill(env.db, "shared-x")?.status).toBe("active");
+
+    const result = await remove(env.db, env.arc, env.host, "top-a", { yes: true });
+
+    expect(result.success).toBe(true);
+    expect(getSkill(env.db, "top-a")).toBeNull();
+    // B's removal failed and was reported under cascaded.
+    const bResult = result.cascaded?.find((r) => r.name === "mid-b");
+    expect(bResult?.success).toBe(false);
+    expect(getSkill(env.db, "mid-b")?.status).toBe("active"); // B still installed
+    // X was RETAINED because still-installed B needs it — NOT removed.
+    expect(result.cascaded?.some((r) => r.name === "shared-x")).toBe(false);
+    expect(result.retained?.some((r) => r.name === "shared-x" && r.requiredBy.includes("mid-b"))).toBe(true);
+    expect(getSkill(env.db, "shared-x")?.status).toBe("active");
+    expect(existsSync(join(env.host.paths.skillsDir, "shared-x"))).toBe(true);
+    expect(existsSync(join(env.arc.reposDir, "mock-shared-x"))).toBe(true);
+  });
+
+  test("fail-safe: an installed package with an UNREADABLE manifest retains the shared dep", async () => {
+    // A shared dep X is referenced by parent-A and by other-pkg. other-pkg's
+    // manifest is corrupted after install so it can't be parsed. Removing
+    // parent-A must NOT drop X: an unreadable candidate manifest is treated as a
+    // POSSIBLE requirer (fail safe for a destructive op), so X is retained.
+    const x = await createMockSkillRepo(env.root, { name: "shared-y", version: "1.0.0" });
+    const parentA = await createMockSkillRepo(env.root, {
+      name: "reader-a",
+      version: "1.0.0",
+      dependsOnPackages: [{ name: "shared-y", repo: x.url }],
+    });
+    const other = await createMockSkillRepo(env.root, {
+      name: "opaque-pkg",
+      version: "1.0.0",
+      dependsOnPackages: [{ name: "shared-y", repo: x.url }],
+    });
+    await install({ arc: env.arc, host: env.host, db: env.db, repoUrl: parentA.url, yes: true });
+    await install({ arc: env.arc, host: env.host, db: env.db, repoUrl: other.url, yes: true });
+
+    // Corrupt opaque-pkg's manifest so readManifest can't parse it.
+    const opaque = getSkill(env.db, "opaque-pkg")!;
+    await writeFile(join(opaque.install_path, "arc-manifest.yaml"), ": : not: valid: yaml: [\n");
+
+    const result = await remove(env.db, env.arc, env.host, "reader-a", { yes: true });
+
+    expect(result.success).toBe(true);
+    // X retained — the unreadable package might need it. Nothing cascaded out.
+    expect((result.cascaded ?? []).some((r) => r.name === "shared-y")).toBe(false);
+    expect(result.retained?.some((r) => r.name === "shared-y")).toBe(true);
+    expect(getSkill(env.db, "shared-y")?.status).toBe("active");
+    expect(existsSync(join(env.host.paths.skillsDir, "shared-y"))).toBe(true);
+  });
 });

@@ -139,10 +139,16 @@ async function cascadeDependencyRemovals(
       continue;
     }
 
-    // Refcount: which OTHER active packages still declare this dep? Exclude the
-    // dep itself and anything already in `seen` (the parent, or deps being
-    // removed this run — none of which should count as "still requiring" it).
-    const requiredBy = await packagesRequiring(db, dep.name, seen);
+    // Refcount: which OTHER active packages still declare this dep? Refcount is
+    // computed from DB TRUTH only, NOT from `seen`. `seen` accumulates every dep
+    // the cascade *attempts* to remove — including ones whose removal FAILED and
+    // are therefore STILL installed; excluding those from the denominator would
+    // undercount and wrongly drop a dep a still-installed sibling needs (the
+    // failed-intermediate diamond: A→[B,X], B→X, B's teardown fails → X must
+    // stay). The parent is `removeSkill`'d before the cascade and each
+    // successfully-removed dep is gone from the DB before its own sub-cascade,
+    // so neither self-counts; anything still in the DB legitimately counts.
+    const requiredBy = await packagesRequiring(db, dep.name);
     if (requiredBy.length > 0) {
       retained.push({ name: dep.name, requiredBy });
       continue;
@@ -167,23 +173,35 @@ async function cascadeDependencyRemovals(
 }
 
 /**
- * The names of active installed packages (other than `depName` itself and
- * anything in `exclude`) that declare `depName` in their `depends_on.packages`
- * (arc#348 refcount denominator). Manifests that can't be read are skipped —
- * they contribute no reference (best-effort; noted as residual risk).
+ * The names of active installed packages (other than `depName` itself) that
+ * declare `depName` in their `depends_on.packages` (arc#348 refcount
+ * denominator). Computed purely from DB truth — the caller must NOT pass an
+ * exclude set, because a package still present in the DB (e.g. one whose cascade
+ * removal FAILED) genuinely still needs the dep and must count.
+ *
+ * Fail-SAFE on an unreadable manifest: removal is destructive and hard to undo,
+ * so a candidate package whose manifest can't be parsed is treated as a POSSIBLE
+ * requirer and RETAINS the dep (counted under a `<name> (manifest unreadable)`
+ * marker), rather than being assumed to need nothing. Better to leave a dep
+ * installed than to orphan a package that actually depends on it.
  */
 async function packagesRequiring(
   db: Database,
   depName: string,
-  exclude: Set<string>,
 ): Promise<string[]> {
   const requiredBy: string[] = [];
   for (const pkg of listSkills(db)) {
     if (pkg.status !== "active") continue;
-    if (pkg.name === depName || exclude.has(pkg.name)) continue;
+    if (pkg.name === depName) continue;
     if (!existsSync(pkg.install_path)) continue;
     const pkgManifest = await readManifest(pkg.install_path).catch(() => null);
-    const declared = pkgManifest?.depends_on?.packages ?? [];
+    if (!pkgManifest) {
+      // Manifest unreadable — cannot prove this package does NOT need the dep.
+      // Fail safe: count it as a requirer so the dep is retained.
+      requiredBy.push(`${pkg.name} (manifest unreadable)`);
+      continue;
+    }
+    const declared = pkgManifest.depends_on?.packages ?? [];
     if (declared.some((d) => d.name === depName)) {
       requiredBy.push(pkg.name);
     }
