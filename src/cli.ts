@@ -587,11 +587,15 @@ program
   .description("Completely uninstall a skill (supports library:artifact syntax)")
   .option("--library <name>", "Remove all artifacts from a library")
   .option("-y, --yes", "Run non-interactively, suppress prompts")
-  .action(async (name: string, opts: { library?: string; yes?: boolean }) => {
+  .option(
+    "--keep-deps",
+    "Do not cascade removal to exclusively-owned depends_on.packages (arc#348)",
+  )
+  .action(async (name: string, opts: { library?: string; yes?: boolean; keepDeps?: boolean }) => {
     const paths = createArcPaths();
     const db = openDatabase(paths.dbPath);
     const host = getDefaultHost();
-    const removeOpts = { yes: opts.yes };
+    const removeOpts = { yes: opts.yes, keepDeps: opts.keepDeps };
 
     if (opts.library) {
       // Remove all artifacts from a library
@@ -617,6 +621,19 @@ program
 
       if (result.success) {
         console.log(`🗑️  Removed ${result.name}`);
+        // arc#348: report the dependency-removal cascade.
+        for (const dep of result.cascaded ?? []) {
+          if (dep.success) {
+            console.log(`   ↳ removed dependency ${dep.name} (no longer required)`);
+          } else {
+            console.log(`   ⚠ dependency ${dep.name} could not be removed: ${dep.error}`);
+          }
+        }
+        for (const kept of result.retained ?? []) {
+          console.log(
+            `   ↳ kept dependency ${kept.name} (still required by: ${kept.requiredBy.join(", ")})`,
+          );
+        }
       } else {
         // Artifact not found — check if name matches a library
         const libResult = await removeLibrary(db, paths, host, removeName, removeOpts);

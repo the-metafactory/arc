@@ -1,4 +1,5 @@
 import { join } from "path";
+import { existsSync } from "fs";
 import { rm, lstat, readlink, unlink } from "fs/promises";
 import type { Database } from "bun:sqlite";
 import type {
@@ -7,7 +8,7 @@ import type {
   HostAdapter,
   HostId,
 } from "../types.js";
-import { getSkill, removeSkill, listByLibrary } from "../lib/db.js";
+import { getSkill, removeSkill, listByLibrary, listSkills } from "../lib/db.js";
 import { removeSymlink, removeCliShim, extractAllCliInfo } from "../lib/symlinks.js";
 import { resolveProvidesTarget } from "../lib/provides-target.js";
 import { readManifest } from "../lib/manifest.js";
@@ -32,6 +33,31 @@ export interface RemoveResult {
   name?: string;
   error?: string;
   removedCount?: number;
+  /**
+   * Results of cascading the removal to this package's exclusively-owned
+   * `depends_on.packages` (arc#348). Sibling of `UpgradeResult.cascaded`
+   * (arc#347). Populated only when the package declared package dependencies
+   * that were installed AND not still required by another active package. A
+   * dependency that fails to remove lands here with success:false but does NOT
+   * fail the parent (best-effort per-dep, same contract as the upgrade cascade).
+   */
+  cascaded?: RemoveResult[];
+  /**
+   * `depends_on.packages` that were NOT removed because another installed
+   * package still requires them (shared-dependency refcounting, arc#348) —
+   * surfaced so the operator sees what was kept and why. `requiredBy` lists
+   * the other active packages that declare the dependency.
+   */
+  retained?: RetainedDependency[];
+}
+
+/**
+ * A `depends_on.packages` dependency left in place during a cascade removal
+ * because it is still referenced by another installed package (arc#348).
+ */
+export interface RetainedDependency {
+  name: string;
+  requiredBy: string[];
 }
 
 export interface RemoveOptions {
@@ -53,6 +79,138 @@ export interface RemoveOptions {
    * absent (real spawn); tests inject a recorder.
    */
   systemctlRunner?: SystemctlRunner;
+  /**
+   * Opt out of the `depends_on.packages` removal cascade (arc#348). By default
+   * `arc remove <component>` also removes the component's exclusively-owned
+   * package dependencies (those no other installed package still requires).
+   * Set to `true` to remove only the named package and leave its dependencies
+   * in place — the pre-arc#348 behaviour.
+   */
+  keepDeps?: boolean;
+  /**
+   * Internal: the set of package names already visited by the current remove
+   * command (arc#348). Threads through the cascade so a shared dependency — or
+   * a dependency cycle — is processed at most once, and the parent can never be
+   * re-entered. Mirrors `upgradePackage`'s `_seen`. Not a public flag.
+   */
+  _seen?: Set<string>;
+}
+
+/**
+ * Cascade a removal to a package's exclusively-owned `depends_on.packages`
+ * (arc#348). Sibling of `cascadeDependencyUpgrades` (upgrade.ts, arc#347):
+ * best-effort, per-dep, structured results.
+ *
+ * Shared-dependency refcounting: a declared dependency is removed ONLY IF no
+ * OTHER active installed package still declares it in `depends_on.packages`.
+ * An adapter a second component depends on — or one the user installed
+ * independently and that another package now references — is RETAINED and
+ * reported under `retained`.
+ *
+ * Preconditions / semantics:
+ *  - Call AFTER the parent's DB row is deleted so the parent is naturally
+ *    excluded from the refcount denominator.
+ *  - Only deps that are installed + active + on-disk are considered (a missing
+ *    or disabled dep is nothing to remove).
+ *  - Refcount is computed from DB truth only: it counts every active package
+ *    still in the DB except the dep itself. The parent and any successfully-
+ *    removed deps are already gone from the DB so they don't self-count, while
+ *    a still-installed FAILED sibling correctly counts (it still needs the dep).
+ *  - `seen` is ONLY the cycle/recursion guard — it stops a dep already handled
+ *    this command (shared deps, cycles) from being re-processed. It is NOT used
+ *    in the refcount denominator.
+ *  - Best-effort: a failed dep removal is RETURNED (success:false) under
+ *    `cascaded` but never thrown — the parent removal still succeeds.
+ */
+async function cascadeDependencyRemovals(
+  db: Database,
+  arc: ArcPaths,
+  host: HostAdapter,
+  manifest: { depends_on?: { packages?: { name: string }[] } },
+  seen: Set<string>,
+  opts: RemoveOptions,
+): Promise<{ cascaded: RemoveResult[]; retained: RetainedDependency[] }> {
+  const cascaded: RemoveResult[] = [];
+  const retained: RetainedDependency[] = [];
+
+  for (const dep of manifest.depends_on?.packages ?? []) {
+    if (seen.has(dep.name)) continue;
+
+    const existing = getSkill(db, dep.name);
+    // Only cascade to deps that are actually installed + active + on-disk.
+    // A missing/disabled dep is nothing to remove.
+    if (existing?.status !== "active" || !existsSync(existing.install_path)) {
+      continue;
+    }
+
+    // Refcount: which OTHER active packages still declare this dep? Refcount is
+    // computed from DB TRUTH only, NOT from `seen`. `seen` accumulates every dep
+    // the cascade *attempts* to remove — including ones whose removal FAILED and
+    // are therefore STILL installed; excluding those from the denominator would
+    // undercount and wrongly drop a dep a still-installed sibling needs (the
+    // failed-intermediate diamond: A→[B,X], B→X, B's teardown fails → X must
+    // stay). The parent is `removeSkill`'d before the cascade and each
+    // successfully-removed dep is gone from the DB before its own sub-cascade,
+    // so neither self-counts; anything still in the DB legitimately counts.
+    const requiredBy = await packagesRequiring(db, dep.name);
+    if (requiredBy.length > 0) {
+      retained.push({ name: dep.name, requiredBy });
+      continue;
+    }
+
+    // Exclusively owned by the package being removed — cascade the removal.
+    // Mark BEFORE the recursive call so a dep that (transitively) depends back
+    // on this one can't re-enter and loop.
+    seen.add(dep.name);
+    cascaded.push(
+      await remove(db, arc, host, dep.name, {
+        yes: opts.yes,
+        quiet: opts.quiet,
+        hostOverrides: opts.hostOverrides,
+        systemctlRunner: opts.systemctlRunner,
+        _seen: seen,
+      }),
+    );
+  }
+
+  return { cascaded, retained };
+}
+
+/**
+ * The names of active installed packages (other than `depName` itself) that
+ * declare `depName` in their `depends_on.packages` (arc#348 refcount
+ * denominator). Computed purely from DB truth — the caller must NOT pass an
+ * exclude set, because a package still present in the DB (e.g. one whose cascade
+ * removal FAILED) genuinely still needs the dep and must count.
+ *
+ * Fail-SAFE on an unreadable manifest: removal is destructive and hard to undo,
+ * so a candidate package whose manifest can't be parsed is treated as a POSSIBLE
+ * requirer and RETAINS the dep (counted under a `<name> (manifest unreadable)`
+ * marker), rather than being assumed to need nothing. Better to leave a dep
+ * installed than to orphan a package that actually depends on it.
+ */
+async function packagesRequiring(
+  db: Database,
+  depName: string,
+): Promise<string[]> {
+  const requiredBy: string[] = [];
+  for (const pkg of listSkills(db)) {
+    if (pkg.status !== "active") continue;
+    if (pkg.name === depName) continue;
+    if (!existsSync(pkg.install_path)) continue;
+    const pkgManifest = await readManifest(pkg.install_path).catch(() => null);
+    if (!pkgManifest) {
+      // Manifest unreadable — cannot prove this package does NOT need the dep.
+      // Fail safe: count it as a requirer so the dep is retained.
+      requiredBy.push(`${pkg.name} (manifest unreadable)`);
+      continue;
+    }
+    const declared = pkgManifest.depends_on?.packages ?? [];
+    if (declared.some((d) => d.name === depName)) {
+      requiredBy.push(pkg.name);
+    }
+  }
+  return requiredBy;
 }
 
 /**
@@ -319,6 +477,12 @@ export async function remove(
   name: string,
   opts: RemoveOptions = {},
 ): Promise<RemoveResult> {
+  // arc#348: the cascade-tracking set. Mark self BEFORE anything else so the
+  // dependency cascade (below) excludes this package from every refcount and a
+  // dep that (transitively) depends back on it can never re-enter.
+  const seen = opts._seen ?? new Set<string>();
+  seen.add(name);
+
   const skill = getSkill(db, name);
   if (!skill) {
     return { success: false, error: `Skill '${name}' is not installed` };
@@ -352,7 +516,7 @@ export async function remove(
     opts.quiet ?? opts.yes,
   );
   if (!preuninstallResult.success) {
-    return { success: false, error: preuninstallResult.error };
+    return { success: false, name, error: preuninstallResult.error };
   }
 
   const isTool = skill.artifact_type === "tool";
@@ -501,6 +665,28 @@ export async function remove(
   } else {
     // Standalone package — remove repo directory as before
     await rm(skill.install_path, { recursive: true, force: true });
+  }
+
+  // arc#348: cascade the removal to this package's exclusively-owned
+  // `depends_on.packages`. Runs AFTER the parent's DB row + repo are gone so
+  // the refcount denominator naturally excludes the parent. Best-effort: a
+  // failed dep removal is recorded under `cascaded` without failing the parent.
+  // `--keep-deps` opts out (removes only the named package).
+  if (!opts.keepDeps && manifest?.depends_on?.packages?.length) {
+    const { cascaded, retained } = await cascadeDependencyRemovals(
+      db,
+      arc,
+      host,
+      manifest,
+      seen,
+      opts,
+    );
+    return {
+      success: true,
+      name,
+      ...(cascaded.length ? { cascaded } : {}),
+      ...(retained.length ? { retained } : {}),
+    };
   }
 
   return { success: true, name };
