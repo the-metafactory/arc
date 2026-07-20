@@ -128,6 +128,10 @@ The assistant becomes the **inventory-librarian**: consumes §4's schema, render
 
 ## 10. Provenance & visual
 
-Synthesized from an ecosystem discussion on tooling literacy and adoption friction (2026-07), anchored in Anthropic's AI Fluency framework (the 4 Ds; AI Fluency Index, 2026). A companion concept illustration — "The Operator's Loadout" as an editorial character-equipment sheet (a person holding the key, eight-plus gear slots, rarity + sovereignty legend) — is a communication device for §3–§5, not a spec.
+Synthesized from an ecosystem discussion on tooling literacy and adoption friction (2026-07), anchored in Anthropic's AI Fluency framework (the 4 Ds; AI Fluency Index, 2026).
+
+![The Operator's Loadout — gear (the tools you equip) surrounded by fluency (the 4 Ds, arranged as a composing wheel, not a ladder), with the person holding the key and rarity + sovereignty legends](assets/loadout/loadout-4d.jpg)
+
+The illustration above is the concept in one frame — **gear** (the tools you equip) + **fluency** (the 4 Ds as a composing wheel, not a ladder) + the two legends (rarity = leverage, sovereignty = custody), with the person holding the key. It is a communication device for §2–§5, not a spec. Further explorations — an explainer sheet, an inventory-grid variant, and two playful WoW-styled takes (including a "choose your class" screen that shows the *same slots* yielding *different builds* per operator archetype) — live in [`assets/loadout/`](assets/loadout/).
 
 *Draft for review. On acceptance it earns a design decision and, if pursued, an arc feature for M3/M4. Community pushback via this PR is the point — especially on the sovereignty rubric and the slot set.*
