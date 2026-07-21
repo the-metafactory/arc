@@ -91,6 +91,26 @@ describe("name rule + §4.2 derivation", () => {
   test("missing name is a violation", () => {
     expect(hasField(validateStrictManifest(withManifest({ name: undefined })), "name")).toBe(true);
   });
+
+  // arc#356: the derivation guard must fire for the cortex agent/adapter/renderer
+  // classes exactly as it does for skill/bundle repos.
+  test("pass: cortex-agent dir whose name matches the derived name", () => {
+    const input = {
+      ...validInput(),
+      repoDirName: "metafactory-cortex-agent-luna-lite",
+      manifest: { ...(validInput().manifest as object), name: "luna-lite", type: "agent" },
+    };
+    expect(hasField(validateStrictManifest(input), "name")).toBe(false);
+  });
+  test("fail: cortex-agent dir whose name does NOT derive (arc#356 blind spot)", () => {
+    const input = {
+      ...validInput(),
+      repoDirName: "metafactory-cortex-agent-foo",
+      manifest: { ...(validInput().manifest as object), name: "bar", type: "agent" },
+    };
+    const v = validateStrictManifest(input).find((x) => x.field === "name");
+    expect(v?.rule).toContain("§4.2");
+  });
 });
 
 describe("version rule", () => {
@@ -284,9 +304,22 @@ describe("toStrictName (§4.2 derivation grammar)", () => {
   test("metafactory-<app>-skill-<name>", () => {
     expect(toStrictName("metafactory-forge-skill-onboard")).toBe("onboard");
   });
+  test("metafactory-<app>-agent-<name> (cortex class, arc#356)", () => {
+    expect(toStrictName("metafactory-cortex-agent-luna-lite")).toBe("luna-lite");
+    expect(toStrictName("metafactory-cortex-agent-escort")).toBe("escort");
+    expect(toStrictName("metafactory-cortex-agent-luna-stack")).toBe("luna-stack");
+  });
+  test("metafactory-<app>-adapter-<name> (cortex class, arc#356)", () => {
+    expect(toStrictName("metafactory-cortex-adapter-slack")).toBe("slack");
+  });
+  test("metafactory-<app>-renderer-<name> (cortex class, arc#356)", () => {
+    expect(toStrictName("metafactory-cortex-renderer-pagerduty")).toBe("pagerduty");
+  });
   test("non-matching dir → null", () => {
     expect(toStrictName("release-manager")).toBeNull();
     expect(toStrictName("tmp.abc123")).toBeNull();
+    // An unknown <type> segment does not match the app-scoped grammar.
+    expect(toStrictName("metafactory-cortex-widget-foo")).toBeNull();
   });
 });
 
