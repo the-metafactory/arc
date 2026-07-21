@@ -114,18 +114,35 @@ export function extractRepoName(url: string, p: PathFlavor = nodePath): string {
 }
 
 /**
+ * The set of app-scoped naming-class types an `<app>` prefix may carry, i.e.
+ * the `<type>` in `metafactory-<app>-<type>-<name>`. `skill` is the original
+ * form; `agent` / `adapter` / `renderer` are the cortex-published classes
+ * (luna-lite, escort, the platform adapters, the renderers) that the §4.2
+ * derivation guard previously did NOT strip — so a mismatched `name` in one of
+ * those repos silently passed, unlike a skill/bundle repo (arc#356). Adding
+ * them here makes the derivation check apply uniformly across every published
+ * class. Kept app-generic (any `<app>` segment) exactly like the skill form.
+ */
+const APP_SCOPED_TYPES = ["skill", "agent", "adapter", "renderer"] as const;
+
+const APP_SCOPED_RE = new RegExp(
+  `^metafactory-[a-z0-9]+-(?:${APP_SCOPED_TYPES.join("|")})-(.+)$`,
+);
+
+/**
  * Derive the canonical package `name` from a metafactory skill-repo directory
- * name, per the strict-migration spec §4.2. The grammar has three prefix forms:
+ * name, per the strict-migration spec §4.2. The grammar has these prefix forms:
  *
- *   - `metafactory-skill-<name>`        → `<name>`
- *   - `metafactory-bundle-<name>`       → `<name>`
- *   - `metafactory-<app>-skill-<name>`  → `<name>`  (`<app>` is one segment)
+ *   - `metafactory-skill-<name>`         → `<name>`
+ *   - `metafactory-bundle-<name>`        → `<name>`
+ *   - `metafactory-<app>-<type>-<name>`  → `<name>`  (`<app>` is one segment;
+ *     `<type>` ∈ {skill, agent, adapter, renderer} — see {@link APP_SCOPED_TYPES})
  *
  * Returns `<name>` when the dir matches one of those forms, else `null` (the
- * dir is not a metafactory skill repo, so the §4.2 derivation rule does not
- * apply — a legacy repo name or a scratch dir falls here). The `metafactory-
- * skill-` form is checked before the `<app>-skill-` form so the app segment is
- * never mistakenly matched as empty.
+ * dir is not a metafactory published repo, so the §4.2 derivation rule does not
+ * apply — a legacy repo name or a scratch dir falls here). The bare
+ * `metafactory-skill-` / `metafactory-bundle-` forms are checked before the
+ * `<app>-<type>-` form so the app segment is never mistakenly matched as empty.
  */
 export function toStrictName(repoDirName: string): string | null {
   const skill = /^metafactory-skill-(.+)$/.exec(repoDirName);
@@ -134,8 +151,8 @@ export function toStrictName(repoDirName: string): string | null {
   const bundle = /^metafactory-bundle-(.+)$/.exec(repoDirName);
   if (bundle) return bundle[1];
 
-  const appSkill = /^metafactory-[a-z0-9]+-skill-(.+)$/.exec(repoDirName);
-  if (appSkill) return appSkill[1];
+  const appScoped = APP_SCOPED_RE.exec(repoDirName);
+  if (appScoped) return appScoped[1];
 
   return null;
 }
