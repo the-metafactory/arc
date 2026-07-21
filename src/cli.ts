@@ -270,14 +270,18 @@ program
       // Resolved name is known here (no clone needed), so we save the bytes.
       const existingRow = getSkill(db, resolved.name);
       if (existingRow && !existingRow.library_name) {
-        let hint: string;
-        if (existingRow.status === "disabled") {
-          hint = `Run \`arc enable ${resolved.name}\` to re-enable it, or \`arc remove ${resolved.name}\` first if you want a clean install.`;
-        } else if (existingRow.version === resolved.version) {
-          hint = `Already at v${resolved.version}. Run \`arc remove ${resolved.name}\` first to reinstall.`;
-        } else {
-          hint = `Run \`arc upgrade ${resolved.name}\`, or \`arc remove ${resolved.name}\` first if the existing install can't be upgraded in place.`;
+        // arc#354: active at the resolved version → re-running install is a
+        // harmless no-op success, not an error. Disabled or version-mismatch
+        // rows keep the arc#158 actionable-hint error.
+        if (existingRow.status === "active" && existingRow.version === resolved.version) {
+          console.log(`✓ '${resolved.name}' v${existingRow.version} already installed — nothing to do`);
+          db.close();
+          return;
         }
+        const hint =
+          existingRow.status === "disabled"
+            ? `Run \`arc enable ${resolved.name}\` to re-enable it, or \`arc remove ${resolved.name}\` first if you want a clean install.`
+            : `Run \`arc upgrade ${resolved.name}\`, or \`arc remove ${resolved.name}\` first if the existing install can't be upgraded in place.`;
         console.error(`'${resolved.name}' v${existingRow.version} is already installed (status: ${existingRow.status}). ${hint}`);
         process.exit(1);
       }
@@ -428,14 +432,20 @@ program
         cortexConfigEnv: cortexSteering.cortexConfigEnv,
       });
       if (result.success) {
-        // arc#160: don't claim "(verified)" on the final line when only the
-        // registry signature and checksum were validated — Sigstore is the
-        // signature that attests to producer identity.
-        const verifyLabel = sigstoreVerified
-          ? "(verified)"
-          : "(SHA-256 + registry signature verified; Sigstore signature MISSING)";
-        console.log(`Installed ${result.name} v${result.version} ${verifyLabel}`);
-        printShimPathNotice(paths, result);
+        if (result.alreadyInstalled) {
+          // arc#354: duplicate row surfaced past the pre-download check
+          // (e.g. matched by repo URL under a different name) — no-op.
+          console.log(`✓ '${result.name}' v${result.version} already installed — nothing to do`);
+        } else {
+          // arc#160: don't claim "(verified)" on the final line when only the
+          // registry signature and checksum were validated — Sigstore is the
+          // signature that attests to producer identity.
+          const verifyLabel = sigstoreVerified
+            ? "(verified)"
+            : "(SHA-256 + registry signature verified; Sigstore signature MISSING)";
+          console.log(`Installed ${result.name} v${result.version} ${verifyLabel}`);
+          printShimPathNotice(paths, result);
+        }
       } else {
         console.error(`${result.error}`);
         process.exit(1);
@@ -444,12 +454,16 @@ program
       // Direct git install
       const result = await install({ arc: paths, host, db, repoUrl: nameOrUrl, yes: opts.yes, artifactName, pinnedVersion, skipSecrets: opts.skipSecrets, fromEnv: opts.fromEnv, secretBackend, hostOverrides: cortexSteering.hostOverrides, cortexConfigEnv: cortexSteering.cortexConfigEnv });
       if (result.success) {
-        if (result.artifacts?.length) {
+        if (result.alreadyInstalled) {
+          // arc#354: re-running install on an installed package is a no-op.
+          console.log(`\n✓ '${result.name}' v${result.version} already installed — nothing to do`);
+        } else if (result.artifacts?.length) {
           console.log(`\n✅ Installed ${result.artifacts.filter(a => a.success).length} artifact(s) from ${result.name}`);
+          printShimPathNotice(paths, result);
         } else {
           console.log(`\n✅ Installed ${result.name} v${result.version}`);
+          printShimPathNotice(paths, result);
         }
-        printShimPathNotice(paths, result);
       } else {
         console.error(`\n❌ ${result.error}`);
         process.exit(1);
@@ -486,12 +500,16 @@ program
         cortexConfigEnv: cortexSteering.cortexConfigEnv,
       });
       if (result.success) {
-        if (result.artifacts?.length) {
+        if (result.alreadyInstalled) {
+          // arc#354: re-running install on an installed package is a no-op.
+          console.log(`✓ '${result.name}' v${result.version} already installed — nothing to do`);
+        } else if (result.artifacts?.length) {
           console.log(`✅ Installed ${result.artifacts.filter(a => a.success).length} artifact(s) from ${result.name}`);
+          printShimPathNotice(paths, result);
         } else {
           console.log(`✅ Installed ${result.name} v${result.version}`);
+          printShimPathNotice(paths, result);
         }
-        printShimPathNotice(paths, result);
       } else {
         console.error(`${result.error}`);
         process.exit(1);

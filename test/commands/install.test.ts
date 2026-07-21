@@ -441,20 +441,21 @@ describe("install command", () => {
     expect(result.error).toContain("No arc-manifest.yaml");
   });
 
-  test("rejects already-installed skill", async () => {
+  test("arc#354: re-installing an already-installed skill is a no-op success", async () => {
     const repo = await createMockSkillRepo(env.root, {
       name: "TestSkill",
     });
 
     // First install
-    await install({
+    const first = await install({
       arc: env.arc, host: env.host,
       db: env.db,
       repoUrl: repo.url,
       yes: true,
     });
+    expect(first.success).toBe(true);
 
-    // Second install should fail
+    // Second install is idempotent: harmless no-op success, not an error.
     const result = await install({
       arc: env.arc, host: env.host,
       db: env.db,
@@ -462,8 +463,38 @@ describe("install command", () => {
       yes: true,
     });
 
+    expect(result.success).toBe(true);
+    expect(result.alreadyInstalled).toBe(true);
+    expect(result.name).toBe("TestSkill");
+    expect(result.version).toBe(first.version);
+    // Still exactly one DB row, still active.
+    expect(getSkill(env.db, "TestSkill")?.status).toBe("active");
+  });
+
+  test("arc#354: re-install of a DISABLED skill still errors with an `arc enable` hint", async () => {
+    const repo = await createMockSkillRepo(env.root, {
+      name: "DisabledReinstall",
+    });
+
+    await install({
+      arc: env.arc, host: env.host,
+      db: env.db,
+      repoUrl: repo.url,
+      yes: true,
+    });
+    env.db.prepare("UPDATE skills SET status = 'disabled' WHERE name = ?").run("DisabledReinstall");
+
+    const result = await install({
+      arc: env.arc, host: env.host,
+      db: env.db,
+      repoUrl: repo.url,
+      yes: true,
+    });
+
+    // A disabled row is NOT silently "satisfied" — the operator must decide.
     expect(result.success).toBe(false);
-    expect(result.error).toContain("already installed");
+    expect(result.error).toContain("status: disabled");
+    expect(result.error).toContain("arc enable");
   });
 
   test("arc#158: rejects same-name install from a different repo URL without crashing", async () => {
@@ -551,7 +582,7 @@ describe("install command", () => {
     expect(result.error).toContain("arc enable");
   });
 
-  test("arc#158: same-version duplicate hints to remove first (not upgrade)", async () => {
+  test("arc#354: same-name same-version active duplicate is a no-op success", async () => {
     const now = new Date().toISOString();
     env.db
       .prepare(
@@ -583,11 +614,17 @@ describe("install command", () => {
       yes: true,
     });
 
-    expect(result.success).toBe(false);
-    expect(result.error).toContain("Already at v1.0.0");
-    expect(result.error).toContain("arc remove");
-    // No `arc upgrade` suggestion when versions match — that would just no-op.
-    expect(result.error).not.toContain("arc upgrade");
+    // arc#354: an active row at the SAME version means the install is already
+    // satisfied — no-op success (was an "Already at v1.0.0, arc remove first"
+    // error pre-#354).
+    expect(result.success).toBe(true);
+    expect(result.alreadyInstalled).toBe(true);
+    expect(result.version).toBe("1.0.0");
+
+    // The fresh clone made for the duplicate-name check is cleaned up, same
+    // as the arc#158 error paths — no stray checkout left behind.
+    const repoDir = join(env.arc.reposDir, "mock-SameVersionSkill");
+    expect(existsSync(repoDir)).toBe(false);
   });
 
   test("installs pinned version by checking out git tag", async () => {

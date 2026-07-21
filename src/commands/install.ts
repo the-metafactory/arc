@@ -6,6 +6,7 @@ import type {
   ArcManifest,
   HostAdapter,
   HostId,
+  InstalledSkill,
   PackageTier,
 } from "../types.js";
 import type { Database } from "bun:sqlite";
@@ -173,6 +174,13 @@ export interface InstallResult {
   success: boolean;
   name?: string;
   version?: string;
+  /**
+   * arc#354: the package was ALREADY installed (status: active) and nothing
+   * was done — a harmless no-op success, not an error. Set by the duplicate
+   * guards in install() so callers (CLI output, the dependency loop) can
+   * report "already installed" instead of "Installed vX".
+   */
+  alreadyInstalled?: boolean;
   error?: string;
   manifest?: ArcManifest;
   evidence?: InstallTransactionEvidence;
@@ -246,8 +254,33 @@ export async function installPackageDependencies(
       // silent no-op. Re-derive the expected targets from the dep's recorded
       // install path + its manifest (the SAME path the install would write);
       // fall through to (re-)install when the drop is missing.
-      const existing = getSkill(db, dep.name);
+      //
+      // arc#354: resolve the installed row by declared name OR by repo URL.
+      // The dep's declared `name` is the manifest-author's label and can
+      // differ from the installed package's manifest name (live repro:
+      // quest-master declares `agent-state`, the installed skill row is
+      // `AgentState`) — a name-only lookup missed the row, the recursive
+      // install() then tripped its duplicate guard, and an already-satisfied
+      // dependency aborted the whole install.
+      const existing =
+        getSkill(db, dep.name) ??
+        (db
+          .prepare("SELECT * FROM skills WHERE repo_url = ? AND library_name IS NULL")
+          .get(dep.repo) as InstalledSkill | null);
       if (existing?.status === "active") {
+        // arc#354: declared compat range vs the installed version. Same
+        // warn-don't-fail posture as the arc#284 depends_on.skills check —
+        // and never silently upgrade an already-installed package as a side
+        // effect of installing its dependent. Unconditional (not gated on
+        // ctx.yes): a silently-incompatible dependency shouldn't hide behind
+        // --yes.
+        if (dep.version && !satisfiesRange(existing.version, dep.version)) {
+          process.stderr.write(
+            `arc: WARN — ${manifest.name} declares depends_on.packages: ${dep.name}@${dep.version}, ` +
+              `but installed ${existing.name} is v${existing.version} (range not satisfied). ` +
+              `Proceeding without upgrading it — run \`arc upgrade ${existing.name}\` if needed.\n`,
+          );
+        }
         // Determine whether the dep's host drop is actually present, and — when
         // it is NOT — WHY, so the operator notice is accurate (a missing/
         // unreadable repo clone is a different failure than a wiped host drop).
@@ -271,7 +304,16 @@ export async function installPackageDependencies(
           }
         }
         if (dropPresent) {
-          continue; // Already installed and the drop is present.
+          // Already installed and the drop is present — the dependency is
+          // SATISFIED (arc#354). One-line notice so the operator can see why
+          // no install ran; suppressed under --yes like the other progress
+          // chatter.
+          if (!ctx.yes) {
+            console.log(
+              `  ✓ dependency '${dep.name}' already installed (v${existing.version}) — satisfied`,
+            );
+          }
+          continue;
         }
         // DB says active but the drop (or its repo clone / manifest) cannot be
         // confirmed — re-install rather than skip. Surfaced unconditionally so
@@ -287,7 +329,10 @@ export async function installPackageDependencies(
         // (the recorded drop is gone / unverifiable), so the row was already
         // lying; and the recursive install() below fails loudly if the re-drop
         // fails, so we never silently leave a WORSE state than we found.
-        removeSkill(db, dep.name);
+        // arc#354: remove by the row's RECORDED name — when the row was
+        // resolved via repo URL, `dep.name` may not match it and the stale
+        // row would survive to trip the recursive install's guard.
+        removeSkill(db, existing.name);
       }
 
       if (!ctx.yes) {
@@ -310,7 +355,14 @@ export async function installPackageDependencies(
       }
 
       if (!ctx.yes) {
-        console.log(`  ✓ ${dep.name} v${depResult.version}`);
+        // arc#354: the recursive install may report the dep was already
+        // installed (e.g. resolved under a different recorded name) — that's
+        // satisfied, not freshly installed.
+        console.log(
+          depResult.alreadyInstalled
+            ? `  ✓ dependency '${dep.name}' already installed (v${depResult.version}) — satisfied`
+            : `  ✓ ${dep.name} v${depResult.version}`,
+        );
       }
     }
   }
@@ -356,13 +408,28 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
     // Check if already installed in DB (by repo name or by scanning all skills)
     const allSkills = db
       .prepare("SELECT * FROM skills")
-      .all() as { name: string; status: string; repo_url: string; library_name: string | null }[];
+      .all() as { name: string; version: string; status: string; repo_url: string; library_name: string | null }[];
 
+    // arc#354: an already-installed ACTIVE package is the SUCCESS case, not a
+    // failure — `arc install X` twice is a harmless no-op, and a declared
+    // dependency that's already present is satisfied (the exact live-repro:
+    // quest-master → agent-state aborted the whole install mid-way because
+    // this guard returned an error the dependency loop propagated). Only a
+    // DISABLED row still errors, with the arc#158-style actionable hint —
+    // silently "succeeding" while the package stays disabled would lie.
     const existingByUrl = allSkills.find((s) => s.repo_url === repoUrl && !s.library_name);
     if (existingByUrl) {
+      if (existingByUrl.status === "active") {
+        return {
+          success: true,
+          alreadyInstalled: true,
+          name: existingByUrl.name,
+          version: existingByUrl.version,
+        };
+      }
       return {
         success: false,
-        error: `Skill '${existingByUrl.name}' is already installed (status: ${existingByUrl.status})`,
+        error: `Skill '${existingByUrl.name}' is already installed (status: ${existingByUrl.status}). Run \`arc enable ${existingByUrl.name}\` to re-enable it, or \`arc remove ${existingByUrl.name}\` first if you want a clean install.`,
       };
     }
 
@@ -375,9 +442,19 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
         s.repo_url.endsWith(repoName)
       );
       if (existingByPath && !existingByPath.library_name) {
+        // Same arc#354 posture as the repo_url guard above: active → no-op
+        // success; disabled → actionable error.
+        if (existingByPath.status === "active") {
+          return {
+            success: true,
+            alreadyInstalled: true,
+            name: existingByPath.name,
+            version: existingByPath.version,
+          };
+        }
         return {
           success: false,
-          error: `Skill '${existingByPath.name}' is already installed (status: ${existingByPath.status})`,
+          error: `Skill '${existingByPath.name}' is already installed (status: ${existingByPath.status}). Run \`arc enable ${existingByPath.name}\` to re-enable it, or \`arc remove ${existingByPath.name}\` first if you want a clean install.`,
         };
       }
       // If no DB entries reference this path, clean up stale clone
@@ -445,14 +522,27 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
         Bun.spawnSync(["rm", "-rf", installPath], { stdout: "pipe", stderr: "pipe" });
       }
 
-      let hint: string;
-      if (existingByName.status === "disabled") {
-        hint = `Run \`arc enable ${manifest.name}\` to re-enable it, or \`arc remove ${manifest.name}\` first if you want a clean install.`;
-      } else if (existingByName.version === manifest.version) {
-        hint = `Already at v${manifest.version}. Run \`arc remove ${manifest.name}\` first to reinstall.`;
-      } else {
-        hint = `Run \`arc upgrade ${manifest.name}\`, or \`arc remove ${manifest.name}\` first if the existing install can't be upgraded in place.`;
+      // arc#354: active at the SAME version → the install is already
+      // satisfied; a re-run is a harmless no-op success (idempotency), not an
+      // error. A disabled row or a version mismatch still errors with the
+      // arc#158 actionable hint — those need an explicit operator decision
+      // (`arc enable` / `arc upgrade` / `arc remove`), not a silent side
+      // effect.
+      if (existingByName.status === "active" && existingByName.version === manifest.version) {
+        return {
+          success: true,
+          alreadyInstalled: true,
+          name: existingByName.name,
+          version: existingByName.version,
+        };
       }
+
+      // Remaining cases: disabled (any version), or active at a DIFFERENT
+      // version (the active+same-version case returned success above).
+      const hint =
+        existingByName.status === "disabled"
+          ? `Run \`arc enable ${manifest.name}\` to re-enable it, or \`arc remove ${manifest.name}\` first if you want a clean install.`
+          : `Run \`arc upgrade ${manifest.name}\`, or \`arc remove ${manifest.name}\` first if the existing install can't be upgraded in place.`;
       return {
         success: false,
         error: `'${manifest.name}' v${existingByName.version} is already installed (status: ${existingByName.status}). ${hint}`,
