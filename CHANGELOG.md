@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Fixed
+
+- **Already-installed is now the success case — install is idempotent** ([#354](https://github.com/the-metafactory/arc/issues/354)). `arc install <pkg>` aborted mid-way when a declared `depends_on.packages` entry was already installed ("Failed to install dependency 'agent-state': Skill 'AgentState' is already installed (status: active)") — the clone landed but skill projection never ran, leaving a half-installed state. Three changes: (1) the dependency loop resolves the installed row by declared name **or repo URL** (the declared dep name is the author's label and can differ from the installed manifest name — `agent-state` vs `AgentState`), treats an active row with its host drop present as **satisfied**, and when the arc#248 re-install path fires, removes the stale row by its *recorded* name; (2) `install()`'s duplicate guards return a **no-op success** (`alreadyInstalled: true`) for an active row (same repo URL, or same name at the same version) instead of an error — so re-running `arc install X` is harmless; a **disabled** row or a same-name **version mismatch** still errors with the arc#158 actionable hints (`arc enable` / `arc upgrade` / `arc remove`); (3) `depends_on.packages` entries may now declare an optional `version` range, checked when the dependency is already installed — out-of-range surfaces a WARN naming both versions and proceeds (the arc#284 warn-don't-fail posture; arc never silently upgrades an installed package as a side effect of installing its dependent).
+- **arc's own manifest migrated off the deprecated `{domain, reason}` network shape** ([#335](https://github.com/the-metafactory/arc/issues/335)): `arc-manifest.yaml` capabilities.network entries renamed `domain:` → `host:` (canonical shape).
+
 ## 0.42.0 — 2026-07-17
 
 ### Changed

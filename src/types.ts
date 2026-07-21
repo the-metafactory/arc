@@ -102,6 +102,14 @@ export interface ToolDependency {
 export interface PackageDependency {
   name: string;
   repo: string;
+  /**
+   * Optional declared compat range (arc#354), e.g. ">=0.3.0". Checked when
+   * the dependency is ALREADY installed: out-of-range surfaces a WARN naming
+   * both versions (same warn-don't-fail posture as the arc#284
+   * depends_on.skills check) — arc never silently upgrades an installed
+   * package as a side effect of installing another one.
+   */
+  version?: string;
 }
 
 /** CLI tool provided by a skill */

@@ -149,7 +149,7 @@ export async function createMockSkillRepo(
      * e.g. cortex declaring its surface-adapter bundles. Rendered additively to
      * the fixed `depends_on.tools`.
      */
-    dependsOnPackages?: { name: string; repo: string }[];
+    dependsOnPackages?: { name: string; repo: string; version?: string }[];
   }
 ): Promise<MockSkillRepo> {
   const repoDir = join(root, `mock-${opts.name}`);
