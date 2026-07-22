@@ -7,7 +7,9 @@ import type {
   ArcPaths,
   HostAdapter,
   HostId,
+  OwnsDeclaration,
 } from "../types.js";
+import { hasOwns } from "../lib/owns.js";
 import { getSkill, removeSkill, listByLibrary, listSkills } from "../lib/db.js";
 import { removeSymlink, removeCliShim, extractAllCliInfo } from "../lib/symlinks.js";
 import { resolveProvidesTarget } from "../lib/provides-target.js";
@@ -49,6 +51,16 @@ export interface RemoveResult {
    * the other active packages that declare the dependency.
    */
   retained?: RetainedDependency[];
+  /**
+   * The removed package's `owns:` purge-scope declaration (arc#359), captured
+   * from its manifest BEFORE the repo was deleted. Present only when the package
+   * declared at least one owns entry. `arc remove` uses it to print a
+   * "kept (config/state)" summary that names `arc purge <name>`; the removed
+   * config/state trees are LEFT ON DISK by `remove` (it only tears down what arc
+   * installed) — deleting them is `arc purge`'s job. Threading the declaration
+   * out here means `remove` reads the manifest exactly once.
+   */
+  owns?: OwnsDeclaration;
 }
 
 /**
@@ -494,6 +506,11 @@ export async function remove(
   // through with a null manifest — DB row and primary symlink still removed.
   const manifest = await readManifest(skill.install_path).catch(() => null);
 
+  // arc#359: capture the owns declaration ONCE (the manifest is deleted with the
+  // repo below) so both success returns can thread it into the result for the
+  // remove kept-summary + purge.
+  const ownsDecl = manifest?.owns;
+
   // 1. Fire scripts.preremove (arc#138) — non-aborting on failure.
   if (manifest?.scripts?.preremove) {
     const preResult = runScript({
@@ -686,10 +703,15 @@ export async function remove(
       name,
       ...(cascaded.length ? { cascaded } : {}),
       ...(retained.length ? { retained } : {}),
+      ...(hasOwns(ownsDecl) ? { owns: ownsDecl } : {}),
     };
   }
 
-  return { success: true, name };
+  return {
+    success: true,
+    name,
+    ...(hasOwns(ownsDecl) ? { owns: ownsDecl } : {}),
+  };
 }
 
 /**

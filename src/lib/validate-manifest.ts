@@ -17,6 +17,7 @@
  */
 
 import { toStrictName } from "./repo-name.js";
+import { validateOwns } from "./owns.js";
 
 /** One rule failure. The CLI renders it as `<field>: <rule>` on its own line. */
 export interface Violation {
@@ -137,6 +138,9 @@ export function validateStrictManifest(input: StrictValidationInput): Violation[
   validateCapabilities(manifest, add);
   validateNamespace(manifest, add);
   validateSkillFrontmatterName(input.skillFrontmatterName, derivedName, manifest, add);
+  // owns: shared shape/safety gate (arc#359). Reuses the same pure validator the
+  // lenient loader throws on, so `arc validate` and install agree byte-for-byte.
+  for (const v of validateOwns(manifest.owns)) add(v.field, v.rule);
 
   return violations;
 }

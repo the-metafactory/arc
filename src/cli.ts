@@ -23,6 +23,9 @@ import { audit, formatAudit } from "./commands/audit.js";
 import { disable } from "./commands/disable.js";
 import { enable } from "./commands/enable.js";
 import { remove, removeLibrary } from "./commands/remove.js";
+import { purge, formatPurge } from "./commands/purge.js";
+import { filesListing, formatFiles, formatFilesJson } from "./commands/files.js";
+import { hasOwns, purgeableEntries } from "./lib/owns.js";
 import { verify, formatVerify } from "./commands/verify.js";
 import { init, resolveInitTarget } from "./commands/init.js";
 import { upgradeCore, formatUpgrade } from "./commands/upgrade-core.js";
@@ -652,6 +655,15 @@ program
             `   ↳ kept dependency ${kept.name} (still required by: ${kept.requiredBy.join(", ")})`,
           );
         }
+        // arc#359: name the runtime-created config/state remove leaves behind,
+        // and the purge command that clears it.
+        if (hasOwns(result.owns)) {
+          const entries = purgeableEntries(result.owns);
+          if (entries.length > 0) {
+            console.log(`   ↳ kept (config/state): ${entries.join(", ")}`);
+          }
+          console.log(`   run: arc purge ${result.name}   # to also delete the above`);
+        }
       } else {
         // Artifact not found — check if name matches a library
         const libResult = await removeLibrary(db, paths, host, removeName, removeOpts);
@@ -665,6 +677,84 @@ program
     }
 
     db.close();
+  });
+
+/**
+ * Minimal y/N confirmation prompt on stdin. Returns true only on an explicit
+ * yes. A non-interactive stdin (piped/closed) resolves false — callers must pass
+ * `--yes` for unattended runs.
+ */
+async function confirmPrompt(question: string): Promise<boolean> {
+  const { createInterface } = await import("readline");
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  return new Promise<boolean>((resolve) => {
+    rl.question(question, (answer) => {
+      rl.close();
+      resolve(/^y(es)?$/i.test(answer.trim()));
+    });
+  });
+}
+
+program
+  .command("files <name>")
+  .description("List every artifact an installed package put on disk, plus its owns declarations (dpkg -L)")
+  .option("--json", "Machine-readable output")
+  .action(async (name: string, opts: { json?: boolean }) => {
+    const paths = createArcPaths();
+    const db = openDatabase(paths.dbPath);
+    const host = getDefaultHost();
+    const result = await filesListing(db, paths, host, name);
+    db.close();
+    console.log(opts.json ? formatFilesJson(result) : formatFiles(result));
+    if (!result.installed) process.exit(1);
+  });
+
+program
+  .command("purge <name>")
+  .description("Remove a package AND delete the runtime-created config/state it declares it owns (apt-get purge). Never deletes owns.userData.")
+  .option("-y, --yes", "Run non-interactively (skip the confirmation prompt)")
+  .option("--dry-run", "Show the full deletion plan and delete nothing")
+  .option("--keep-deps", "Do not cascade removal to exclusively-owned depends_on.packages (arc#348)")
+  .action(async (name: string, opts: { yes?: boolean; dryRun?: boolean; keepDeps?: boolean }) => {
+    const paths = createArcPaths();
+    const db = openDatabase(paths.dbPath);
+    const host = getDefaultHost();
+
+    // Preview first (dry run mutates nothing) so we can both surface a not-
+    // installed error early AND render the confirmation plan.
+    const preview = await purge(db, paths, host, name, {
+      dryRun: true,
+      keepDeps: opts.keepDeps,
+    });
+    if (!preview.success) {
+      console.error(`❌ ${preview.error}`);
+      db.close();
+      process.exit(1);
+    }
+
+    if (opts.dryRun) {
+      console.log(formatPurge(preview));
+      db.close();
+      return;
+    }
+
+    if (!opts.yes) {
+      console.log(formatPurge(preview));
+      const ok = await confirmPrompt(`\nProceed with purge of '${name}'? [y/N] `);
+      if (!ok) {
+        console.log("Aborted; nothing deleted.");
+        db.close();
+        return;
+      }
+    }
+
+    const result = await purge(db, paths, host, name, {
+      yes: opts.yes,
+      keepDeps: opts.keepDeps,
+    });
+    db.close();
+    console.log(formatPurge(result));
+    if (!result.success) process.exit(1);
   });
 
 program

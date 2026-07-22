@@ -5,6 +5,7 @@ import YAML from "yaml";
 import type { ArcManifest, HostId, RiskLevel } from "../types.js";
 import { KNOWN_HOST_IDS } from "../types.js";
 import { isErrno } from "./errors.js";
+import { validateOwns } from "./owns.js";
 
 /** Preferred manifest filename (new name). */
 export const MANIFEST_FILENAME = "arc-manifest.yaml";
@@ -122,6 +123,7 @@ async function readManifestFromDir(
         validateTargets(parsed, filename);
         validateLifecycle(parsed, filename);
         validateCortexConfig(parsed, filename);
+        validateOwnsField(parsed, filename);
         return parsed;
       }
 
@@ -164,6 +166,7 @@ async function readManifestFromDir(
       validateLifecycle(parsed, filename);
       validateCortexConfig(parsed, filename);
       validateAgentState(parsed, filename);
+      validateOwnsField(parsed, filename);
 
       return parsed;
     } catch (err) {
@@ -554,6 +557,22 @@ export function validateAgentState(manifest: ArcManifest, filename: string): voi
   }
 }
 
+/**
+ * Validate the OPTIONAL `owns:` purge-scope declaration at manifest-load time
+ * (arc#359). The heavy lifting lives in `lib/owns.ts` `validateOwns` (shared
+ * with the strict `arc validate` validator); the loader is fail-CLOSED — any
+ * violation THROWS so a home-sweeping or otherwise-unsafe declaration can never
+ * reach `arc purge`. No-op when the field is absent.
+ */
+export function validateOwnsField(manifest: ArcManifest, filename: string): void {
+  const violations = validateOwns(manifest.owns);
+  if (violations.length > 0) {
+    throw new Error(
+      `Invalid ${filename}: ${violations.map((v) => `${v.field} ${v.rule}`).join("; ")}`,
+    );
+  }
+}
+
 /** Step keywords arc understands. `agent`/`gate` carry the D/A/H surface arc
  *  validates; the rest are pulse composition primitives accepted opaquely. */
 const KNOWN_PROCESS_STEP_KEYWORDS = new Set([
@@ -729,6 +748,11 @@ function validateLibraryManifest(parsed: ArcManifest, filename: string): void {
   if (parsed.lifecycle) {
     throw new Error(
       `Invalid ${filename}: library root manifest must not contain 'lifecycle' (belongs on per-artifact manifests)`
+    );
+  }
+  if (parsed.owns) {
+    throw new Error(
+      `Invalid ${filename}: library root manifest must not contain 'owns' (belongs on per-artifact manifests)`
     );
   }
 
