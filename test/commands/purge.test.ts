@@ -81,6 +81,30 @@ describe("arc purge — happy path", () => {
   });
 });
 
+describe("arc purge — F1: a containing config/userData manifest is unrepresentable", () => {
+  test("a manifest whose config dir CONTAINS a userData subdir now FAILS at load/validate", async () => {
+    // config sweeps ~/Developer/workspace; userData names a subdir of it. Before
+    // the containment fix this passed string-equality and userData would sit
+    // inside a directory purge deletes. It must now be rejected at load.
+    const repo = await createMockSkillRepo(env.root, {
+      name: "Overlapping",
+      owns: {
+        config: ["~/Developer/workspace"],
+        userData: ["~/Developer/workspace/repo"],
+      },
+    });
+
+    // install catches the fail-closed manifest-load throw and surfaces it as a
+    // failed result rather than rejecting.
+    const result = await install({ arc: env.arc, host: env.host, db: env.db, repoUrl: repo.url, yes: true });
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/owns\.userData.*overlaps|overlaps deletable/i);
+
+    // The package never installed, so there is nothing for purge to act on.
+    expect(getSkill(env.db, "Overlapping")).toBeNull();
+  });
+});
+
 describe("arc purge — dry run", () => {
   test("deletes NOTHING and returns the plan", async () => {
     await installWithOwns("Cortex");

@@ -8,11 +8,17 @@
  *   - `owns.userData`              → NAMED and KEPT, never deleted (apt /home).
  *
  * This module is the single source of truth for THREE safety-critical concerns,
- * so the validator, `arc files`, and `arc purge` can never disagree:
- *   1. `validateOwns`  — the load-time shape + safety gate (reject home-sweeps,
- *      absolute paths, `..`, userData/config overlap).
+ * so the validator, `arc files`, and `arc purge` can never disagree. Each layer
+ * enforces its guarantee INDEPENDENTLY, so a gap in one is caught by the next:
+ *   1. `validateOwns`  — the load-time shape + safety gate. Rejects: home-sweeps
+ *      (`~`, `~/`, leading `*`/`**`), absolute paths, any `..` path segment, and
+ *      userData↔config/state overlap. Overlap is PATH CONTAINMENT (segment-aware,
+ *      both directions), not string equality: a userData entry may not equal, be
+ *      an ancestor of, OR be a descendant of any deletable config/state entry.
  *   2. `expandOwnsEntry` / `expandOwns` — glob expansion, ALWAYS rooted at the
- *      user's home so a pattern can only ever name paths under home.
+ *      user's home so a pattern can only ever name paths under home. It ALSO
+ *      independently refuses any entry with a `..` path segment before globbing
+ *      (defense-in-depth — it does not rely on `validateOwns` having run first).
  *   3. `deleteOwnedPath` — the deletion primitive: refuse anything that escapes
  *      home (lexically or via a parent symlink), and NEVER follow a symlink OUT
  *      of the tree (unlink the link itself, never `rm -rf` its target's tree).
@@ -62,8 +68,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  *   - A leading `*`/`**` segment (`~/*`, `~/**`) is rejected — it sweeps the
  *     whole home tree.
  *   - No `..` segment anywhere (defense against escaping the declared tree).
- *   - A `userData` entry may not also appear in `config`/`state` (the never-
- *     delete class must not be shadowed by a delete class).
+ *   - A `userData` entry may not OVERLAP a `config`/`state` (deletable) entry —
+ *     containment in either direction, compared segment-aware on the entries'
+ *     non-glob path roots. The never-delete class must not equal, contain, or be
+ *     contained by anything a purge would delete (so `config:['~/work']` +
+ *     `userData:['~/work/repo']` is rejected, and vice versa, while `~/work`
+ *     vs `~/workspace` is NOT flagged — those are sibling paths, not nested).
  */
 export function validateOwns(owns: unknown): OwnsViolation[] {
   const violations: OwnsViolation[] = [];
@@ -87,7 +97,6 @@ export function validateOwns(owns: unknown): OwnsViolation[] {
     });
   }
 
-  const seenInDelete = new Set<string>();
   for (const cls of OWNS_CLASSES) {
     const value = owns[cls];
     if (value === undefined) continue;
@@ -104,21 +113,69 @@ export function validateOwns(owns: unknown): OwnsViolation[] {
       for (const rule of entryViolations(entry)) {
         violations.push({ field, rule });
       }
-      if (cls === "config" || cls === "state") seenInDelete.add(entry);
     });
   }
 
-  // Overlap: a userData entry must not also be a config/state (deletable) entry.
-  for (const entry of asStringArray(owns.userData)) {
-    if (seenInDelete.has(entry)) {
+  // Overlap: a userData entry must not OVERLAP a config/state (deletable) entry.
+  // Containment in EITHER direction — userData is never deleted, so it must not
+  // equal, be an ancestor of, or be a descendant of anything a purge deletes.
+  // Compared segment-aware on tilde-expanded, non-glob path ROOTS, so a shared
+  // string prefix that is NOT a path-segment boundary (`~/work` vs `~/workspace`)
+  // is not mistaken for nesting.
+  const home = homedir();
+  const deletables = [
+    ...asStringArray(owns.config).map((entry) => ({ entry, cls: "config" })),
+    ...asStringArray(owns.state).map((entry) => ({ entry, cls: "state" })),
+  ];
+  for (const ud of asStringArray(owns.userData)) {
+    const udRoot = containmentRoot(ud, home);
+    for (const del of deletables) {
+      const delRoot = containmentRoot(del.entry, home);
+      if (!pathsNest(udRoot, delRoot)) continue;
+      let relation: string;
+      if (udRoot === delRoot) {
+        relation = `they resolve to the same path`;
+      } else if (udRoot.startsWith(delRoot + "/")) {
+        relation = `userData '${ud}' is nested inside ${del.cls} '${del.entry}'`;
+      } else {
+        relation = `${del.cls} '${del.entry}' is nested inside userData '${ud}'`;
+      }
       violations.push({
         field: "owns.userData",
-        rule: `'${entry}' also appears in config/state — userData is never deleted and must not overlap a deletable class`,
+        rule: `userData '${ud}' overlaps deletable ${del.cls} entry '${del.entry}' — ${relation}; userData is never deleted and must not overlap a deletable class`,
       });
     }
   }
 
   return violations;
+}
+
+/**
+ * The absolute, non-glob path ROOT of an entry, for containment comparison.
+ * Strips the glob tail (every segment from the first glob-magic segment on) and
+ * tilde-expands to an absolute path under `home`. So `~/.config/cortex/**` and
+ * `~/.config/cortex/*.yaml` both root at `<home>/.config/cortex`, and `~/work`
+ * roots at `<home>/work`.
+ */
+function containmentRoot(entry: string, home: string): string {
+  const tail = entry.startsWith("~/") ? entry.slice(2) : entry.replace(/^~/, "");
+  const solid: string[] = [];
+  for (const seg of tail.split("/")) {
+    if (seg.length === 0) continue;
+    if (GLOB_MAGIC_RE.test(seg)) break; // first glob segment ends the solid prefix
+    solid.push(seg);
+  }
+  return join(home, ...solid);
+}
+
+/**
+ * True when two normalized absolute paths are equal or one contains the other,
+ * compared on PATH SEGMENT boundaries — never a raw string prefix. So
+ * `<h>/work` and `<h>/workspace` do NOT nest, but `<h>/work` and `<h>/work/repo`
+ * do (in either argument order).
+ */
+function pathsNest(a: string, b: string): boolean {
+  return a === b || a.startsWith(b + "/") || b.startsWith(a + "/");
 }
 
 function asStringArray(value: unknown): string[] {
@@ -178,6 +235,11 @@ export function userDataEntries(owns: OwnsDeclaration | undefined): string[] {
 /**
  * Expand ONE `~`-rooted entry to concrete absolute paths under `home`.
  *
+ * - INDEPENDENTLY of `validateOwns`, an entry containing a `..` path SEGMENT is
+ *   refused up front (returns `[]`) — this function provides its own traversal
+ *   defense and never expands a `..` pattern, even if it is called on an entry
+ *   the load-time validator never saw. The check is segment-aware: a literal
+ *   filename like `foo..bar` is NOT a `..` segment and expands normally.
  * - A glob pattern (`…/**`, `…/*.conf`) is scanned via `Glob`, ALWAYS rooted at
  *   `home` — so a pattern can only ever name paths under home. Zero matches ⇒
  *   empty array (the caller renders "absent").
@@ -190,6 +252,9 @@ export function userDataEntries(owns: OwnsDeclaration | undefined): string[] {
  */
 export function expandOwnsEntry(entry: string, home: string = homedir()): string[] {
   const tail = entry.startsWith("~/") ? entry.slice(2) : entry.replace(/^~/, "");
+  // Defense-in-depth: refuse a `..` path segment before globbing. Segment-aware,
+  // so a literal filename like `foo..bar` (no `..` segment) is unaffected.
+  if (tail.split("/").some((seg) => seg === "..")) return [];
   if (GLOB_MAGIC_RE.test(tail)) {
     const matches: string[] = [];
     const glob = new Glob(tail);

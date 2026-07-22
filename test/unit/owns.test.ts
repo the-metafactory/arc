@@ -84,6 +84,47 @@ describe("validateOwns — shape + safety", () => {
     expect(v.some((x) => x.field === "owns.userData")).toBe(true);
   });
 
+  describe("userData↔config/state overlap is CONTAINMENT, not string equality (F1)", () => {
+    test("PoC: userData nested UNDER a config dir → violation naming both + nesting", () => {
+      const v = validateOwns({ config: ["~/work"], userData: ["~/work/repo"] });
+      const o = v.find((x) => x.field === "owns.userData");
+      expect(o).toBeDefined();
+      // names both entries and which is nested in which
+      expect(o!.rule).toContain("~/work/repo");
+      expect(o!.rule).toContain("~/work");
+      expect(o!.rule).toContain("nested inside");
+    });
+
+    test("reverse nesting: config nested UNDER a userData dir → violation", () => {
+      const v = validateOwns({ config: ["~/work/repo"], userData: ["~/work"] });
+      const o = v.find((x) => x.field === "owns.userData");
+      expect(o).toBeDefined();
+      expect(o!.rule).toContain("~/work/repo");
+      expect(o!.rule).toContain("~/work");
+    });
+
+    test("state↔userData nesting is caught too", () => {
+      const v = validateOwns({ state: ["~/data"], userData: ["~/data/keep"] });
+      expect(v.some((x) => x.field === "owns.userData")).toBe(true);
+      expect(v.find((x) => x.field === "owns.userData")!.rule).toContain("state");
+    });
+
+    test("glob roots collapse to their non-glob prefix for containment", () => {
+      // config sweeps ~/.local/state/cortex/** ; userData names a subdir of it.
+      const v = validateOwns({
+        state: ["~/.local/state/cortex/**"],
+        userData: ["~/.local/state/cortex/user"],
+      });
+      expect(v.some((x) => x.field === "owns.userData")).toBe(true);
+    });
+
+    test("NEGATIVE: sibling paths sharing a string prefix do NOT overlap (~/work vs ~/workspace)", () => {
+      expect(validateOwns({ config: ["~/work"], userData: ["~/workspace"] })).toEqual([]);
+      // and the reverse framing
+      expect(validateOwns({ config: ["~/workspace"], userData: ["~/work"] })).toEqual([]);
+    });
+  });
+
   test("rejects unknown top-level keys", () => {
     const v = validateOwns({ nope: ["~/x"] });
     expect(v.some((x) => x.rule.includes("unexpected key"))).toBe(true);
@@ -128,6 +169,34 @@ describe("expandOwnsEntry", () => {
 
   test("glob with no match returns []", () => {
     expect(expandOwnsEntry("~/.config/nope/*", home)).toEqual([]);
+  });
+
+  describe("independent interior-'..' rejection (F2)", () => {
+    test("PoC: '~/.config/../*' is refused (empty), never expands to home entries", async () => {
+      // Materialise siblings of ~/.config that a `..` escape would otherwise reach.
+      await mkdir(join(home, ".config/cortex"), { recursive: true });
+      await mkdir(join(home, ".ssh"), { recursive: true });
+      await writeFile(join(home, ".ssh/id_rsa"), "secret");
+      const out = expandOwnsEntry("~/.config/../*", home);
+      expect(out).toEqual([]);
+      // Definitely did not name the ~/.ssh sibling reachable via `..`.
+      expect(out).not.toContain(join(home, ".ssh"));
+    });
+
+    test("a trailing '..' segment is refused", () => {
+      expect(expandOwnsEntry("~/.config/..", home)).toEqual([]);
+    });
+
+    test("NEGATIVE: 'foo..bar' is NOT a '..' segment — literal still resolves", () => {
+      expect(expandOwnsEntry("~/.config/foo..bar", home)).toEqual([join(home, ".config/foo..bar")]);
+    });
+
+    test("NEGATIVE: a glob whose filename merely contains '..' still expands", async () => {
+      await mkdir(join(home, ".config"), { recursive: true });
+      await writeFile(join(home, ".config/foo..bar.txt"), "x");
+      const out = expandOwnsEntry("~/.config/foo..*", home);
+      expect(out).toContain(join(home, ".config/foo..bar.txt"));
+    });
   });
 });
 
