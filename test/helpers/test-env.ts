@@ -113,7 +113,11 @@ export async function createMockSkillRepo(
       preupgrade?: { path: string; content: string };
       postupgrade?: { path: string; content: string };
       preremove?: { path: string; content: string };
+      /** scripts.purge (arc#359) — runs during `arc purge` after owns deletion. */
+      purge?: { path: string; content: string };
     };
+    /** owns purge-scope declaration (arc#359). Rendered verbatim into the manifest. */
+    owns?: { config?: string[]; state?: string[]; userData?: string[] };
     /** provides.files entries to declare in the manifest. Source files
      *  are created on disk so install can symlink them. */
     files?: { source: string; target: string; content?: string }[];
@@ -282,6 +286,7 @@ export async function createMockSkillRepo(
       } : {}),
       ...(opts.requires ? { requires: opts.requires } : {}),
       ...(opts.state ? { state: opts.state } : {}),
+      ...(opts.owns ? { owns: opts.owns } : {}),
     };
 
     // Write as YAML manually (avoid dependency on yaml in test helper)

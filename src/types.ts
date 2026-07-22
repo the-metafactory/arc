@@ -369,6 +369,29 @@ export interface ProcessSpec {
   actions: ProcessStep[];
 }
 
+/**
+ * Purge-scope ownership declaration (arc#359).
+ *
+ * Three disjoint classes of runtime-created state a package's own runtime (not
+ * arc) creates on disk. `arc purge` deletes `config` + `state`; it NEVER deletes
+ * `userData` — that is the apt `/home` rule: workspace / user-authored content
+ * is named and kept, never swept.
+ *
+ * Every entry is a `~`-rooted path or glob (`~/.config/metafactory/cortex`,
+ * `~/.local/state/metafactory/cortex/**`). Absolute paths, a bare `~`/`~/`/`/`,
+ * a leading `*`/`**` (home-root sweep), and any `..` segment are rejected at
+ * manifest-load time — see `lib/owns.ts` `validateOwns`. `userData` entries may
+ * not overlap `config`/`state`.
+ */
+export interface OwnsDeclaration {
+  /** Config trees the package's runtime writes (apt conffiles). Deleted by purge. */
+  config?: string[];
+  /** Runtime/state trees (apt /var). Deleted by purge. */
+  state?: string[];
+  /** User-authored data (apt /home). NAMED and KEPT by purge — never deleted. */
+  userData?: string[];
+}
+
 /** The full arc-manifest.yaml schema (also accepts legacy pai-manifest.yaml) */
 export interface ArcManifest {
   schema?: "arc/v1" | "pai/v1";
@@ -465,7 +488,27 @@ export interface ArcManifest {
     /** Runs before `arc remove` tears down symlinks / hooks / repo. Used to
      *  stop daemons, unload launchd plists, etc. */
     preremove?: string;
+    /**
+     * Runs during `arc purge` (arc#359), AFTER the package's declared
+     * `owns.config`/`owns.state` trees are deleted. Handles the runtime-created
+     * state a package CANNOT statically declare as an `owns` path — e.g.
+     * disabling per-slug supervisor instances (`systemctl --user disable --now
+     * 'cortex@*'`) that quickstart enabled but arc has no slug knowledge of.
+     * Non-aborting: a failure warns and purge continues. Never runs on a plain
+     * `arc remove`.
+     */
+    purge?: string;
   };
+  /**
+   * Purge-scope ownership declaration (arc#359). Names the runtime-created
+   * config/state/user-data trees a package's RUNTIME (not arc) creates, so
+   * `arc purge <name>` can remove them after `arc remove` tears down what arc
+   * itself installed. Every entry is a `~`-rooted path or glob under the user's
+   * OWN home trees; absolute paths, a bare `~`/`~/`/`/`, and `..` segments are
+   * rejected at manifest-load time (a declaration that would sweep the whole
+   * home tree is an error). See {@link OwnsDeclaration} and `lib/owns.ts`.
+   */
+  owns?: OwnsDeclaration;
   /**
    * Ordered lifecycle script arrays — for sequences where order matters
    * (e.g. type:agent standalone bots: signal-reload → issue-creds →
