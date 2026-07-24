@@ -56,32 +56,41 @@ export interface DeclaredSecret {
  *   - bare string NAME               → { name, optional: false }
  *   - { name, reason?, optional? }    → { name, optional: optional === true }
  *
- * A malformed entry (no string `name`) throws a clear, value-free error. In
- * practice `arc validate` / the strict validator reject that shape up front, so
- * install rarely reaches this throw — it is the last-line guard that keeps a
- * non-string name from ever reaching the storage backend.
+ * A malformed entry — no string `name`, or an empty-string name — throws a
+ * clear, value-free error. Rejecting the empty string here keeps the fold in
+ * lockstep with `arc validate` (which rejects a name that fails
+ * SECRET_NAME_RE), so a manifest read through the lenient loader can never
+ * smuggle a nameless secret past this point into the storage backend.
  */
 export function normalizeDeclaredSecrets(
   raw: readonly (string | SecretDeclaration)[] | undefined,
 ): DeclaredSecret[] {
   if (!raw) return [];
   return raw.map((entry): DeclaredSecret => {
-    if (typeof entry === "string") return { name: entry, optional: false, reason: "" };
+    if (typeof entry === "string") {
+      if (entry === "") throw invalidSecretDeclaration(entry);
+      return { name: entry, optional: false, reason: "" };
+    }
     // Runtime guard: a manifest read through the lenient loader (validate not
     // yet run) can smuggle a non-object/null here despite the static type — so
     // widen to `| null` and check `name` explicitly.
     const obj = entry as unknown as { name?: unknown; reason?: unknown; optional?: unknown } | null;
-    if (obj && typeof obj.name === "string") {
+    if (obj && typeof obj.name === "string" && obj.name !== "") {
       return {
         name: obj.name,
         optional: obj.optional === true,
         reason: typeof obj.reason === "string" ? obj.reason : "",
       };
     }
-    throw new Error(
-      `invalid secret declaration: expected a NAME string or a { name, reason?, optional? } object; got ${JSON.stringify(entry)}`,
-    );
+    throw invalidSecretDeclaration(entry);
   });
+}
+
+/** The single value-free error for a malformed `capabilities.secrets` entry. */
+function invalidSecretDeclaration(entry: unknown): Error {
+  return new Error(
+    `invalid secret declaration: expected a non-empty NAME string or a { name, reason?, optional? } object; got ${JSON.stringify(entry)}`,
+  );
 }
 
 /**

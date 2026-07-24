@@ -422,4 +422,12 @@ describe("normalizeDeclaredSecrets (arc#363)", () => {
     // @ts-expect-error — deliberately malformed to prove the guard fires.
     expect(() => normalizeDeclaredSecrets([{ reason: "no name" }])).toThrow(/invalid secret declaration/);
   });
+
+  test("bare empty-string NAME is rejected (lockstep with validate)", () => {
+    expect(() => normalizeDeclaredSecrets([""])).toThrow(/invalid secret declaration/);
+  });
+
+  test("object form with empty-string name is rejected", () => {
+    expect(() => normalizeDeclaredSecrets([{ name: "" }])).toThrow(/invalid secret declaration/);
+  });
 });

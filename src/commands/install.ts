@@ -59,7 +59,7 @@ import {
   installTimeProvisionSecrets,
   buildSecretEnvForInstall,
 } from "../lib/secret-provision-install.js";
-import type { SecretBackendChoice } from "../lib/secrets.js";
+import type { SecretBackend, SecretBackendChoice } from "../lib/secrets.js";
 // F-6b (arc#228): agent identity provisioning. Lives in its own module; wired
 // in below as a SINGLE hook call at the identity step (merge-coordination with
 // the F-6c / F-6e install lanes — keep this concern isolated and its insertion
@@ -145,6 +145,14 @@ export interface InstallOptions {
   skipSecrets?: boolean;
   fromEnv?: boolean;
   secretBackend?: SecretBackendChoice;
+  /**
+   * Injectable secret-storage backend seam (arc#363). Production leaves this
+   * absent — the backend is resolved from the manifest + platform. Tests inject
+   * a stub (e.g. one whose `retrieve` throws) to drive the SECRETS-step and
+   * post-landing env-build failure/rollback paths without a real Keychain/file
+   * store. When present it overrides `secretBackend` for this install.
+   */
+  secretBackendInstance?: SecretBackend;
   /**
    * F-6a (cortex#858) — target stack id (`{principal}/{stack}`) for the cortex
    * config merge step. Forwarded to `cortex config merge --stack`. Optional:
@@ -671,6 +679,7 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
     fromEnv: opts.fromEnv,
     quiet: opts.yes,
     backendChoice: opts.secretBackend,
+    backend: opts.secretBackendInstance,
   });
   if (!secretStep.success) {
     Bun.spawnSync(["rm", "-rf", installPath], { stdout: "pipe", stderr: "pipe" });
@@ -749,6 +758,7 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
       ...(await buildSecretEnvForInstall(manifest, {
         arc,
         backendChoice: opts.secretBackend,
+        backend: opts.secretBackendInstance,
       })),
     };
   } catch (err) {
