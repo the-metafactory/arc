@@ -737,13 +737,41 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
   // pack's reload/creds postinstall scripts target the resolved stack dir.
   // Secrets win on key collision (a pack wouldn't name a secret CORTEX_CONFIG,
   // but secrets are the more privileged source, so they take precedence).
-  const postinstallEnv = {
-    ...(opts.cortexConfigEnv ?? {}),
-    ...(await buildSecretEnvForInstall(manifest, {
-      arc,
-      backendChoice: opts.secretBackend,
-    })),
-  };
+  // Symlinks (and any launchd/systemd artifacts) have landed above but the
+  // post-landing transaction — which owns rollback — has not started yet. A
+  // throw while building the postinstall env would therefore strand a dangling
+  // skill symlink + the orphaned clone (arc#363). Guard the window: on failure,
+  // unwind exactly what landed above, then remove the clone, before aborting.
+  let postinstallEnv: Record<string, string>;
+  try {
+    postinstallEnv = {
+      ...(opts.cortexConfigEnv ?? {}),
+      ...(await buildSecretEnvForInstall(manifest, {
+        arc,
+        backendChoice: opts.secretBackend,
+      })),
+    };
+  } catch (err) {
+    // Best-effort unwind — each rollback is name-scoped and never throws the
+    // original secret error; surface that error to the caller regardless.
+    await rollbackArtifactSymlinks(symlinkResult.record).catch(() => {
+      /* best-effort; the secret-env error below is the reported failure */
+    });
+    for (const record of launchdRecords) {
+      await rollbackLaunchdArtifacts(record).catch(() => {
+        /* best-effort */
+      });
+    }
+    for (const record of systemdRecords) {
+      await rollbackSystemdArtifacts(record, { systemctlRunner: opts.systemctlRunner }).catch(() => {
+        /* best-effort */
+      });
+    }
+    await rm(installPath, { recursive: true, force: true }).catch(() => {
+      /* best-effort; the clone may already be gone */
+    });
+    return { success: false, error: `Secret env build failed: ${errorMessage(err)}` };
+  }
   // Capture the live transaction so the F-6a cortex-config step below can
   // unwind the landed state (symlinks/hooks/launchd/DB row) if the merge fails
   // — atomic, same as the library path's onTransaction capture.

@@ -36,6 +36,7 @@ import { runScript } from "../lib/scripts.js";
 import {
   type SecretBackend,
   type SecretBackendChoice,
+  normalizeDeclaredSecrets,
   resolveSecretBackend,
   SecretListUnsupportedError,
 } from "../lib/secrets.js";
@@ -272,7 +273,7 @@ function planUserData(owns: OwnsDeclaration | undefined, home: string): PurgeKep
 }
 
 function declaredSecretNames(manifest: ArcManifest | null): string[] {
-  return manifest?.capabilities?.secrets ?? [];
+  return normalizeDeclaredSecrets(manifest?.capabilities?.secrets).map((d) => d.name);
 }
 
 function purgeScriptState(manifest: ArcManifest | null, installPath: string): PurgeScriptOutcome {

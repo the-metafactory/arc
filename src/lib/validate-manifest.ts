@@ -85,6 +85,12 @@ const SEMVER_RE = /^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$/;
 const NAMESPACE_RE = /^@[a-z0-9-]+$/;
 /** A hostname (not a URL). No scheme, no path, no whitespace. */
 const HOST_RE = /^[a-z0-9.-]+$/i;
+/**
+ * A secret NAME is an env-var-shaped identifier (arc#363). Mirrors the storage
+ * layer's guard (secrets.ts NAME_RE) so validate rejects exactly what the
+ * backend would — the two ends of the same schema.
+ */
+const SECRET_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 /** Narrow an `unknown` to a plain object (not null, not an array). */
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -336,9 +342,47 @@ function validateCapabilities(manifest: Record<string, unknown>, add: Add): void
     add("capabilities.bash.allowed", "is required and must be a boolean");
   }
 
-  // secrets: [] — array, explicit.
+  // secrets: [] — array, explicit. Each entry is EITHER a bare NAME string OR
+  // the object form { name, reason?, optional? } (arc#363). Both forms must be
+  // accepted here so validate and install agree — install used to crash on the
+  // object form validate let through. A bare/object NAME must be env-var-shaped.
   if (!Array.isArray(caps.secrets)) {
     add("capabilities.secrets", "is required as an array (explicit empty allowed)");
+  } else {
+    caps.secrets.forEach((entry, i) => {
+      if (typeof entry === "string") {
+        if (!SECRET_NAME_RE.test(entry)) {
+          add(
+            `capabilities.secrets[${i}]`,
+            `NAME must be an env-var-shaped identifier ([A-Za-z_][A-Za-z0-9_]*); got ${JSON.stringify(entry)}`,
+          );
+        }
+        return;
+      }
+      if (!isRecord(entry)) {
+        add(
+          `capabilities.secrets[${i}]`,
+          `must be a NAME string or a { name, reason?, optional? } object; got ${Array.isArray(entry) ? "array" : typeof entry}`,
+        );
+        return;
+      }
+      if (typeof entry.name !== "string" || !SECRET_NAME_RE.test(entry.name)) {
+        add(
+          `capabilities.secrets[${i}].name`,
+          `is required and must be an env-var-shaped identifier ([A-Za-z_][A-Za-z0-9_]*); got ${JSON.stringify(entry.name)}`,
+        );
+      }
+      if (entry.reason !== undefined && typeof entry.reason !== "string") {
+        add(`capabilities.secrets[${i}].reason`, "must be a string when present");
+      }
+      if (entry.optional !== undefined && typeof entry.optional !== "boolean") {
+        add(`capabilities.secrets[${i}].optional`, "must be a boolean when present");
+      }
+      const extra = Object.keys(entry).filter((k) => k !== "name" && k !== "reason" && k !== "optional");
+      if (extra.length > 0) {
+        add(`capabilities.secrets[${i}]`, `may only declare 'name', 'reason', and 'optional'; unexpected key(s): ${extra.join(", ")}`);
+      }
+    });
   }
 }
 

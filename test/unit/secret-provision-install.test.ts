@@ -121,3 +121,82 @@ describe("buildSecretEnvForInstall", () => {
     expect("MISSING" in env).toBe(false);
   });
 });
+
+// ── arc#363: object-form secrets + optional-missing warning discipline ──────
+describe("object-form secrets (arc#363)", () => {
+  function objManifest(
+    secrets: (string | { name: string; reason?: string; optional?: boolean })[],
+  ): ArcManifest {
+    return {
+      name: "dev",
+      version: "0.1.0",
+      type: "agent",
+      capabilities: {
+        filesystem: { read: [], write: [] },
+        network: [],
+        bash: { allowed: false },
+        secrets,
+      },
+    };
+  }
+
+  test("installTimeProvisionSecrets stores an object-form secret by NAME", async () => {
+    const backend = new FileBackend(secretsRoot, "dev");
+    const r = await installTimeProvisionSecrets(
+      objManifest([{ name: "LLAMA_CLOUD_API_KEY", reason: "LlamaParse", optional: true }]),
+      { arc, backend, fromEnv: true, env: { LLAMA_CLOUD_API_KEY: "llx-1" }, quiet: true },
+    );
+    expect(r.success).toBe(true);
+    expect(r.stored).toEqual(["LLAMA_CLOUD_API_KEY"]);
+    expect(await backend.retrieve("LLAMA_CLOUD_API_KEY")).toBe("llx-1");
+  });
+
+  test("buildSecretEnvForInstall retrieves object-form secret by NAME (no crash)", async () => {
+    const backend = new FileBackend(secretsRoot, "dev");
+    await backend.store("LLAMA_CLOUD_API_KEY", "llx-env");
+    const env = await buildSecretEnvForInstall(
+      objManifest([{ name: "LLAMA_CLOUD_API_KEY", optional: true }]),
+      { arc, backend, baseEnv: {} },
+    );
+    expect(env.LLAMA_CLOUD_API_KEY).toBe("llx-env");
+  });
+
+  test("a missing OPTIONAL secret succeeds and emits NO required-fail warning", async () => {
+    const backend = new FileBackend(secretsRoot, "dev");
+    const warnings: string[] = [];
+    const origWarn = console.warn;
+    console.warn = (...args: unknown[]) => { warnings.push(args.join(" ")); };
+    try {
+      const r = await installTimeProvisionSecrets(
+        objManifest([{ name: "LLAMA_CLOUD_API_KEY", optional: true }]),
+        { arc, backend, fromEnv: true, env: {}, quiet: false },
+      );
+      expect(r.success).toBe(true);
+      expect(r.skipped).toEqual(["LLAMA_CLOUD_API_KEY"]);
+    } finally {
+      console.warn = origWarn;
+    }
+    expect(warnings.join("\n")).not.toContain("LLAMA_CLOUD_API_KEY");
+  });
+
+  test("a missing REQUIRED secret still warns (loud, not silent)", async () => {
+    const backend = new FileBackend(secretsRoot, "dev");
+    const warnings: string[] = [];
+    const origWarn = console.warn;
+    console.warn = (...args: unknown[]) => { warnings.push(args.join(" ")); };
+    try {
+      const r = await installTimeProvisionSecrets(
+        objManifest(["GITHUB_TOKEN", { name: "LLAMA_CLOUD_API_KEY", optional: true }]),
+        { arc, backend, fromEnv: true, env: {}, quiet: false },
+      );
+      expect(r.success).toBe(true);
+    } finally {
+      console.warn = origWarn;
+    }
+    const joined = warnings.join("\n");
+    expect(joined).toContain("GITHUB_TOKEN");
+    // The optional one must NOT appear in the loud warning even when a required
+    // sibling triggers it.
+    expect(joined).not.toContain("LLAMA_CLOUD_API_KEY");
+  });
+});

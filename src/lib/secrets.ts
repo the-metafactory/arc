@@ -29,10 +29,60 @@ import { mkdir, readFile, writeFile, chmod, stat, unlink, readdir, rename } from
 import { existsSync } from "fs";
 import { join } from "path";
 import { randomBytes } from "crypto";
+import type { SecretDeclaration } from "../types.js";
 import { errorMessage, isErrno } from "./errors.js";
 
 /** Fixed sentinel printed in place of a secret value in any diagnostic. */
 export const SECRET_REDACTION = "(secret redacted)";
+
+/**
+ * A declared secret folded to the shape the install path consumes (arc#363):
+ * the NAME (always a string) plus whether a missing value may be tolerated.
+ */
+export interface DeclaredSecret {
+  /** Env-var-shaped identifier — the storage key and the runtime env var. */
+  name: string;
+  /** `true` ⇒ a missing value must not fail install (see SecretDeclaration). */
+  optional: boolean;
+  /** Documented reason from the object form; "" for the bare-NAME shorthand. */
+  reason: string;
+}
+
+/**
+ * Fold a manifest's `capabilities.secrets` array to `{name, optional}` entries.
+ * Accepts BOTH author shapes so `arc validate` and `arc install` never disagree
+ * (arc#363 — validate used to accept the object form that install then crashed
+ * on):
+ *   - bare string NAME               → { name, optional: false }
+ *   - { name, reason?, optional? }    → { name, optional: optional === true }
+ *
+ * A malformed entry (no string `name`) throws a clear, value-free error. In
+ * practice `arc validate` / the strict validator reject that shape up front, so
+ * install rarely reaches this throw — it is the last-line guard that keeps a
+ * non-string name from ever reaching the storage backend.
+ */
+export function normalizeDeclaredSecrets(
+  raw: readonly (string | SecretDeclaration)[] | undefined,
+): DeclaredSecret[] {
+  if (!raw) return [];
+  return raw.map((entry): DeclaredSecret => {
+    if (typeof entry === "string") return { name: entry, optional: false, reason: "" };
+    // Runtime guard: a manifest read through the lenient loader (validate not
+    // yet run) can smuggle a non-object/null here despite the static type — so
+    // widen to `| null` and check `name` explicitly.
+    const obj = entry as unknown as { name?: unknown; reason?: unknown; optional?: unknown } | null;
+    if (obj && typeof obj.name === "string") {
+      return {
+        name: obj.name,
+        optional: obj.optional === true,
+        reason: typeof obj.reason === "string" ? obj.reason : "",
+      };
+    }
+    throw new Error(
+      `invalid secret declaration: expected a NAME string or a { name, reason?, optional? } object; got ${JSON.stringify(entry)}`,
+    );
+  });
+}
 
 /**
  * Return the redaction sentinel. Exists as a named function (rather than the

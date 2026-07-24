@@ -6,6 +6,7 @@ import type {
   CapabilityRecord,
   ArcManifest,
 } from "../types.js";
+import { normalizeDeclaredSecrets } from "./secrets.js";
 
 /**
  * Initialize (or open) the packages database.
@@ -143,8 +144,11 @@ export function recordInstall(
     }
   }
   if (caps.secrets) {
-    for (const s of caps.secrets) {
-      insertCap.run(skill.name, "secret", s, "");
+    // Fold both author shapes (bare NAME / object form) to NAME + reason so a
+    // manifest declaring the object form records the same rows as the shorthand
+    // (arc#363) — the value column is always a string, never "[object Object]".
+    for (const s of normalizeDeclaredSecrets(caps.secrets)) {
+      insertCap.run(skill.name, "secret", s.name, s.reason);
     }
   }
 }

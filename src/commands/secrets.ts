@@ -18,7 +18,7 @@
  */
 
 import type { ArcManifest } from "../types.js";
-import { type SecretBackend, SecretListUnsupportedError } from "../lib/secrets.js";
+import { normalizeDeclaredSecrets, type SecretBackend, SecretListUnsupportedError } from "../lib/secrets.js";
 import {
   provisionSecrets,
   validateSecretPresence,
@@ -66,7 +66,7 @@ export async function secretsCheck(
   ctx: BaseCtx,
 ): Promise<number> {
   const report = await validateSecretPresence(manifest, ctx);
-  const declared = manifest.capabilities?.secrets ?? [];
+  const declared = normalizeDeclaredSecrets(manifest.capabilities?.secrets);
   if (declared.length === 0) {
     console.log(`Agent '${ctx.agent}' declares no secrets.`);
     return 0;
@@ -196,12 +196,12 @@ export async function secretsRemove(opts: SecretsRemoveOpts): Promise<number> {
       return 0;
     }
 
-    const declared = opts.manifest?.capabilities?.secrets ?? [];
+    const declared = normalizeDeclaredSecrets(opts.manifest?.capabilities?.secrets);
     if (declared.length === 0) {
       console.log(`Agent '${opts.agent}' declares no secrets; nothing to remove.`);
       return 0;
     }
-    for (const name of declared) {
+    for (const { name } of declared) {
       await opts.backend.remove(name);
       console.log(`✓ Removed ${name} for '${opts.agent}'.`);
     }

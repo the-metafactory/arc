@@ -197,3 +197,82 @@ describe("injectSecretsIntoEnv", () => {
     expect(env).toEqual({ FOO: "bar" });
   });
 });
+
+// ── arc#363: object-form capabilities.secrets ──────────────────────────────
+// A manifest may declare secrets as the richer object form
+// ({ name, reason?, optional? }) that `arc validate` accepts. Before the fix,
+// declaredSecrets() returned these objects raw and passed them to the backend,
+// crashing with `invalid secret name "[object Object]"`. Both forms must now
+// flow through the same NAME-based path.
+describe("object-form secrets (arc#363)", () => {
+  function objManifest(
+    secrets: (string | { name: string; reason?: string; optional?: boolean })[],
+  ): ArcManifest {
+    return {
+      name: "dev",
+      version: "0.1.0",
+      type: "agent",
+      capabilities: {
+        filesystem: { read: [], write: [] },
+        network: [],
+        bash: { allowed: false },
+        secrets,
+      },
+    };
+  }
+
+  test("provisionSecrets stores an object-form secret by its NAME (fromEnv)", async () => {
+    const backend = new FileBackend(secretsRoot, "dev");
+    const result = await provisionSecrets(
+      objManifest([{ name: "LLAMA_CLOUD_API_KEY", reason: "LlamaParse", optional: true }]),
+      { agent: "dev", backend, fromEnv: true, env: { LLAMA_CLOUD_API_KEY: "llx-123" } },
+    );
+    expect(result.stored).toEqual(["LLAMA_CLOUD_API_KEY"]);
+    expect(await backend.retrieve("LLAMA_CLOUD_API_KEY")).toBe("llx-123");
+  });
+
+  test("mixed string + object forms both provision by NAME", async () => {
+    const backend = new FileBackend(secretsRoot, "dev");
+    const result = await provisionSecrets(
+      objManifest(["GITHUB_TOKEN", { name: "LLAMA_CLOUD_API_KEY", optional: true }]),
+      {
+        agent: "dev",
+        backend,
+        fromEnv: true,
+        env: { GITHUB_TOKEN: "ghp_1", LLAMA_CLOUD_API_KEY: "llx-2" },
+      },
+    );
+    expect(result.stored).toEqual(["GITHUB_TOKEN", "LLAMA_CLOUD_API_KEY"]);
+  });
+
+  test("an optional object-form secret absent from env is skipped, never a crash", async () => {
+    const backend = new FileBackend(secretsRoot, "dev");
+    const result = await provisionSecrets(
+      objManifest([{ name: "LLAMA_CLOUD_API_KEY", optional: true }]),
+      { agent: "dev", backend, fromEnv: true, env: {} },
+    );
+    expect(result.stored).toEqual([]);
+    expect(result.skipped).toEqual(["LLAMA_CLOUD_API_KEY"]);
+  });
+
+  test("injectSecretsIntoEnv retrieves an object-form secret by NAME (no crash)", async () => {
+    const backend = new FileBackend(secretsRoot, "dev");
+    await backend.store("LLAMA_CLOUD_API_KEY", "llx-inject");
+    const env = await injectSecretsIntoEnv(
+      objManifest([{ name: "LLAMA_CLOUD_API_KEY", optional: true }]),
+      { agent: "dev", backend, baseEnv: {} },
+    );
+    expect(env.LLAMA_CLOUD_API_KEY).toBe("llx-inject");
+  });
+
+  test("validateSecretPresence reports an object-form secret by NAME", async () => {
+    const backend = new FileBackend(secretsRoot, "dev");
+    await backend.store("GITHUB_TOKEN", "ghp_present");
+    const report = await validateSecretPresence(
+      objManifest(["GITHUB_TOKEN", { name: "LLAMA_CLOUD_API_KEY", optional: true }]),
+      { agent: "dev", backend },
+    );
+    expect(report.present).toEqual(["GITHUB_TOKEN"]);
+    expect(report.missing).toEqual(["LLAMA_CLOUD_API_KEY"]);
+  });
+});

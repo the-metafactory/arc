@@ -5,6 +5,7 @@ import YAML from "yaml";
 import type { ArcManifest, HostId, RiskLevel } from "../types.js";
 import { KNOWN_HOST_IDS } from "../types.js";
 import { isErrno } from "./errors.js";
+import { normalizeDeclaredSecrets } from "./secrets.js";
 import { validateOwns } from "./owns.js";
 
 /** Preferred manifest filename (new name). */
@@ -865,8 +866,10 @@ export function formatCapabilities(manifest: ArcManifest): string[] {
     }
   }
   if (caps.secrets?.length) {
-    for (const s of caps.secrets) {
-      lines.push(`  🟡 Secret: ${s}`);
+    // Fold both author shapes to the NAME (arc#363) so the risk display never
+    // renders "[object Object]" for an object-form secret declaration.
+    for (const s of normalizeDeclaredSecrets(caps.secrets)) {
+      lines.push(`  🟡 Secret: ${s.name}`);
     }
   }
 

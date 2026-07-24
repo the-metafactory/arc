@@ -16,6 +16,7 @@
 import { homedir, userInfo } from "os";
 import type { ArcManifest, ArcPaths } from "../types.js";
 import {
+  normalizeDeclaredSecrets,
   resolveSecretBackend,
   type SecretBackend,
   type SecretBackendChoice,
@@ -96,7 +97,7 @@ export async function installTimeProvisionSecrets(
   manifest: ArcManifest,
   opts: InstallSecretStepOpts,
 ): Promise<SecretStepResult> {
-  const declared = manifest.capabilities?.secrets ?? [];
+  const declared = normalizeDeclaredSecrets(manifest.capabilities?.secrets);
   if (declared.length === 0) {
     return { success: true, stored: [], skipped: [] };
   }
@@ -119,11 +120,17 @@ export async function installTimeProvisionSecrets(
       quiet: opts.quiet,
     });
 
-    if (!opts.quiet && result.skipped.length > 0) {
+    // An OPTIONAL declared secret that goes unprovisioned is expected, not a
+    // gap — it must never fail install AND must not raise the loud "will fail
+    // at first use" warning (arc#363). Only REQUIRED skips warn.
+    const optionalNames = new Set(declared.filter((d) => d.optional).map((d) => d.name));
+    const requiredSkipped = result.skipped.filter((name) => !optionalNames.has(name));
+
+    if (!opts.quiet && requiredSkipped.length > 0) {
       // NAMES only. Loud, not silent — the operator must know the daemon will
       // fail at first use until these are provisioned.
       console.warn(
-        `  ⚠ Secrets not provisioned for '${manifest.name}': ${result.skipped.join(", ")}. ` +
+        `  ⚠ Secrets not provisioned for '${manifest.name}': ${requiredSkipped.join(", ")}. ` +
           `The agent will fail at first use until you run ` +
           `\`arc secrets set ${manifest.name} <secret>\`.`,
       );
@@ -137,7 +144,7 @@ export async function installTimeProvisionSecrets(
       success: false,
       error: `Secret provisioning failed: ${message}`,
       stored: [],
-      skipped: declared,
+      skipped: declared.map((d) => d.name),
     };
   }
 }
@@ -159,7 +166,7 @@ export async function buildSecretEnvForInstall(
     backendChoice?: SecretBackendChoice;
   },
 ): Promise<Record<string, string>> {
-  const declared = manifest.capabilities?.secrets ?? [];
+  const declared = normalizeDeclaredSecrets(manifest.capabilities?.secrets);
   // The runScript runner already spreads `process.env` first, then `opts.env`.
   // We pass ONLY the secrets here so we never re-materialize the whole
   // environment into a logged object — runScript merges it in.

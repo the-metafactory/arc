@@ -22,6 +22,7 @@ import {
   secretServiceKey,
   redactSecret,
   isSharedOrCiHost,
+  normalizeDeclaredSecrets,
   SecretListUnsupportedError,
   type SecurityRunner,
   type SecurityResult,
@@ -384,5 +385,41 @@ describe("isSharedOrCiHost", () => {
     expect(isSharedOrCiHost({ CI: "" })).toBe(false);
     expect(isSharedOrCiHost({ CI: "0" })).toBe(false);
     expect(isSharedOrCiHost({ CI: "false" })).toBe(false);
+  });
+});
+
+// ── arc#363: normalizeDeclaredSecrets — the single fold both forms pass ──────
+describe("normalizeDeclaredSecrets (arc#363)", () => {
+  test("undefined → []", () => {
+    expect(normalizeDeclaredSecrets(undefined)).toEqual([]);
+  });
+
+  test("bare string → { name, optional:false, reason:'' }", () => {
+    expect(normalizeDeclaredSecrets(["GITHUB_TOKEN"])).toEqual([
+      { name: "GITHUB_TOKEN", optional: false, reason: "" },
+    ]);
+  });
+
+  test("object form carries name, optional, reason", () => {
+    expect(
+      normalizeDeclaredSecrets([{ name: "LLAMA_CLOUD_API_KEY", reason: "LlamaParse", optional: true }]),
+    ).toEqual([{ name: "LLAMA_CLOUD_API_KEY", optional: true, reason: "LlamaParse" }]);
+  });
+
+  test("object form defaults optional to false and reason to ''", () => {
+    expect(normalizeDeclaredSecrets([{ name: "TOKEN" }])).toEqual([
+      { name: "TOKEN", optional: false, reason: "" },
+    ]);
+  });
+
+  test("mixed forms preserve order", () => {
+    expect(
+      normalizeDeclaredSecrets(["A", { name: "B", optional: true }, "C"]).map((d) => d.name),
+    ).toEqual(["A", "B", "C"]);
+  });
+
+  test("malformed entry (no string name) throws a value-free error", () => {
+    // @ts-expect-error — deliberately malformed to prove the guard fires.
+    expect(() => normalizeDeclaredSecrets([{ reason: "no name" }])).toThrow(/invalid secret declaration/);
   });
 });
