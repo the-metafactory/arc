@@ -59,7 +59,7 @@ import {
   installTimeProvisionSecrets,
   buildSecretEnvForInstall,
 } from "../lib/secret-provision-install.js";
-import type { SecretBackendChoice } from "../lib/secrets.js";
+import type { SecretBackend, SecretBackendChoice } from "../lib/secrets.js";
 // F-6b (arc#228): agent identity provisioning. Lives in its own module; wired
 // in below as a SINGLE hook call at the identity step (merge-coordination with
 // the F-6c / F-6e install lanes — keep this concern isolated and its insertion
@@ -145,6 +145,14 @@ export interface InstallOptions {
   skipSecrets?: boolean;
   fromEnv?: boolean;
   secretBackend?: SecretBackendChoice;
+  /**
+   * Injectable secret-storage backend seam (arc#363). Production leaves this
+   * absent — the backend is resolved from the manifest + platform. Tests inject
+   * a stub (e.g. one whose `retrieve` throws) to drive the SECRETS-step and
+   * post-landing env-build failure/rollback paths without a real Keychain/file
+   * store. When present it overrides `secretBackend` for this install.
+   */
+  secretBackendInstance?: SecretBackend;
   /**
    * F-6a (cortex#858) — target stack id (`{principal}/{stack}`) for the cortex
    * config merge step. Forwarded to `cortex config merge --stack`. Optional:
@@ -671,6 +679,7 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
     fromEnv: opts.fromEnv,
     quiet: opts.yes,
     backendChoice: opts.secretBackend,
+    backend: opts.secretBackendInstance,
   });
   if (!secretStep.success) {
     Bun.spawnSync(["rm", "-rf", installPath], { stdout: "pipe", stderr: "pipe" });
@@ -737,13 +746,42 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
   // pack's reload/creds postinstall scripts target the resolved stack dir.
   // Secrets win on key collision (a pack wouldn't name a secret CORTEX_CONFIG,
   // but secrets are the more privileged source, so they take precedence).
-  const postinstallEnv = {
-    ...(opts.cortexConfigEnv ?? {}),
-    ...(await buildSecretEnvForInstall(manifest, {
-      arc,
-      backendChoice: opts.secretBackend,
-    })),
-  };
+  // Symlinks (and any launchd/systemd artifacts) have landed above but the
+  // post-landing transaction — which owns rollback — has not started yet. A
+  // throw while building the postinstall env would therefore strand a dangling
+  // skill symlink + the orphaned clone (arc#363). Guard the window: on failure,
+  // unwind exactly what landed above, then remove the clone, before aborting.
+  let postinstallEnv: Record<string, string>;
+  try {
+    postinstallEnv = {
+      ...(opts.cortexConfigEnv ?? {}),
+      ...(await buildSecretEnvForInstall(manifest, {
+        arc,
+        backendChoice: opts.secretBackend,
+        backend: opts.secretBackendInstance,
+      })),
+    };
+  } catch (err) {
+    // Best-effort unwind — each rollback is name-scoped and never throws the
+    // original secret error; surface that error to the caller regardless.
+    await rollbackArtifactSymlinks(symlinkResult.record).catch(() => {
+      /* best-effort; the secret-env error below is the reported failure */
+    });
+    for (const record of launchdRecords) {
+      await rollbackLaunchdArtifacts(record).catch(() => {
+        /* best-effort */
+      });
+    }
+    for (const record of systemdRecords) {
+      await rollbackSystemdArtifacts(record, { systemctlRunner: opts.systemctlRunner }).catch(() => {
+        /* best-effort */
+      });
+    }
+    await rm(installPath, { recursive: true, force: true }).catch(() => {
+      /* best-effort; the clone may already be gone */
+    });
+    return { success: false, error: `Secret env build failed: ${errorMessage(err)}` };
+  }
   // Capture the live transaction so the F-6a cortex-config step below can
   // unwind the landed state (symlinks/hooks/launchd/DB row) if the merge fails
   // — atomic, same as the library path's onTransaction capture.

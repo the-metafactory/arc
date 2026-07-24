@@ -18,7 +18,7 @@
  */
 
 import type { ArcManifest } from "../types.js";
-import type { SecretBackend } from "./secrets.js";
+import { normalizeDeclaredSecrets, type SecretBackend, type DeclaredSecret } from "./secrets.js";
 import { errorMessage } from "./errors.js";
 
 /**
@@ -58,9 +58,13 @@ export interface ProvisionResult {
   skipped: string[];
 }
 
-/** Declared secrets for a manifest (empty when none). */
-function declaredSecrets(manifest: ArcManifest): string[] {
-  return manifest.capabilities?.secrets ?? [];
+/**
+ * Declared secrets for a manifest, folded to `{name, optional}` (empty when
+ * none). Both author shapes (bare NAME / object form) collapse here so every
+ * consumer below iterates NAMES, never raw objects (arc#363).
+ */
+function declaredSecrets(manifest: ArcManifest): DeclaredSecret[] {
+  return normalizeDeclaredSecrets(manifest.capabilities?.secrets);
 }
 
 /**
@@ -72,23 +76,23 @@ export async function provisionSecrets(
   manifest: ArcManifest,
   opts: ProvisionOpts,
 ): Promise<ProvisionResult> {
-  const names = declaredSecrets(manifest);
+  const declared = declaredSecrets(manifest);
   const stored: string[] = [];
   const skipped: string[] = [];
 
-  if (names.length === 0) {
+  if (declared.length === 0) {
     return { stored, skipped };
   }
 
   if (opts.skipSecrets) {
     // Daemon starts; first use fails with a clear message (issue §A.4). Record
     // the skip so the caller can surface a hint.
-    return { stored: [], skipped: [...names] };
+    return { stored: [], skipped: declared.map((d) => d.name) };
   }
 
   const env = opts.env ?? process.env;
 
-  for (const name of names) {
+  for (const { name } of declared) {
     let value: string | undefined;
 
     if (opts.fromEnv) {
@@ -145,11 +149,11 @@ export async function validateSecretPresence(
   manifest: ArcManifest,
   ctx: SecretContext,
 ): Promise<PresenceReport> {
-  const names = declaredSecrets(manifest);
+  const declared = declaredSecrets(manifest);
   const present: string[] = [];
   const missing: string[] = [];
 
-  for (const name of names) {
+  for (const { name } of declared) {
     const value = await ctx.backend.retrieve(name);
     if (value === null || value === "") {
       missing.push(name);
@@ -183,9 +187,9 @@ export async function injectSecretsIntoEnv(
   opts: InjectOpts,
 ): Promise<Record<string, string>> {
   const env: Record<string, string> = { ...opts.baseEnv };
-  const names = declaredSecrets(manifest);
+  const declared = declaredSecrets(manifest);
 
-  for (const name of names) {
+  for (const { name } of declared) {
     const value = await opts.backend.retrieve(name);
     if (value !== null && value !== "") {
       env[name] = value;

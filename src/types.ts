@@ -78,10 +78,26 @@ export interface Capabilities {
     allowed: boolean;
     restricted_to?: string[];
   };
-  secrets?: string[];
+  // A declared secret is either a bare NAME shorthand or the richer object
+  // form. Both forms are accepted by `arc validate` AND the installer — they
+  // are folded to a NAME (+ optionality) via normalizeDeclaredSecrets so the
+  // two never disagree (arc#363).
+  secrets?: (string | SecretDeclaration)[];
   skills?: string[];
   mcp?: string[];
   hooks?: string[];
+}
+
+/**
+ * The object form of a `capabilities.secrets` entry (arc#363). `name` is the
+ * env-var-shaped identifier the agent reads at runtime; `reason` documents why
+ * it is needed; `optional: true` means a missing value must NOT fail install
+ * (the agent degrades or the secret is only read on a narrow code path).
+ */
+export interface SecretDeclaration {
+  name: string;
+  reason?: string;
+  optional?: boolean;
 }
 
 /** Skill dependency declaration */

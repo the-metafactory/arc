@@ -9,6 +9,7 @@ import { readManifest, readLibraryArtifacts } from "../lib/manifest.js";
 import YAML from "yaml";
 import { installSingleArtifact, installPackageDependencies } from "./install.js";
 import { createSymlink } from "../lib/symlinks.js";
+import { normalizeDeclaredSecrets } from "../lib/secrets.js";
 import { resolveProvidesTarget } from "../lib/provides-target.js";
 import { findGitRoot } from "../lib/paths.js";
 import { loadSources } from "../lib/sources.js";
@@ -628,7 +629,8 @@ export async function upgradePackage(
       for (const b of caps.bash.restricted_to) insertCap.run(name, "bash", b, "");
     }
     if (caps.secrets) {
-      for (const s of caps.secrets) insertCap.run(name, "secret", s, "");
+      // Fold both author shapes to NAME + reason (arc#363) — see db.ts.
+      for (const s of normalizeDeclaredSecrets(caps.secrets)) insertCap.run(name, "secret", s.name, s.reason);
     }
   }
 

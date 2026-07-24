@@ -29,10 +29,69 @@ import { mkdir, readFile, writeFile, chmod, stat, unlink, readdir, rename } from
 import { existsSync } from "fs";
 import { join } from "path";
 import { randomBytes } from "crypto";
+import type { SecretDeclaration } from "../types.js";
 import { errorMessage, isErrno } from "./errors.js";
 
 /** Fixed sentinel printed in place of a secret value in any diagnostic. */
 export const SECRET_REDACTION = "(secret redacted)";
+
+/**
+ * A declared secret folded to the shape the install path consumes (arc#363):
+ * the NAME (always a string) plus whether a missing value may be tolerated.
+ */
+export interface DeclaredSecret {
+  /** Env-var-shaped identifier — the storage key and the runtime env var. */
+  name: string;
+  /** `true` ⇒ a missing value must not fail install (see SecretDeclaration). */
+  optional: boolean;
+  /** Documented reason from the object form; "" for the bare-NAME shorthand. */
+  reason: string;
+}
+
+/**
+ * Fold a manifest's `capabilities.secrets` array to `{name, optional}` entries.
+ * Accepts BOTH author shapes so `arc validate` and `arc install` never disagree
+ * (arc#363 — validate used to accept the object form that install then crashed
+ * on):
+ *   - bare string NAME               → { name, optional: false }
+ *   - { name, reason?, optional? }    → { name, optional: optional === true }
+ *
+ * A malformed entry — no string `name`, or an empty-string name — throws a
+ * clear, value-free error. Rejecting the empty string here keeps the fold in
+ * lockstep with `arc validate` (which rejects a name that fails
+ * SECRET_NAME_RE), so a manifest read through the lenient loader can never
+ * smuggle a nameless secret past this point into the storage backend.
+ */
+export function normalizeDeclaredSecrets(
+  raw: readonly (string | SecretDeclaration)[] | undefined,
+): DeclaredSecret[] {
+  if (!raw) return [];
+  return raw.map((entry): DeclaredSecret => {
+    if (typeof entry === "string") {
+      if (entry === "") throw invalidSecretDeclaration(entry);
+      return { name: entry, optional: false, reason: "" };
+    }
+    // Runtime guard: a manifest read through the lenient loader (validate not
+    // yet run) can smuggle a non-object/null here despite the static type — so
+    // widen to `| null` and check `name` explicitly.
+    const obj = entry as unknown as { name?: unknown; reason?: unknown; optional?: unknown } | null;
+    if (obj && typeof obj.name === "string" && obj.name !== "") {
+      return {
+        name: obj.name,
+        optional: obj.optional === true,
+        reason: typeof obj.reason === "string" ? obj.reason : "",
+      };
+    }
+    throw invalidSecretDeclaration(entry);
+  });
+}
+
+/** The single value-free error for a malformed `capabilities.secrets` entry. */
+function invalidSecretDeclaration(entry: unknown): Error {
+  return new Error(
+    `invalid secret declaration: expected a non-empty NAME string or a { name, reason?, optional? } object; got ${JSON.stringify(entry)}`,
+  );
+}
 
 /**
  * Return the redaction sentinel. Exists as a named function (rather than the

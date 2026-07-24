@@ -253,6 +253,73 @@ describe("network entry shape ({host, reason} only)", () => {
   });
 });
 
+describe("secrets entry shape (bare NAME | { name, reason?, optional? } — arc#363)", () => {
+  function withSecrets(secrets: unknown): StrictValidationInput {
+    return withManifest({
+      capabilities: {
+        filesystem: { read: [], write: [] },
+        network: [],
+        bash: { allowed: false },
+        secrets,
+      },
+    });
+  }
+
+  test("pass: bare NAME string form", () => {
+    const vs = validateStrictManifest(withSecrets(["GITHUB_TOKEN", "APPROVER_GH_TOKEN"]));
+    expect(vs.some((v) => v.field.startsWith("capabilities.secrets"))).toBe(false);
+  });
+
+  test("pass: object form { name, reason, optional } — the shape install crashed on", () => {
+    const vs = validateStrictManifest(
+      withSecrets([{ name: "LLAMA_CLOUD_API_KEY", reason: "LlamaParse-backed conversion", optional: true }]),
+    );
+    expect(vs.some((v) => v.field.startsWith("capabilities.secrets"))).toBe(false);
+  });
+
+  test("pass: mixed string + object entries", () => {
+    const vs = validateStrictManifest(
+      withSecrets(["GITHUB_TOKEN", { name: "LLAMA_CLOUD_API_KEY", optional: true }]),
+    );
+    expect(vs.some((v) => v.field.startsWith("capabilities.secrets"))).toBe(false);
+  });
+
+  test("fail: bare NAME not env-var-shaped", () => {
+    const vs = validateStrictManifest(withSecrets(["not-a-var"]));
+    expect(hasField(vs, "capabilities.secrets[0]")).toBe(true);
+  });
+
+  test("fail: object form missing name", () => {
+    const vs = validateStrictManifest(withSecrets([{ reason: "why" }]));
+    expect(hasField(vs, "capabilities.secrets[0].name")).toBe(true);
+  });
+
+  test("fail: object name not env-var-shaped", () => {
+    const vs = validateStrictManifest(withSecrets([{ name: "bad-name" }]));
+    expect(hasField(vs, "capabilities.secrets[0].name")).toBe(true);
+  });
+
+  test("fail: optional must be boolean", () => {
+    const vs = validateStrictManifest(withSecrets([{ name: "TOKEN", optional: "yes" }]));
+    expect(hasField(vs, "capabilities.secrets[0].optional")).toBe(true);
+  });
+
+  test("fail: reason must be a string", () => {
+    const vs = validateStrictManifest(withSecrets([{ name: "TOKEN", reason: 5 }]));
+    expect(hasField(vs, "capabilities.secrets[0].reason")).toBe(true);
+  });
+
+  test("fail: unexpected key on object form", () => {
+    const vs = validateStrictManifest(withSecrets([{ name: "TOKEN", nope: 1 }]));
+    expect(hasField(vs, "capabilities.secrets[0]")).toBe(true);
+  });
+
+  test("fail: entry is an array (neither string nor object)", () => {
+    const vs = validateStrictManifest(withSecrets([["TOKEN"]]));
+    expect(hasField(vs, "capabilities.secrets[0]")).toBe(true);
+  });
+});
+
 describe("namespace rule (optional; ^@[a-z0-9-]+$)", () => {
   test("pass: valid @scope", () => {
     expect(hasField(validateStrictManifest(withManifest({ namespace: "@metafactory" })), "namespace")).toBe(false);

@@ -9,6 +9,7 @@ import type {
   EnsurePackageResult,
 } from "../types.js";
 import { README_VARIANTS } from "./bundle.js";
+import { normalizeDeclaredSecrets } from "./secrets.js";
 
 // ── Constants ────────────────────────────────────────────────
 
@@ -171,8 +172,9 @@ export function toServerManifest(manifest: ArcManifest, scope: string): Record<s
     }
   }
 
-  // Secrets → environment
-  const environment = (caps.secrets ?? []).map((v) => ({ variable: v }));
+  // Secrets → environment. Fold both author shapes to the NAME (arc#363) so the
+  // published capability surface is a list of variable names, never objects.
+  const environment = normalizeDeclaredSecrets(caps.secrets).map((s) => ({ variable: s.name }));
 
   const serverCaps: Record<string, unknown> = {};
   if (filesystem.length) serverCaps.filesystem = filesystem;
