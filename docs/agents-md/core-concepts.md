@@ -65,6 +65,26 @@ therefore declares `target: "{cortex-config}/agents.d/<id>.yaml"` and lands in t
 tree the running cortex actually loads, on both pre- and post-migration boxes.
 arc only RESOLVES this tree; it never moves or migrates it (cortex owns that).
 
+**Two refusals guard every `provides.files` target, at plan time, before any
+filesystem write (arc#419 / arc#420):**
+
+1. **An unexpanded variable is refused, not silently created.** If the target
+   still contains `$VAR`, `${VAR}`, or `%VAR%` after the token/`~` expansion
+   above — a manifest typo, or a templating placeholder nothing substituted —
+   install refuses and names the offending target and manifest entry. Before
+   this, an entry like `target: $FOO/skills/x` installed a literal directory
+   named `$FOO` relative to the current working directory: an environment
+   quietly lying about where it put things.
+2. **Existing content at the target is never silently replaced.** If the
+   resolved target already exists and is NOT a symlink pointing at this
+   package's own source, install refuses, naming the path — mirroring `arc
+   remove`'s posture on the way out, which already skips a target that isn't
+   its own symlink. Pass `--replace` to opt in explicitly: the existing
+   content is then removed OUTRIGHT (no backup — a warning names what was
+   removed) before the new symlink lands. An owned symlink from a PRIOR
+   install of the SAME package (the upgrade case) is always updated silently,
+   regardless of `--replace`.
+
 ### Artifact Types
 
 | Type | Installed To | What It Is |

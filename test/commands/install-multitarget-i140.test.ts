@@ -85,7 +85,7 @@ runtime:
 provides:
   files:
     - source: ${opts.name}.md
-      target: ~/.config/cortex/agents.d/${opts.name}.md
+      target: ${cortexRoot}/agents.d/${opts.name}.md
   binary: bin/${opts.name}
   plist: services/ai.meta-factory.${opts.name}.plist
 `,
@@ -184,7 +184,7 @@ runtime:
 provides:
   files:
     - source: gamma-bot.md
-      target: ~/.config/cortex/agents.d/gamma-bot.md
+      target: ${cortexRoot}/agents.d/gamma-bot.md
   binary: bin/gamma-bot
   plist: services/ai.meta-factory.gamma-bot.plist
 lifecycle:

@@ -106,7 +106,7 @@ runtime:
 provides:
   files:
     - source: ${opts.name}.md
-      target: ~/.config/cortex/agents.d/${opts.name}.md
+      target: ${cortexRoot}/agents.d/${opts.name}.md
   binary: bin/${opts.name}
   plist: services/ai.meta-factory.${opts.name}.plist
 ${lifecycleYaml}`,
@@ -123,33 +123,26 @@ ${lifecycleYaml}`,
 
 async function installBot(name: string, lifecycle?: any) {
   const repo = await makeStandaloneBotRepo({ name, lifecycle });
-  // Override env HOME so provides.files (~/.config/...) lands inside env.root
-  // — without this, sage-shape installs leak into the developer's real ~/.
-  const originalHome = process.env.HOME;
-  process.env.HOME = env.root;
-  try {
-    const result = await install({
-      arc: env.arc, host: env.host, db: env.db,
-      repoUrl: repo.url, yes: true,
-      hostOverrides: hostOverrides(),
-    });
-    return result;
-  } finally {
-    process.env.HOME = originalHome;
-  }
+  // makeStandaloneBotRepo's provides.files target is `${cortexRoot}/…`
+  // (absolute, sandboxed) rather than `~/…` — resolveProvidesTarget expands
+  // `~` via os.homedir(), which does NOT track a `process.env.HOME`
+  // override under Bun (confirmed: `bun -e 'process.env.HOME=...; os.homedir()'`
+  // still returns the real home), so a `~`-based target here would leak into
+  // the developer's real `~/.config/cortex/agents.d` on every run —
+  // invisible previously because createSymlink silently replaced whatever
+  // was there; arc#420's occupied-target refusal now surfaces exactly that.
+  return await install({
+    arc: env.arc, host: env.host, db: env.db,
+    repoUrl: repo.url, yes: true,
+    hostOverrides: hostOverrides(),
+  });
 }
 
 async function removeBot(name: string) {
-  const originalHome = process.env.HOME;
-  process.env.HOME = env.root;
-  try {
-    return await remove(env.db, env.arc, env.host, name, {
-      quiet: true,
-      hostOverrides: hostOverrides(),
-    });
-  } finally {
-    process.env.HOME = originalHome;
-  }
+  return await remove(env.db, env.arc, env.host, name, {
+    quiet: true,
+    hostOverrides: hostOverrides(),
+  });
 }
 
 describe("remove: multi-target uninstall", () => {

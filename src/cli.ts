@@ -212,7 +212,8 @@ program
   .option("--secret-backend <choice>", "Secret storage backend: auto (default) | keychain | file. 'auto' uses the chmod-600 file backend on shared/CI hosts to avoid the macOS Keychain argv-exposure window")
   .option("--config-dir <path>", "Target a config-split cortex stack by its config dir (or its pointer file). Roots cortex agents.d/ + personas/ at the stack subdir. (arc#244)")
   .option("--stack <name>", "Target a config-split cortex stack by name (resolves to <name> under the live cortex config dir — legacy ~/.config/cortex on a pre-cutover box, canonical ~/.config/metafactory/cortex on a migrated one). (arc#244)")
-  .action(async (nameOrUrl: string, opts: { yes?: boolean; pin?: string; binDir?: string; strictSigning?: boolean; skipSecrets?: boolean; fromEnv?: boolean; secretBackend?: string; configDir?: string; stack?: string }) => {
+  .option("--replace", "Replace existing content at a provides.files target instead of refusing (arc#420). No backup is taken — a warning names what was removed. An owned symlink from a prior install of the SAME package is always updated silently regardless of this flag.")
+  .action(async (nameOrUrl: string, opts: { yes?: boolean; pin?: string; binDir?: string; strictSigning?: boolean; skipSecrets?: boolean; fromEnv?: boolean; secretBackend?: string; configDir?: string; stack?: string; replace?: boolean }) => {
     // Non-TTY guard: fail loud rather than silently half-installing
     if (!opts.yes && !process.stdin.isTTY) {
       console.error("Error: arc install requires an interactive terminal for capability confirmation.");
@@ -468,6 +469,7 @@ program
         secretBackend,
         hostOverrides: cortexSteering.hostOverrides,
         cortexConfigEnv: cortexSteering.cortexConfigEnv,
+        replaceProvidesFiles: opts.replace,
       });
       if (result.success) {
         if (result.alreadyInstalled) {
@@ -490,7 +492,7 @@ program
       }
     } else if (isUrl) {
       // Direct git install
-      const result = await install({ arc: paths, host, db, repoUrl: nameOrUrl, yes: opts.yes, artifactName, pinnedRef, skipSecrets: opts.skipSecrets, fromEnv: opts.fromEnv, secretBackend, hostOverrides: cortexSteering.hostOverrides, cortexConfigEnv: cortexSteering.cortexConfigEnv });
+      const result = await install({ arc: paths, host, db, repoUrl: nameOrUrl, yes: opts.yes, artifactName, pinnedRef, skipSecrets: opts.skipSecrets, fromEnv: opts.fromEnv, secretBackend, hostOverrides: cortexSteering.hostOverrides, cortexConfigEnv: cortexSteering.cortexConfigEnv, replaceProvidesFiles: opts.replace });
       if (result.success) {
         if (result.alreadyInstalled || result.repinned) {
           // arc#354: a pin-less re-run on an installed package is a no-op.
@@ -537,6 +539,7 @@ program
         secretBackend,
         hostOverrides: cortexSteering.hostOverrides,
         cortexConfigEnv: cortexSteering.cortexConfigEnv,
+        replaceProvidesFiles: opts.replace,
       });
       if (result.success) {
         if (result.alreadyInstalled || result.repinned) {

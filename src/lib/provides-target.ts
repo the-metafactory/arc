@@ -65,3 +65,29 @@ export function resolveProvidesTarget(target: string, seam?: XdgSeam): string {
 
   return out.replace(/^~/, home);
 }
+
+/**
+ * Scan an ALREADY-RESOLVED `provides.files` target (post resolveProvidesTarget)
+ * for a variable form arc doesn't know how to expand — `${VAR}` / `$VAR`
+ * (POSIX/shell) or `%VAR%` (Windows) — or a bare `$` that matches neither
+ * shape. arc#419: every `{token}` form and a leading `~` are expanded above;
+ * anything with `$` or `%…%` still in it after that is either a manifest
+ * typo or an un-substituted templating placeholder that must never silently
+ * become a literal directory name relative to cwd (e.g. `$FOO/skills/x`).
+ *
+ * Returns the offending substring for the error message, or `undefined` when
+ * the target is clean.
+ */
+export function findUnexpandedVariable(resolvedTarget: string): string | undefined {
+  const braced = /\$\{[^}]*\}?/.exec(resolvedTarget);
+  if (braced) return braced[0];
+  const bare = /\$[A-Za-z_][A-Za-z0-9_]*/.exec(resolvedTarget);
+  if (bare) return bare[0];
+  const percent = /%[A-Za-z_][A-Za-z0-9_]*%/.exec(resolvedTarget);
+  if (percent) return percent[0];
+  // Any leftover `$` that isn't part of the shapes above (e.g. a bare `$` or
+  // `$$`) is still a variable-expansion artifact, not a legitimate path
+  // character — refuse it too rather than let it through unrecognized.
+  if (resolvedTarget.includes("$")) return "$";
+  return undefined;
+}
