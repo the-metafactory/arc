@@ -19,6 +19,69 @@ export interface GenerateResult {
   target: string;
   success: boolean;
   error?: string;
+  /** Absolute path written. Unset when the render was skipped or refused. */
+  written?: string;
+  /** True when the repo was refused for lack of declared authority (arc#423 G2). */
+  refused?: boolean;
+}
+
+/** Options threading write-authority into the render (arc#423). */
+export interface GenerateRulesOptions {
+  /**
+   * Name of the package providing the templates. When set, a consumer repo is
+   * written ONLY if its config `template:` declares this package (arc#423 G2).
+   * Omitted = the caller has already established authority for this directory
+   * (an explicit `consumerDir`, i.e. the operator named it).
+   */
+  packageName?: string;
+}
+
+/**
+ * Reduce a template identifier to its stem — the first `-`-delimited segment,
+ * lowercased.
+ *
+ * Live consumer configs in the wild spell the SAME provider three ways:
+ * crucible says `compass-core`, cortex and halden say `compass-standards`, and
+ * the installed package is `compass`. Requiring an exact string match would
+ * refuse every real consumer and break the feature the gate is meant to protect;
+ * comparing stems accepts all three while still refusing an unrelated package
+ * (`OverlayPkg` vs `compass-core`) — which is the whole of arc#423.
+ */
+function templateStem(id: string): string {
+  return id.trim().toLowerCase().split("-")[0] ?? "";
+}
+
+/**
+ * True when `config.template` declares `packageName` as its provider.
+ *
+ * A MISSING `template:` is NOT a declaration: a repo that never named a provider
+ * has given no package authority to rewrite its files. This is the exact
+ * condition that let 136 repos be clobbered — they matched only by carrying a
+ * file called `agents-md.yaml`.
+ */
+export function declaresTemplateProvider(
+  config: RulesConfig,
+  packageName: string,
+): boolean {
+  const declared = typeof config.template === "string" ? config.template : "";
+  if (!declared) return false;
+  if (declared.toLowerCase() === packageName.toLowerCase()) return true;
+  return templateStem(declared) === templateStem(packageName);
+}
+
+/**
+ * Placeholders still unsubstituted after a render — `{FOO}` / `{foo_bar}`.
+ *
+ * Deliberately narrow: ALL-CAPS or all-lower snake tokens only, so ordinary
+ * prose braces and code samples in a template body are not mistaken for
+ * placeholders.
+ */
+export function residualPlaceholders(output: string): string[] {
+  const found = new Set<string>();
+  for (const m of output.matchAll(/\{([A-Z][A-Z0-9_]*|[a-z][a-z0-9_]*)\}/g)) {
+    if (m[1]) found.add(m[1]);
+  }
+  return [...found];
 }
 
 /** Reserved config keys that are not placeholder values */
@@ -40,11 +103,12 @@ export async function generateRules(
   packagePath: string,
   templates: RulesTemplate[],
   consumerDir: string,
+  opts?: GenerateRulesOptions,
 ): Promise<GenerateResult[]> {
   const results: GenerateResult[] = [];
 
   for (const tmpl of templates) {
-    const result = await generateSingleRule(packagePath, tmpl, consumerDir);
+    const result = await generateSingleRule(packagePath, tmpl, consumerDir, opts);
     results.push(result);
   }
 
@@ -58,6 +122,7 @@ async function generateSingleRule(
   packagePath: string,
   tmpl: RulesTemplate,
   consumerDir: string,
+  opts?: GenerateRulesOptions,
 ): Promise<GenerateResult> {
   const target = tmpl.target;
 
@@ -76,6 +141,22 @@ async function generateSingleRule(
       return { target, success: false, error: `Config file not found: ${tmpl.config}` };
     }
     return { target, success: false, error: `Failed to read config: ${errorMessage(err)}` };
+  }
+
+  // 1b. arc#423 G2 — WRITE AUTHORITY. Carrying a file named `agents-md.yaml`
+  // is not consent to have CLAUDE.md rewritten. When the caller names the
+  // providing package (i.e. this dir came from a SCAN, not from an operator
+  // naming it), the consumer's config must declare that package via `template:`.
+  if (opts?.packageName && !declaresTemplateProvider(config, opts.packageName)) {
+    const declared = typeof config.template === "string" ? config.template : "(none)";
+    return {
+      target,
+      success: false,
+      refused: true,
+      error:
+        `refused ${consumerDir}: ${tmpl.config} declares template "${declared}", ` +
+        `not "${opts.packageName}" — not a declared consumer of this package`,
+    };
   }
 
   // 2. Check if this format is opted-in (for optional templates)
@@ -117,11 +198,30 @@ async function generateSingleRule(
   // 7. Clean up any remaining injection markers
   output = output.replace(/<!-- inject:after:\S+ -->\n?/g, "");
 
-  // 8. Write output
+  // 8. arc#423 G3 — a half-rendered template is an ERROR, not an output.
+  // The incident's 136 files were not merely written to the wrong repo; they
+  // were written as the bare stub `# {PROJECT_NAME}`, because the real configs
+  // key on `repo_name` and the substitution left the placeholder standing. A
+  // render that could not populate its placeholders has produced nothing worth
+  // writing, so it must fail loudly rather than truncate a real file to a stub.
+  const residual = residualPlaceholders(output);
+  if (residual.length) {
+    return {
+      target,
+      success: false,
+      error:
+        `refused ${join(consumerDir, target)}: template left ` +
+        `${residual.length} placeholder(s) unsubstituted ` +
+        `(${residual.map((p) => `{${p}}`).join(", ")}) — ` +
+        `${tmpl.config} supplies no value for them`,
+    };
+  }
+
+  // 9. Write output
   const outputPath = join(consumerDir, target);
   await Bun.write(outputPath, output);
 
-  return { target, success: true };
+  return { target, success: true, written: outputPath };
 }
 
 /**

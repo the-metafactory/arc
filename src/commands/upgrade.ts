@@ -1,7 +1,6 @@
 import { existsSync, readdirSync } from "fs";
 import { join, dirname } from "path";
 import { cp, mkdir } from "fs/promises";
-import { homedir } from "os";
 import type { ArcManifest, ArcPaths, HostAdapter, RulesTemplate } from "../types.js";
 import type { Database } from "bun:sqlite";
 import {
@@ -279,41 +278,119 @@ export async function checkUpgrades(
   return results;
 }
 
-/**
- * Find all repos that have a matching config file for a rules template.
- * Scans ~/Developer/* for repos with the config file (e.g., agents-md.yaml).
- */
-function findConsumerRepos(templates: RulesTemplate[]): string[] {
-  const configFiles = templates.map((t) => t.config);
-  const devRoot = process.env.BLUEPRINT_DEV_ROOT ?? join(homedir(), "Developer");
-  const dirs: string[] = [];
+/** Injectable seam for consumer-repo discovery (arc#423). */
+export interface ConsumerScanSeam {
+  /** Environment bag. Defaults to `process.env`. */
+  env?: Record<string, string | undefined>;
+  /** Working directory. Defaults to `process.cwd()`. */
+  cwd?: string;
+}
 
-  try {
-    const entries = readdirSync(devRoot, { withFileTypes: true });
-    for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
-      const repoDir = join(devRoot, entry.name);
-      for (const config of configFiles) {
-        if (existsSync(join(repoDir, config))) {
-          dirs.push(repoDir);
-          break;
+/**
+ * A candidate consumer directory, tagged with HOW arc came to it.
+ *
+ * The provenance decides write authority downstream (arc#423):
+ *   - `cwd`  — the operator ran arc here. That is authority; render directly.
+ *   - `scan` — arc GUESSED by walking a configured root. That is a candidate,
+ *              never an authority: the repo must itself declare this package.
+ */
+export interface ConsumerCandidate {
+  dir: string;
+  origin: "cwd" | "scan";
+}
+
+/**
+ * Find candidate consumer repos for a rules template.
+ *
+ * ## arc#423 — why there is no longer a default scan root
+ *
+ * This function used to resolve `process.env.BLUEPRINT_DEV_ROOT ?? join(homedir(),
+ * "Developer")`. Two faults compounded:
+ *
+ *  1. The `homedir()` was RAW — it reads the OS passwd entry, so no in-process
+ *     `$HOME` pin could redirect it. Every test-isolation technique arc uses was
+ *     silently bypassed, and the scan walked the maintainer's actual home.
+ *  2. The fallback INVENTED authority. `~/Developer` is not something the
+ *     operator configured; it is a guess. 138 repos under it carried a file
+ *     named `agents-md.yaml`, and 136 had their `CLAUDE.md` overwritten with a
+ *     bare `# {PROJECT_NAME}` stub.
+ *
+ * Both are fixed here. The env bag is injectable, so a pinned env is honoured;
+ * and **an unset `BLUEPRINT_DEV_ROOT` now means "do not scan", not "guess
+ * `~/Developer`"**. `homedir()` is gone from this path entirely — there is no
+ * home-relative default left to resolve.
+ *
+ * With no configured root the consumer set is `cwd` alone: the operator chose
+ * that directory by running arc in it. Fan-out across a tree remains available,
+ * but only to an operator who explicitly sets `BLUEPRINT_DEV_ROOT` — and even
+ * then each repo must declare this package (enforced in `generateRules`).
+ */
+export function findConsumerRepos(
+  templates: RulesTemplate[],
+  seam?: ConsumerScanSeam,
+): ConsumerCandidate[] {
+  const configFiles = templates.map((t) => t.config);
+  const env = seam?.env ?? process.env;
+  const cwd = seam?.cwd ?? process.cwd();
+  const candidates: ConsumerCandidate[] = [];
+
+  // NO DEFAULT. An unset BLUEPRINT_DEV_ROOT means "scan nothing" (arc#423).
+  const devRoot = env.BLUEPRINT_DEV_ROOT;
+  if (devRoot) {
+    try {
+      for (const entry of readdirSync(devRoot, { withFileTypes: true })) {
+        if (!entry.isDirectory()) continue;
+        const repoDir = join(devRoot, entry.name);
+        if (configFiles.some((c) => existsSync(join(repoDir, c)))) {
+          candidates.push({ dir: repoDir, origin: "scan" });
         }
       }
-    }
-  } catch (_err: unknown) {
-    // Dev root doesn't exist or can't be read — fall back to cwd
-  }
-
-  // Always include cwd if it has a config and isn't already in the list
-  const cwd = process.cwd();
-  for (const config of configFiles) {
-    if (existsSync(join(cwd, config)) && !dirs.includes(cwd)) {
-      dirs.push(cwd);
-      break;
+    } catch (_err: unknown) {
+      // Configured dev root doesn't exist or can't be read — scan nothing.
     }
   }
 
-  return dirs;
+  // The cwd is always a candidate when it carries a config, and it carries
+  // operator authority rather than scan provenance.
+  if (configFiles.some((c) => existsSync(join(cwd, c)))) {
+    const existing = candidates.find((x) => x.dir === cwd);
+    if (existing) existing.origin = "cwd";
+    else candidates.push({ dir: cwd, origin: "cwd" });
+  }
+
+  return candidates;
+}
+
+/**
+ * Render a package's templates into its consumers, refusing anything arc lacks
+ * authority to write (arc#423).
+ *
+ * Every path arc writes is printed, and every refusal is NAMED rather than
+ * swallowed — a silently skipped repo and a silently clobbered one look
+ * identical from the outside, which is how the original defect survived.
+ */
+async function regenerateConsumerTemplates(
+  installPath: string,
+  packageName: string,
+  templates: RulesTemplate[],
+  seam?: ConsumerScanSeam,
+): Promise<void> {
+  for (const candidate of findConsumerRepos(templates, seam)) {
+    // A scanned dir must prove itself a declared consumer; a cwd the operator
+    // chose does not have to.
+    const opts = candidate.origin === "scan" ? { packageName } : undefined;
+    const results = await generateRules(installPath, templates, candidate.dir, opts);
+
+    for (const r of results) {
+      if (r.written) {
+        console.log(`  Generated ${r.written}`);
+      } else if (r.refused) {
+        console.log(`  ⊘ ${r.error}`);
+      } else if (!r.success) {
+        console.log(`  ⚠ ${candidate.dir}/${r.target}: ${r.error}`);
+      }
+    }
+  }
 }
 
 const REGISTRY_UPGRADE_PRESERVED_OVERLAY_PATHS = [
@@ -560,10 +637,7 @@ export async function upgradePackage(
     // type:governance like compass) regenerates them in its consumers
     // (arc#203).
     if (manifest.provides?.templates?.length) {
-      const consumerDirs = findConsumerRepos(manifest.provides.templates);
-      for (const dir of consumerDirs) {
-        await generateRules(installPath, manifest.provides.templates, dir);
-      }
+      await regenerateConsumerTemplates(installPath, name, manifest.provides.templates);
     }
     commitSwap();
     // Cascade even when this package is already current: a dependency (e.g. a
@@ -677,10 +751,7 @@ export async function upgradePackage(
   // (compass) both regenerate the templates they declare into consumers
   // (arc#203).
   if (manifest.provides?.templates?.length) {
-    const consumerDirs = findConsumerRepos(manifest.provides.templates);
-    for (const dir of consumerDirs) {
-      await generateRules(installPath, manifest.provides.templates, dir);
-    }
+    await regenerateConsumerTemplates(installPath, name, manifest.provides.templates);
   }
 
   // Re-wire extensions (if declared)
