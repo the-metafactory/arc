@@ -5,6 +5,7 @@ import { existsSync, readdirSync } from "fs";
 import YAML from "yaml";
 import { install, resolveRepoReference } from "../../src/commands/install.js";
 import { list, formatListJson, formatList } from "../../src/commands/list.js";
+import { spawnEnv } from "../../src/lib/user-home.js";
 import {
   listSkills,
   removeSkill,
@@ -76,6 +77,7 @@ function git(cwd: string, ...args: string[]): string {
     cwd,
     stdout: "pipe",
     stderr: "pipe",
+    env: spawnEnv(),
   });
   return r.stdout.toString().trim();
 }

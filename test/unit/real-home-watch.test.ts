@@ -142,6 +142,39 @@ describe("arc#421 — the walk budget is PER ROOT", () => {
     // hit go blind the moment pruning is removed.
     expect(DEFAULT_BUDGET).toBeGreaterThan(150_000);
   });
+
+  test("a noisy root cannot truncate a quiet root's leak out of the report", () => {
+    // arc#421 round 5, MINOR. The report used ONE flat cap of 40 per category,
+    // so a `git worktree add` of a few hundred files under a churny root would
+    // push a single-file leak in another root past the cut-off — the operator
+    // would see "… and N more" where the line that mattered should have been.
+    const noisy = join(root, "noisy");
+    const quiet = join(root, "quiet");
+    mkdirSync(noisy, { recursive: true });
+    mkdirSync(quiet, { recursive: true });
+    const roots: WatchedRoot[] = [
+      { path: noisy, why: "a root a concurrent session churns" },
+      { path: quiet, why: "a root only arc writes" },
+    ];
+    const before = snapshotRoots(roots);
+
+    for (let i = 0; i < 200; i++) writeFileSync(join(noisy, `churn-${i}.txt`), "x");
+    const leak = join(quiet, "THE-LEAK.json");
+    writeFileSync(leak, "{}");
+
+    const report = formatLeakReport(
+      diffSnapshots(before, snapshotRoots(roots)),
+      root,
+      roots.map((r) => r.path),
+    )!;
+    expect(report).toContain(leak);
+    // The noisy root is still elided — the cap is per root, not abolished.
+    expect(report).toContain("more under this root");
+    // Sorted globally into one list, the leak sits at index 200 and the old
+    // flat `slice(0, 40)` would have dropped it. Prove that is the mechanism.
+    const flat = [...(diffSnapshots(before, snapshotRoots(roots)).added ?? [])].sort();
+    expect(flat.slice(0, 40)).not.toContain(leak);
+  });
 });
 
 // ---------------------------------------------------------------------------

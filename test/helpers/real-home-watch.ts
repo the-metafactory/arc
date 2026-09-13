@@ -62,6 +62,27 @@ export const PRUNED_MARKER = "pruned-subtree";
  * — `~/.local/share/metafactory` at 142,883 files — with enough headroom that
  * ordinary growth does not trip it, and low enough that a test which explodes
  * a tree inside a watched root still gets caught.
+ *
+ * ── Measured headroom, so the next reader has the number ────────────────────
+ *
+ * Independently re-measured during the arc#421 round-4 confirmation:
+ *
+ * ```
+ *   ~/.local/share/metafactory   142,875 files   47.6% of budget   ← worst root
+ *   ~/.config/metafactory        124,714 files   41.6%
+ *   ~/.bun                        73,721 files   24.6%
+ *   whole snapshot               372,459 files   11.6s, ×2 per run
+ * ```
+ *
+ * Roughly half the budget is spare on the worst root, and each newly installed
+ * metafactory package adds another 10–30k files to it — so perhaps a dozen more
+ * installs before that root reaches the cap, on this box.
+ *
+ * This is a NOTE, not a gate, because exhaustion is loud: `snapshotRoot` sets
+ * `exhausted`, `diffSnapshots` routes the root into `blind`, and
+ * `formatLeakReport` prints "REAL-HOME GUARD WENT BLIND" and exits 1 even when
+ * the diff is otherwise empty. The guard degrades to a failure, never to a
+ * false green.
  */
 export const DEFAULT_BUDGET = 300_000;
 
@@ -230,18 +251,58 @@ export function diffSnapshots(before: Snapshot, after: Snapshot): SnapshotDiff {
 const RED = "[31m";
 const RESET = "[0m";
 
-function list(label: string, paths: string[]): string {
+/**
+ * Most paths a leak report shows per watched root, per category.
+ *
+ * Grouping by root is the point, not the number (arc#421 round 5, MINOR). A
+ * single flat cap let a noisy root elide a quiet one: a `git worktree add` of
+ * 200 files under `~/Developer` would push a one-file leak into
+ * `~/.config/metafactory` past the cut-off, and the operator would never see
+ * the line that mattered. Cross-CATEGORY masking was already impossible
+ * (added/changed/removed are listed separately); this closes the same hole
+ * across roots. Elision is now bounded by root, so a leak can only ever be
+ * hidden by churn in the SAME root — where it is already conspicuous.
+ */
+const MAX_LISTED_PER_ROOT = 40;
+
+/** The watched root a path belongs to, for grouping. */
+function rootOf(path: string, roots: readonly string[]): string {
+  return roots.find((r) => isUnder(path, r)) ?? "(outside every watched root)";
+}
+
+function list(label: string, paths: string[], roots: readonly string[]): string {
   if (!paths.length) return "";
-  const shown = paths.slice(0, 40).map((p) => `    ${p}`).join("\n");
-  const more = paths.length > 40 ? `\n    … and ${paths.length - 40} more` : "";
-  return `\n  ${label} (${paths.length}):\n${shown}${more}`;
+  const byRoot = new Map<string, string[]>();
+  for (const p of paths) {
+    const r = rootOf(p, roots);
+    (byRoot.get(r) ?? byRoot.set(r, []).get(r)!).push(p);
+  }
+  const blocks = [...byRoot.entries()].map(([root, ps]) => {
+    const shown = ps.slice(0, MAX_LISTED_PER_ROOT).map((p) => `      ${p}`).join("\n");
+    const more =
+      ps.length > MAX_LISTED_PER_ROOT
+        ? `\n      … and ${ps.length - MAX_LISTED_PER_ROOT} more under this root`
+        : "";
+    return `\n    ${root} (${ps.length}):\n${shown}${more}`;
+  });
+  return `\n  ${label} (${paths.length}):${blocks.join("")}`;
 }
 
 /**
  * Render a diff as an operator-facing failure, or `null` when the run was
  * clean AND no root went blind.
  */
-export function formatLeakReport(diff: SnapshotDiff, home: string): string | null {
+export function formatLeakReport(
+  diff: SnapshotDiff,
+  home: string,
+  /**
+   * The watched roots, so findings are listed per root rather than in one flat
+   * list that a noisy root could truncate a quiet one out of. Defaulting to
+   * `[home]` keeps the old single-group behaviour for callers that have no
+   * root list to hand.
+   */
+  roots: readonly string[] = [home],
+): string | null {
   const touched = diff.added.length + diff.changed.length + diff.removed.length;
   if (touched === 0 && diff.blind.length === 0) return null;
 
@@ -269,9 +330,9 @@ export function formatLeakReport(diff: SnapshotDiff, home: string): string | nul
         `  src/lib/user-home.ts's userHome(). Find it, pass the root explicitly,\n` +
         `  and re-run. Nothing has been deleted — decide for yourself what is test\n` +
         `  residue and what is yours.` +
-        list("added", diff.added) +
-        list("changed", diff.changed) +
-        list("removed", diff.removed),
+        list("added", diff.added, roots) +
+        list("changed", diff.changed, roots) +
+        list("removed", diff.removed, roots),
     );
   }
 

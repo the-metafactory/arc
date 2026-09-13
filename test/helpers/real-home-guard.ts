@@ -270,7 +270,11 @@ mkdirSync(process.env.BLUEPRINT_DEV_ROOT, { recursive: true });
 // real-home write went undetected until this hook was added). The `exit`
 // listener stays as the backstop for a runner that bypasses the hook.
 const check = (): void => {
-  const report = formatLeakReport(diffSnapshots(BEFORE, snapshotRoots(WATCHED)), REAL_HOME);
+  const report = formatLeakReport(
+    diffSnapshots(BEFORE, snapshotRoots(WATCHED)),
+    REAL_HOME,
+    WATCHED.map((r) => r.path),
+  );
   if (!report) return;
   process.stderr.write(report);
   process.exitCode = 1;

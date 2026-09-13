@@ -50,6 +50,7 @@ import type { PackageReference } from "../types.js";
 import type { CompositionMemberRow } from "./db.js";
 import { canonicalMemberKey } from "./composition-identity.js";
 import { pinRefCandidates } from "./pin-ref.js";
+import { spawnEnv } from "./user-home.js";
 
 /** One member the new release moves to a different pin. */
 export interface MemberMove {
@@ -240,7 +241,13 @@ export function resolveMemberPin(installPath: string, version: string): PinResol
   }
 
   const git = (...args: string[]) =>
-    Bun.spawnSync(["git", ...args], { cwd: installPath, stdout: "pipe", stderr: "pipe" });
+    Bun.spawnSync(["git", ...args], {
+      cwd: installPath,
+      stdout: "pipe",
+      stderr: "pipe",
+      // `...args` is caller-supplied — see arc#421 round 5.
+      env: spawnEnv(),
+    });
 
   const fetch = git("fetch", "--quiet", "--force", "--tags");
   const fetchNote =

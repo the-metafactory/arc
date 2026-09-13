@@ -1997,6 +1997,9 @@ function gitOut(repoPath: string, ...args: string[]): string {
     cwd: repoPath,
     stdout: "pipe",
     stderr: "pipe",
+    // `...args` is caller-supplied, so this call cannot be shown free of
+    // `config --global|--system`. Pin rather than lean on the allowlist.
+    env: spawnEnv(),
   });
   return result.exitCode === 0 ? result.stdout.toString().trim() : "";
 }

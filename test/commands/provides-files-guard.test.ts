@@ -22,6 +22,7 @@ import { install } from "../../src/commands/install.js";
 import { memberMoveInstallOptions, upgradeAll, upgradePackage } from "../../src/commands/upgrade.js";
 import { createArtifactSymlinks } from "../../src/lib/artifact-installer.js";
 import { getSkill } from "../../src/lib/db.js";
+import { spawnEnv } from "../../src/lib/user-home.js";
 import YAML from "yaml";
 
 let env: TestEnv;
@@ -244,6 +245,7 @@ describe("provides.files — the same guards on the arc upgrade re-drop (arc#421
       cwd,
       stdout: "pipe",
       stderr: "pipe",
+      env: spawnEnv(),
     });
   }
 

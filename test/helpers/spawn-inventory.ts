@@ -45,6 +45,48 @@ const CHILD_PROCESS_FNS = [
   "fork",
 ] as const;
 
+/**
+ * What the call site says about the child's environment.
+ *
+ * ── Why the KEY is not enough (arc#421 round 5, BLOCKER) ────────────────────
+ *
+ * Round 4 asked only whether the token `env` appeared as a property key. That
+ * is satisfied by `env: undefined`, which leaks exactly as badly as saying
+ * nothing. Measured on bun 1.3.2 with `process.env.HOME` pinned in-process:
+ *
+ * ```
+ *   omitted                 child HOME = spawn-time HOME       ← the leak
+ *   env: undefined          child HOME = spawn-time HOME       ← same leak
+ *   env: null               child HOME = spawn-time HOME       ← same leak
+ *   env: {}                 child HOME unset → os.homedir()
+ *                           falls back to getpwuid → the operator's REAL home
+ *   env: { ...process.env } child HOME = the pin               ← correct
+ * ```
+ *
+ * `runScript` (`src/lib/scripts.ts`) already carries an optional `env` on its
+ * own options bag and `install-transaction.ts:573` already passes it through as
+ * a possibly-`undefined` shorthand — so `env: opts.env` at the spawn is one
+ * refactor away, and round 4's rule would have called it green.
+ *
+ * So the classification is on the VALUE, and only a value that provably carries
+ * the caller's current `process.env` counts.
+ */
+export type EnvKind =
+  /** No `env` property at all — the child gets the spawn-time environ. */
+  | "absent"
+  /** `spawnEnv()`, `process.env`, or an object spreading either. */
+  | "pinned"
+  /** `env: undefined` / `env: null` — identical to `absent` at runtime. */
+  | "nullish"
+  /** `env: {}` — no HOME at all, so the child falls back to getpwuid. */
+  | "empty"
+  /**
+   * A bare identifier, a member expression, some other call, or an object
+   * literal that never spreads the current environ. Cannot be shown to carry
+   * the pin, and `env: opts.env` (undefined at runtime) is exactly this shape.
+   */
+  | "opaque";
+
 export interface SpawnSite {
   /** Repo-relative path. */
   readonly file: string;
@@ -52,8 +94,12 @@ export interface SpawnSite {
   readonly line: number;
   /** `Bun.spawnSync`, `execSync`, … */
   readonly callee: string;
-  /** True when the call's arguments mention an `env` property. */
+  /** True when the call's arguments mention an `env` property AT ALL. */
   readonly hasEnv: boolean;
+  /** What that `env` property is actually WORTH. See {@link EnvKind}. */
+  readonly envKind: EnvKind;
+  /** The source text of the `env` value, trimmed — for the failure message. */
+  readonly envText: string | null;
   /**
    * The program being run, when the call site states it as a literal —
    * `Bun.spawnSync(["git", …])` → `git`. `null` when the argv (or its head) is
@@ -61,6 +107,20 @@ export interface SpawnSite {
    * command name.
    */
   readonly argvHead: string | null;
+  /**
+   * The WHOLE balanced argument text of the call, newlines collapsed.
+   *
+   * Round 4's `git --global|--system` assertion filtered on `text` — one source
+   * line — and 88 of the 306 no-`env` sites are multi-line calls whose `text`
+   * is just `Bun.spawnSync(`. Assertions about what a child is ASKED TO DO must
+   * read this, not the callee's line.
+   */
+  readonly args: string;
+  /**
+   * True when the argv array contains a `...spread`, so the flags the child
+   * actually receives cannot be enumerated from the source.
+   */
+  readonly argvHasSpread: boolean;
   /** The source line, trimmed — for the failure message. */
   readonly text: string;
 }
@@ -149,8 +209,16 @@ function argText(src: string, open: number): { text: string; end: number } {
   return { text: src.slice(open + 1), end: src.length };
 }
 
-/** Does this argument text name an `env` property (`env:` or shorthand `env`)? */
-function mentionsEnv(args: string): boolean {
+/**
+ * The source text of the `env` property's VALUE, or `null` when no `env`
+ * property appears at all.
+ *
+ * Shorthand (`{ cwd, env }`) yields the identifier `env` itself, which is
+ * correct: a shorthand is a bare identifier whose runtime value the source
+ * cannot show, and `env` being `undefined` is the whole point of the round-5
+ * blocker.
+ */
+function envValueOf(args: string): string | null {
   const mask = codeMask(args);
   for (let i = 0; i + 2 < args.length; i++) {
     if (!mask[i]) continue;
@@ -158,10 +226,53 @@ function mentionsEnv(args: string): boolean {
     if (i > 0 && IDENT.test(args[i - 1])) continue;
     let j = i + 3;
     while (j < args.length && /\s/.test(args[j])) j++;
-    // `env:` (property), `env,` / `env}` (shorthand in an options object).
-    if (args[j] === ":" || args[j] === "," || args[j] === "}") return true;
+
+    // `env,` / `env}` — shorthand in an options object.
+    if (args[j] === "," || args[j] === "}") return "env";
+    if (args[j] !== ":") continue;
+
+    // `env: <value>` — read to the matching `,` or `}` at depth 0.
+    j++;
+    const vmask = mask;
+    let depth = 0;
+    const start = j;
+    while (j < args.length) {
+      if (vmask[j]) {
+        const c = args[j];
+        if (c === "(" || c === "[" || c === "{") depth++;
+        else if (c === ")" || c === "]") depth--;
+        else if (c === "}") {
+          if (depth === 0) break;
+          depth--;
+        } else if (c === "," && depth === 0) break;
+      }
+      j++;
+    }
+    return args.slice(start, j).trim();
   }
-  return false;
+  return null;
+}
+
+/** Does an object-literal body spread the caller's current environ? */
+function spreadsCurrentEnv(body: string): boolean {
+  return /\.\.\.\s*(?:process\.env|spawnEnv\s*\(\s*\))/.test(body);
+}
+
+/** Classify what an `env` value is actually worth. See {@link EnvKind}. */
+export function classifyEnv(value: string | null): EnvKind {
+  if (value === null) return "absent";
+  const v = value.replace(/\s+/g, " ").trim();
+  if (v === "undefined" || v === "null") return "nullish";
+  // `spawnEnv()` — the repo's own pin-carrying helper (src/lib/user-home.ts).
+  if (/^spawnEnv\s*\(\s*\)$/.test(v)) return "pinned";
+  // A direct reference to the live environ object.
+  if (/^process\.env$/.test(v)) return "pinned";
+  if (v.startsWith("{") && v.endsWith("}")) {
+    const body = v.slice(1, -1).trim();
+    if (body.length === 0) return "empty";
+    return spreadsCurrentEnv(body) ? "pinned" : "opaque";
+  }
+  return "opaque";
 }
 
 /**
@@ -195,6 +306,38 @@ function argvHeadOf(args: string): string | null {
   return null;
 }
 
+/**
+ * Does the argv array contain a `...spread`?
+ *
+ * A spread is the one element shape that can inject an unbounded number of
+ * extra words into the child's command line, so a `git` argv carrying one
+ * cannot be shown to be free of `--global` / `--system` (arc#421 round 5,
+ * MAJOR). A plain identifier element is exactly one word and is left alone.
+ */
+function argvHasSpreadIn(args: string): boolean {
+  const trimmed = args.replace(/^\s+/, "");
+  const arrayAt = trimmed.startsWith("[")
+    ? 0
+    : (() => {
+        const m = /^\{[\s\S]*?\bcmd\s*:\s*/.exec(trimmed);
+        return m ? m[0].length : -1;
+      })();
+  if (arrayAt < 0 || trimmed[arrayAt] !== "[") return false;
+  const rest = trimmed.slice(arrayAt);
+  const mask = codeMask(rest);
+  let depth = 0;
+  for (let i = 0; i < rest.length; i++) {
+    if (!mask[i]) continue;
+    const c = rest[i];
+    if (c === "[" || c === "(" || c === "{") depth++;
+    else if (c === "]" || c === ")" || c === "}") {
+      depth--;
+      if (depth === 0) return false; // end of the argv array
+    } else if (depth === 1 && rest.startsWith("...", i)) return true;
+  }
+  return false;
+}
+
 function lineOf(src: string, offset: number): number {
   let line = 1;
   for (let i = 0; i < offset && i < src.length; i++) if (src[i] === "\n") line++;
@@ -211,12 +354,17 @@ export function scanSource(file: string, src: string): SpawnSite[] {
   const record = (calleeStart: number, callee: string, open: number): void => {
     const { text } = argText(src, open);
     const line = lineOf(src, calleeStart);
+    const envText = envValueOf(text);
     sites.push({
       file,
       line,
       callee,
-      hasEnv: mentionsEnv(text),
+      hasEnv: envText !== null,
+      envKind: classifyEnv(envText),
+      envText,
       argvHead: argvHeadOf(text),
+      args: text.replace(/\s+/g, " ").trim(),
+      argvHasSpread: argvHasSpreadIn(text),
       text: (lines[line - 1] ?? "").trim(),
     });
   };

@@ -9,7 +9,12 @@ import { spawnEnv } from "../../src/lib/user-home.js";
 let repo: string;
 
 function git(...args: string[]): { code: number; out: string } {
-  const r = Bun.spawnSync(["git", ...args], { cwd: repo, stdout: "pipe", stderr: "pipe" });
+  const r = Bun.spawnSync(["git", ...args], {
+    cwd: repo,
+    stdout: "pipe",
+    stderr: "pipe",
+    env: spawnEnv(),
+  });
   return { code: r.exitCode, out: r.stdout.toString().trim() };
 }
 
