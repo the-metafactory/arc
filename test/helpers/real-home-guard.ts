@@ -194,6 +194,13 @@ export const WATCHED: WatchedRoot[] = [
   {
     path: h(".bun"),
     why: "`bun install`'s module cache — where arc's un-env'd spawn wrote 290 entries",
+    // `install/cache/@t@` is BUN'S OWN transpiler cache, written by the test
+    // runner executing this very file — 248 entries per CI run. It is the
+    // same shape as the blueprint and cortex exclusions: churn a live process
+    // owns. The package cache proper (`install/cache/<pkg>@<version>/…`),
+    // which is where arc's un-env'd `bun install` actually landed, stays
+    // watched.
+    exclude: [h(".bun", "install", "cache", "@t@")],
   },
 ];
 

@@ -319,6 +319,15 @@ describe("arc#421 — every real-home destination arc can reach is watched", () 
     }
   });
 
+  test("~/.bun's exclusion spares bun's own transpiler cache, not the package cache", () => {
+    // The package cache is where arc's un-env'd `bun install` landed; `@t@` is
+    // what the test runner itself writes while executing this file.
+    const bun = WATCHED.find((w) => w.path === join(HOME, ".bun"))!;
+    expect(bun.exclude).toEqual([join(HOME, ".bun", "install", "cache", "@t@")]);
+    const pkg = join(HOME, ".bun", "install", "cache", "left-behind@1.0.0");
+    expect(bun.exclude!.some((e) => pkg === e || pkg.startsWith(`${e}/`))).toBe(false);
+  });
+
   test("~/.config/cortex's exclusions are narrow — no arc destination is inside one", () => {
     const cortex = WATCHED.find((w) => w.path === join(HOME, ".config", "cortex"))!;
     for (const dest of ["agents", "agents.d", "cortex.yaml", "agents/sage/agent.yaml"]) {
