@@ -562,6 +562,15 @@ export interface ArcManifest {
     cli?: CliProvider[];
     files?: { source: string; target: string }[];
     templates?: RulesTemplate[];
+    /**
+     * Additional spellings a consumer's `template:` may use to declare this
+     * package as its template provider (arc#423). The package name itself is
+     * always accepted; this names the OTHER strings that mean the same package
+     * — e.g. compass is declared as `compass-core` and `compass-standards` by
+     * repos predating the field. Matching is exact after scope-stripping and
+     * lowercasing; see `lib/template-aliases.ts`.
+     */
+    templateAliases?: string[];
     hooks?: HooksDeclaration;
     /**
      * Standalone-bot daemon binary, relative to the package install root.
