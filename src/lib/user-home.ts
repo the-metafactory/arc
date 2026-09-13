@@ -32,3 +32,23 @@ export function userHome(): string {
   const fromEnv = process.env.HOME;
   return fromEnv && fromEnv.length > 0 ? fromEnv : homedir();
 }
+
+/**
+ * The environment to hand a spawned child — the SAME class of bug as
+ * `userHome()`, one process boundary out (arc#421 round 3).
+ *
+ * `Bun.spawnSync(argv)` with no `env` gives the child the SPAWN-time environ,
+ * not the current `process.env`. So an in-process pin is invisible across the
+ * boundary, and a child that resolves its own home-rooted state — real
+ * `cosign` writing `~/.sigstore/root`, real `nsc` writing
+ * `~/.config/nats/nsc/nsc.json` — lands in the operator's real home no matter
+ * what the caller set. That is how arc's own test suite kept writing there
+ * after every in-process leak had been closed.
+ *
+ * Pass this as `env` wherever the child resolves a home- or XDG-rooted path.
+ * In production it is identical to the inherited environ, so nothing changes;
+ * it only makes the boundary SANDBOXABLE.
+ */
+export function spawnEnv(): Record<string, string | undefined> {
+  return { ...process.env };
+}

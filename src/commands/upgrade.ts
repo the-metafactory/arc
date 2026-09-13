@@ -1250,7 +1250,12 @@ export async function upgradeAll(
     const upgradable = checks.filter((c) => c.upgradable);
     for (const check of upgradable) {
       if (seen.has(check.name)) continue;
-      const result = await upgradePackage(db, arc, host, check.name, { _seen: seen });
+      // `...opts` FIRST, exactly as the force branch above. Dropping it here
+      // (arc#421 round 2) made `arc upgrade --replace` silently behave
+      // differently from `arc upgrade <name> --replace`: the flag was accepted,
+      // then discarded, and the refusal told the operator to pass the flag they
+      // had just passed.
+      const result = await upgradePackage(db, arc, host, check.name, { ...opts, _seen: seen });
       results.push(result);
     }
   }

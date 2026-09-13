@@ -9,6 +9,7 @@ import { existsSync } from "fs";
 import { writeFile, mkdir, chmod, rm } from "fs/promises";
 import { tmpdir } from "os";
 import { errorMessage } from "./errors.js";
+import { spawnEnv } from "./user-home.js";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -268,7 +269,8 @@ export async function signSigstoreBundle(
 
   let result: ReturnType<typeof Bun.spawnSync>;
   try {
-    result = Bun.spawnSync(args, { stdout: "pipe", stderr: "pipe" });
+    // env: cosign resolves its TUF cache under $HOME — see spawnEnv().
+    result = Bun.spawnSync(args, { stdout: "pipe", stderr: "pipe", env: spawnEnv() });
   } finally {
     if (tempIdentityTokenPath) {
       await rm(tempIdentityTokenPath, { force: true }).catch(() => {
@@ -326,7 +328,8 @@ export async function verifySigstoreBundle(
       "--certificate-oidc-issuer", expectedIssuer,
       artifactPath,
     ],
-    { stdout: "pipe", stderr: "pipe" },
+    // env: cosign writes its TUF root cache to $HOME/.sigstore — see spawnEnv().
+    { stdout: "pipe", stderr: "pipe", env: spawnEnv() },
   );
 
   const stdout = result.stdout.toString().trim();

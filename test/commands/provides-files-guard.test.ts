@@ -19,7 +19,7 @@ import {
   type TestEnv,
 } from "../helpers/test-env.js";
 import { install } from "../../src/commands/install.js";
-import { upgradePackage } from "../../src/commands/upgrade.js";
+import { upgradeAll, upgradePackage } from "../../src/commands/upgrade.js";
 import { createArtifactSymlinks } from "../../src/lib/artifact-installer.js";
 import { getSkill } from "../../src/lib/db.js";
 import YAML from "yaml";
@@ -409,5 +409,61 @@ describe("provides.files — the same guards on the arc upgrade re-drop (arc#421
     expect(result.success).toBe(true);
     expect(existsSync(newTarget)).toBe(true);
     expect(readFileSync(newTarget, "utf-8")).toBe("packaged v2\n");
+  });
+
+  // -------------------------------------------------------------------------
+  // arc#421 round 2 (MINOR): `arc upgrade --replace` with no package name.
+  //
+  // `upgradeAll`'s non-force branch passed `{ _seen: seen }` and threw `opts`
+  // away, so the bulk path silently behaved differently from the single-package
+  // path: the flag was accepted by the CLI, then never reached
+  // `upgradePackage`, and the refusal told the operator to pass the flag they
+  // had just passed. The force branch spread `opts` correctly, which is why it
+  // went unnoticed.
+  //
+  // These two pin BOTH sides of the difference — drop the spread again and the
+  // first reds.
+  // -------------------------------------------------------------------------
+
+  async function occupiedV2(): Promise<string> {
+    const occupied = join(env.root, "fake-home", "operator-dir");
+    mkdirSync(occupied, { recursive: true });
+    writeFileSync(join(occupied, "MINE.md"), "operator content\n");
+    await installV1ThenStageV2([
+      { source: "claude/agents/governance.md", target: occupied },
+    ]);
+    return occupied;
+  }
+
+  test("`arc upgrade --replace` (no package name) threads the flag through upgradeAll", async () => {
+    const occupied = await occupiedV2();
+
+    const originalWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = () => true;
+    let results;
+    try {
+      results = await upgradeAll(env.db, env.arc, env.host, { replaceProvidesFiles: true });
+    } finally {
+      process.stderr.write = originalWrite;
+    }
+
+    const gov = results.find((r) => r.name === "GovPkg");
+    expect(gov?.error ?? "").not.toContain("--replace");
+    expect(gov?.success).toBe(true);
+    expect(gov?.newVersion).toBe("2.0.0");
+    expect(lstatSync(occupied).isSymbolicLink()).toBe(true);
+  });
+
+  test("`arc upgrade` without --replace still refuses through upgradeAll (the control)", async () => {
+    const occupied = await occupiedV2();
+
+    const results = await upgradeAll(env.db, env.arc, env.host, {});
+
+    const gov = results.find((r) => r.name === "GovPkg");
+    expect(gov?.success).toBe(false);
+    expect(gov?.error).toContain(occupied);
+    expect(gov?.error).toContain("--replace");
+    expect(lstatSync(occupied).isSymbolicLink()).toBe(false);
+    expect(readFileSync(join(occupied, "MINE.md"), "utf-8")).toBe("operator content\n");
   });
 });

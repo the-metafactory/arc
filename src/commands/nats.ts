@@ -8,7 +8,7 @@
 
 import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync, chmodSync } from "node:fs";
 import { join, dirname } from "node:path";
-import { userHome } from "../lib/user-home.js";
+import { spawnEnv, userHome } from "../lib/user-home.js";
 import { generateIdentity } from "./identity.js";
 import {
   ArcNatsCommandError,
@@ -64,7 +64,14 @@ export interface NscResult {
 export type NscRunner = (args: string[]) => NscResult;
 
 const defaultRunner: NscRunner = (args) => {
-  const result = Bun.spawnSync(["nsc", ...args], { stderr: "pipe", stdout: "pipe" });
+  // env: nsc creates and rewrites its store under $HOME (or $XDG_*) — see
+  // spawnEnv(). Without it the child gets the SPAWN-time environ and `nsc env`
+  // writes `~/.config/nats/nsc/nsc.json` into the real home.
+  const result = Bun.spawnSync(["nsc", ...args], {
+    stderr: "pipe",
+    stdout: "pipe",
+    env: spawnEnv(),
+  });
   return {
     exitCode: result.exitCode,
     stdout: result.stdout.toString(),
