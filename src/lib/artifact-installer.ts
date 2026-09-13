@@ -1,6 +1,6 @@
 import { join, dirname, basename } from "path";
-import { existsSync, readdirSync } from "fs";
-import { mkdir } from "fs/promises";
+import { existsSync, readdirSync, lstatSync, readlinkSync } from "fs";
+import { mkdir, rm } from "fs/promises";
 import { readFileSync } from "fs";
 import YAML from "yaml";
 import { ARTIFACT_TYPES } from "../types.js";
@@ -14,6 +14,7 @@ import type {
   LibraryArtifactEntry,
 } from "../types.js";
 import { errorMessage, isErrno } from "./errors.js";
+import { spawnEnv } from "./user-home.js";
 import {
   createSymlink,
   createCliShim,
@@ -25,7 +26,7 @@ import {
 import { generateRules } from "./rules.js";
 import { requireHostDir } from "./hosts/dispatch.js";
 import { resolveHost, type HostOverrides } from "./hosts/registry.js";
-import { resolveProvidesTarget } from "./provides-target.js";
+import { resolveProvidesTarget, findUnexpandedVariable } from "./provides-target.js";
 import { isDarwinLaunchdHost } from "./hosts/darwin-launchd.js";
 import { isLinuxSystemdHost } from "./hosts/linux-systemd.js";
 
@@ -129,12 +130,82 @@ export interface ArtifactSymlinkOpts {
   installDir: string;
   consumerDir?: string;
   quiet?: boolean;
+  /**
+   * arc#420 opt-in: when a `provides.files` target already exists as real
+   * (non-owned) content, replace it instead of refusing. The apply step
+   * removes the existing content OUTRIGHT — no `.pre-arc` sidecar backup,
+   * unlike `createSymlink`'s generic occupied-destination handling — and
+   * prints a warning naming the path, so an operator opting in still sees
+   * what happened. Defaults to false (refuse).
+   */
+  replaceProvidesFiles?: boolean;
 }
 
 /** A single symlink the install will create: `source` linked at `target`. */
 export interface PlannedSymlink {
   source: string;
   target: string;
+}
+
+/** A `provides.files` entry the planner refused (or flagged) at plan time,
+ * with a human-readable reason for the error/warning message. */
+export interface ProvidesFileConflict {
+  source: string;
+  target: string;
+  reason: string;
+}
+
+/**
+ * Render provides.files conflicts (arc#419 unexpanded variables, arc#420
+ * occupied targets) into the one-per-line error format the other
+ * provides.files refusal (`filesMissingSource`, #84/#89) already uses.
+ *
+ * Lives here, beside `ProvidesFileConflict`, because BOTH the install path
+ * (`src/commands/install.ts`) and the upgrade re-drop
+ * (`src/commands/upgrade.ts`) surface the same refusal — an operator must not
+ * be able to tell which command refused from the wording.
+ */
+export function formatProvidesFileConflicts(conflicts: ProvidesFileConflict[]): string {
+  const detail = conflicts.map((c) => `  - ${c.target}: ${c.reason}`).join("\n");
+  return `provides.files entries refused:\n${detail}`;
+}
+
+/**
+ * Classify what currently sits at a `provides.files` target relative to the
+ * source THIS install would symlink there (arc#420).
+ *
+ *  - "absent": nothing at `target` — safe to create.
+ *  - "owned": `target` is already a symlink pointing at exactly
+ *    `expectedSource` — a prior install (or upgrade) of the SAME package;
+ *    safe to replace silently (createSymlink already does this).
+ *  - "occupied": anything else — a real file/dir, or a symlink pointing
+ *    somewhere else. This is operator-owned or foreign content; refuse
+ *    unless the caller opted into `replaceProvidesFiles`.
+ *
+ * Read-only (lstat/readlink) — never writes, matching the rest of the
+ * planner's "reads the disk, never mutates it" contract.
+ */
+function classifyProvidesTargetOccupancy(
+  target: string,
+  expectedSource: string,
+): "absent" | "owned" | "occupied" {
+  let stat;
+  try {
+    stat = lstatSync(target);
+  } catch (err) {
+    if (isErrno(err) && err.code === "ENOENT") return "absent";
+    throw err;
+  }
+  if (stat.isSymbolicLink()) {
+    try {
+      return readlinkSync(target) === expectedSource ? "owned" : "occupied";
+    } catch {
+      // Unreadable symlink (e.g. dangling with permission trouble) — treat
+      // conservatively as foreign rather than assume ownership.
+      return "occupied";
+    }
+  }
+  return "occupied";
 }
 
 /**
@@ -167,6 +238,27 @@ export interface ArtifactSymlinkPlan {
    * non-empty the apply step aborts before mutating the filesystem (#84/#89).
    */
   filesMissingSource: PlannedSymlink[];
+  /**
+   * provides.files entries whose RESOLVED target still contains an
+   * unexpanded `$VAR`/`${VAR}`/`%VAR%` placeholder (arc#419). When non-empty
+   * the apply step aborts before mutating the filesystem — a mis-placed
+   * install one directory named literally `$FOO` is an environment lying
+   * about itself.
+   */
+  unsafeTargets: ProvidesFileConflict[];
+  /**
+   * provides.files entries whose target already exists as content this
+   * package does not own (arc#420) and `replaceProvidesFiles` was NOT set.
+   * When non-empty the apply step aborts before mutating the filesystem.
+   */
+  filesOccupied: ProvidesFileConflict[];
+  /**
+   * provides.files entries whose target is occupied by foreign content that
+   * `replaceProvidesFiles` opted to replace. The apply step removes each of
+   * these outright (no backup) before symlinking, printing a warning per
+   * entry.
+   */
+  filesToReplace: ProvidesFileConflict[];
 }
 
 /**
@@ -175,13 +267,54 @@ export interface ArtifactSymlinkPlan {
  * for the per-type install path logic; never writes.
  */
 export function planArtifactSymlinks(opts: ArtifactSymlinkOpts): ArtifactSymlinkPlan {
-  const { type, manifest, arc, host, installDir } = opts;
+  const { type, manifest, arc, host, installDir, replaceProvidesFiles } = opts;
   const symlinkTargets: PlannedSymlink[] = [];
   const shimNames: string[] = [];
+  const declaredFiles = manifest.provides?.files ?? [];
+  const empty = (
+    overrides: Partial<ArtifactSymlinkPlan>,
+  ): ArtifactSymlinkPlan => ({
+    symlinkTargets: [],
+    shimNames: [],
+    filesMissingSource: [],
+    unsafeTargets: [],
+    filesOccupied: [],
+    filesToReplace: [],
+    ...overrides,
+  });
+
+  // #419 — refuse FIRST, before any other read/write: a target that still
+  // contains an unexpanded `$VAR`/`${VAR}`/`%VAR%` after resolveProvidesTarget
+  // ran is a manifest bug (or a template that was never substituted), not a
+  // real path. Checked ahead of the missing-source pass below so a bad
+  // variable is reported as what it is, not as a confusing "source missing"
+  // for a path nobody intended.
+  const unsafeTargets: ProvidesFileConflict[] = [];
+  for (const file of declaredFiles) {
+    const resolvedTarget = resolveProvidesTarget(file.target);
+    const badToken = findUnexpandedVariable(resolvedTarget);
+    if (badToken) {
+      unsafeTargets.push({
+        source: join(installDir, file.source),
+        target: resolvedTarget,
+        // The offending TOKEN alone is ambiguous — a target like `we$re/x`
+        // reports `$re`, which reads like a path nobody wrote. Name the
+        // declared target AND the resolved target alongside it so the operator
+        // can see exactly which manifest entry and which substring is at fault.
+        reason:
+          `provides.files target "${file.target}" resolved to "${resolvedTarget}", ` +
+          `which still contains the unexpanded variable "${badToken}" (in ` +
+          `"${resolvedTarget}"). Refusing to install rather than create a ` +
+          `literal directory relative to cwd.`,
+      });
+    }
+  }
+  if (unsafeTargets.length) {
+    return empty({ unsafeTargets });
+  }
 
   // Pre-validation pass (#89): assert every provides.files source exists in
   // the package. The apply step bails here with zero filesystem mutation.
-  const declaredFiles = manifest.provides?.files ?? [];
   const filesMissingSource: PlannedSymlink[] = [];
   for (const file of declaredFiles) {
     const sourcePath = join(installDir, file.source);
@@ -193,7 +326,7 @@ export function planArtifactSymlinks(opts: ArtifactSymlinkOpts): ArtifactSymlink
     }
   }
   if (filesMissingSource.length) {
-    return { symlinkTargets: [], shimNames: [], filesMissingSource };
+    return empty({ filesMissingSource });
   }
 
   const shimNamesFor = (): string[] => extractAllCliInfo(manifest).map((e) => e.binName);
@@ -348,14 +481,43 @@ export function planArtifactSymlinks(opts: ArtifactSymlinkOpts): ArtifactSymlink
   }
 
   // Type-agnostic provides.files pass -- every type honors provides.files (#84).
+  //
+  // arc#420: before planning the symlink, classify what's already at each
+  // target. "owned" (a symlink from a prior install/upgrade of THIS package)
+  // is silently fine. "occupied" (real content, or a symlink to something
+  // else) refuses the whole plan unless replaceProvidesFiles opted in, in
+  // which case it's queued for the apply step to remove (no backup) with a
+  // warning, mirroring the posture arc remove already has on the way out
+  // (removeProvidedFile: never touch a target it doesn't recognize as its
+  // own).
+  const filesOccupied: ProvidesFileConflict[] = [];
+  const filesToReplace: ProvidesFileConflict[] = [];
   for (const file of declaredFiles) {
-    symlinkTargets.push({
-      source: join(installDir, file.source),
-      target: resolveProvidesTarget(file.target),
-    });
+    const source = join(installDir, file.source);
+    const target = resolveProvidesTarget(file.target);
+    const state = classifyProvidesTargetOccupancy(target, source);
+    if (state === "occupied") {
+      if (replaceProvidesFiles) {
+        filesToReplace.push({
+          source,
+          target,
+          reason: `--replace: removing existing content at ${target} (not backed up)`,
+        });
+      } else {
+        filesOccupied.push({
+          source,
+          target,
+          reason: `will not replace existing content at ${target}; remove it or pass --replace`,
+        });
+      }
+    }
+    symlinkTargets.push({ source, target });
+  }
+  if (filesOccupied.length) {
+    return empty({ filesOccupied });
   }
 
-  return { symlinkTargets, shimNames, filesMissingSource: [] };
+  return empty({ symlinkTargets, shimNames, filesToReplace });
 }
 
 /**
@@ -480,6 +642,16 @@ export async function artifactDropPresent(opts: {
       return false;
     }
 
+    // arc#419/#420: a refused plan (unexpanded variable, or an occupied
+    // provides.files target with no --replace) returns an EMPTY
+    // symlinkTargets rather than throwing — same "cannot have been validly
+    // dropped" reasoning as the throw above applies here too, so treat it
+    // identically as not-present rather than let the empty-plan fall through
+    // to an accidental `true`.
+    if (plan.unsafeTargets.length || plan.filesOccupied.length) {
+      return false;
+    }
+
     for (const link of plan.symlinkTargets) {
       if (declaredFileTargets.has(link.target)) {
         // provides.files: plain file or symlink -- presence is what matters.
@@ -527,9 +699,25 @@ export async function createArtifactSymlinks(opts: {
   installDir: string;
   consumerDir?: string;
   quiet?: boolean;
+  /** arc#420 opt-in — see {@link ArtifactSymlinkOpts.replaceProvidesFiles}. */
+  replaceProvidesFiles?: boolean;
+  /**
+   * Skip the `rules`/`governance` template-generation side effect, applying
+   * ONLY the symlink plan. Set by `arc upgrade`'s provides.files re-drop
+   * (upgrade.ts), which regenerates templates itself in a later step — into
+   * every consumer repo `findConsumerRepos` discovers, not into `process.cwd()`
+   * — so letting this step also render them would both duplicate the work and
+   * write a template into whatever directory the operator happened to run
+   * `arc upgrade` from. Defaults to false (install's behavior, unchanged).
+   */
+  skipTemplates?: boolean;
 }): Promise<{
   filesCreated: { source: string; target: string }[];
   filesMissingSource: { source: string; target: string }[];
+  /** arc#419 — unexpanded-variable targets refused at plan time. */
+  unsafeTargets: ProvidesFileConflict[];
+  /** arc#420 — occupied targets refused at plan time (no --replace). */
+  filesOccupied: ProvidesFileConflict[];
   record: ArtifactSymlinkRecord;
 }> {
   const { type, manifest, arc, host, installDir, quiet } = opts;
@@ -540,13 +728,37 @@ export async function createArtifactSymlinks(opts: {
   // plan to the filesystem (plus the `rules` template-generation side effect
   // that has no symlink target).
   const plan = planArtifactSymlinks(opts);
+  if (plan.unsafeTargets.length) {
+    return {
+      filesCreated: [],
+      filesMissingSource: [],
+      unsafeTargets: plan.unsafeTargets,
+      filesOccupied: [],
+      record,
+    };
+  }
   if (plan.filesMissingSource.length) {
-    return { filesCreated: [], filesMissingSource: plan.filesMissingSource, record };
+    return {
+      filesCreated: [],
+      filesMissingSource: plan.filesMissingSource,
+      unsafeTargets: [],
+      filesOccupied: [],
+      record,
+    };
+  }
+  if (plan.filesOccupied.length) {
+    return {
+      filesCreated: [],
+      filesMissingSource: [],
+      unsafeTargets: [],
+      filesOccupied: plan.filesOccupied,
+      record,
+    };
   }
 
   // `rules` and `governance` are the types whose apply step has a side effect
   // with no symlink target (template generation into the consumer repo).
-  if (type === "rules" || type === "governance") {
+  if ((type === "rules" || type === "governance") && !opts.skipTemplates) {
     const templates = manifest.provides?.templates ?? [];
     if (templates.length) {
       const consumerDir = opts.consumerDir ?? process.cwd();
@@ -561,6 +773,17 @@ export async function createArtifactSymlinks(opts: {
         }
       }
     }
+  }
+
+  // arc#420 --replace: the plan flagged these targets as occupied by foreign
+  // content but the caller opted in to replacing it. Remove OUTRIGHT here —
+  // deliberately NOT via createSymlink's generic `.pre-arc` sidecar path —
+  // so `--replace` means what the flag says: no backup, and a printed
+  // warning naming exactly what happened, unconditionally (like every other
+  // destructive-by-request step in this codebase).
+  for (const conflict of plan.filesToReplace) {
+    process.stderr.write(`arc: WARN — ${conflict.reason}\n`);
+    await rm(conflict.target, { recursive: true, force: true });
   }
 
   // Apply the plan. provides.files targets may land outside the dirs
@@ -591,7 +814,7 @@ export async function createArtifactSymlinks(opts: {
     record.shims.names.push(...created);
   }
 
-  return { filesCreated, filesMissingSource: [], record };
+  return { filesCreated, filesMissingSource: [], unsafeTargets: [], filesOccupied: [], record };
 }
 
 /**
@@ -662,10 +885,15 @@ function stderrTail(result: { stderr?: Buffer }, exitCode: number | null): strin
 }
 
 function runBunInstall(dir: string, extraArgs: string[]) {
+  // env: MEASURED LEAK (arc#421 round 4). `bun install` writes its module
+  // cache to `$BUN_INSTALL`/`~/.bun/install/cache`; without an explicit env
+  // the child resolved the SPAWN-time home and one suite run put 290 entries
+  // into the operator's real cache, invisible to the test preload's pin.
   return Bun.spawnSync(["bun", "install", ...extraArgs], {
     cwd: dir,
     stdout: "pipe",
     stderr: "pipe",
+    env: spawnEnv(),
   });
 }
 

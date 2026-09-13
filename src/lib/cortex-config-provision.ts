@@ -44,6 +44,7 @@ import { join, isAbsolute, resolve, relative } from "node:path";
 import { tmpdir } from "node:os";
 import YAML from "yaml";
 import type { ArcManifest, CortexConfigFragment, HostAdapter } from "../types.js";
+import { spawnEnv } from "./user-home.js";
 
 // ---------------------------------------------------------------------------
 // Spawn seam (mirrors nats-broker.ts) — production spawns; tests inject.
@@ -59,7 +60,10 @@ export interface CortexSpawnResult {
 export type CortexRunner = (argv: string[]) => CortexSpawnResult;
 
 const defaultRunner: CortexRunner = (argv) => {
-  const result = Bun.spawnSync(argv, { stdout: "pipe", stderr: "pipe" });
+  // env: cortex writes `~/.config/metafactory/cortex`. The injectable runner
+  // below is a seam a test must REMEMBER to use; this is the backstop for
+  // when it does not — see spawnEnv().
+  const result = Bun.spawnSync(argv, { stdout: "pipe", stderr: "pipe", env: spawnEnv() });
   return {
     exitCode: result.exitCode,
     stdout: result.stdout.toString(),

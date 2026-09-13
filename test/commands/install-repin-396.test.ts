@@ -3,6 +3,7 @@ import { mkdirSync } from "fs";
 import { join } from "path";
 import { install } from "../../src/commands/install.js";
 import { getSkill } from "../../src/lib/db.js";
+import { spawnEnv } from "../../src/lib/user-home.js";
 import {
   createTestEnv,
   createMockSkillRepo,
@@ -29,7 +30,12 @@ function commit(repoPath: string, message: string): void {
 }
 
 function git(repoPath: string, ...args: string[]): string {
-  const r = Bun.spawnSync(["git", ...args], { cwd: repoPath, stdout: "pipe", stderr: "pipe" });
+  const r = Bun.spawnSync(["git", ...args], {
+    cwd: repoPath,
+    stdout: "pipe",
+    stderr: "pipe",
+    env: spawnEnv(),
+  });
   return r.stdout.toString().trim();
 }
 

@@ -31,6 +31,7 @@ import { basename, dirname, join } from "path";
 import { spawnSync } from "node:child_process";
 import YAML from "yaml";
 import { loadRegistry } from "../src/lib/registry.js";
+import { spawnEnv } from "../src/lib/user-home.js";
 import {
   generateRegistry,
   serializeRegistry,
@@ -69,7 +70,13 @@ function parseArgs(argv: string[]): Args {
 
 /** Run `gh` and return stdout, or null on any non-zero exit (missing file etc.). */
 function gh(ghArgs: string[]): string | null {
-  const r = spawnSync("gh", ghArgs, { encoding: "utf-8", maxBuffer: 32 * 1024 * 1024 });
+  // env: gh reads and refreshes its own state under `~/.config/gh` —
+  // see src/lib/user-home.ts's spawnEnv().
+  const r = spawnSync("gh", ghArgs, {
+    encoding: "utf-8",
+    maxBuffer: 32 * 1024 * 1024,
+    env: spawnEnv(),
+  });
   if (r.status !== 0) return null;
   return r.stdout;
 }

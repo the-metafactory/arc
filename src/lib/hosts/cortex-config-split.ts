@@ -1,6 +1,6 @@
 import { dirname, join, resolve } from "path";
 import { existsSync, statSync } from "fs";
-import { homedir } from "os";
+import { userHome } from "../user-home.js";
 import {
   resolveCortexConfigDir,
   type CortexConfigDirSeam,
@@ -70,7 +70,7 @@ export interface ResolveCortexConfigRootOpts {
    * Mutually exclusive with `configDir`.
    */
   stack?: string;
-  /** Home dir override (test isolation). Defaults to os.homedir(). */
+  /** Home dir override (test isolation). Defaults to the process `$HOME` (`userHome()`), matching resolveCortexConfigDir. */
   home?: string;
   /**
    * Injectable environment (test isolation) for the existence-gated stack-base
@@ -150,7 +150,7 @@ function expandHome(p: string, home: string): string {
 export function resolveCortexConfigRoot(
   opts: ResolveCortexConfigRootOpts,
 ): ResolvedCortexConfigRoot {
-  const home = opts.home ?? homedir();
+  const home = opts.home ?? userHome();
   const seam: CortexConfigDirSeam = { home, env: opts.env };
 
   if (opts.configDir != null && opts.stack != null) {

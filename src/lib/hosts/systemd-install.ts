@@ -11,6 +11,7 @@ import { createSymlink, removeSymlink } from "../symlinks.js";
 import { errorMessage, isErrno } from "../errors.js";
 import { renderTokens, type TokenMap } from "./render-tokens.js";
 import { stateDir } from "../xdg-paths.js";
+import { spawnEnv } from "../user-home.js";
 
 /**
  * linux-systemd install/remove dispatch (arc#311, L2).
@@ -158,7 +159,13 @@ export async function withSpawnTimeout<T>(
 }
 
 async function defaultSystemctlRunner(args: string[]): Promise<SystemctlResult> {
-  const proc = Bun.spawn(["systemctl", ...args], { stdout: "pipe", stderr: "pipe" });
+  // env: `systemctl --user` resolves unit state under `$XDG_RUNTIME_DIR` and
+  // `~/.config/systemd/user` — see spawnEnv().
+  const proc = Bun.spawn(["systemctl", ...args], {
+    stdout: "pipe",
+    stderr: "pipe",
+    env: spawnEnv(),
+  });
   return withSpawnTimeout(
     proc,
     (async () => {

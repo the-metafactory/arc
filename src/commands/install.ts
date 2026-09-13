@@ -22,6 +22,7 @@ import {
   replaceCapabilities,
 } from "../lib/db.js";
 import { dirtyWorktreeEntries, restoreHead } from "../lib/git-tree.js";
+import { spawnEnv } from "../lib/user-home.js";
 import { runScript, runLifecycleScripts } from "../lib/scripts.js";
 import { satisfiesRange } from "../lib/semver.js";
 import { isSafePinRef, isSemverShapedRef, pinRefCandidates } from "../lib/pin-ref.js";
@@ -29,6 +30,7 @@ import {
   type ArtifactSymlinkRecord,
   artifactDropPresent,
   createArtifactSymlinks,
+  formatProvidesFileConflicts,
   installNodeDependencies,
   reportNodeDependencyResult,
   rollbackArtifactSymlinks,
@@ -231,6 +233,16 @@ export interface InstallOptions {
    * env only tells the postinstall scripts which stack to reload/issue against.
    */
   cortexConfigEnv?: Record<string, string>;
+  /**
+   * arc#420 — `--replace`. When a `provides.files` target already exists as
+   * content this package does not own (not a symlink pointing at this
+   * package's own source), install refuses by default, naming the path.
+   * Passing this opts into replacing it outright instead — no `.pre-arc`
+   * backup, a warning is printed naming what was removed. An owned symlink
+   * from a PRIOR install of the SAME package is always updated silently
+   * (the upgrade path) regardless of this flag.
+   */
+  replaceProvidesFiles?: boolean;
   /**
    * arc#400 — reference-composition seams (`type: bundle` / `type: factory`).
    *
@@ -940,6 +952,7 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
       quiet: opts.yes,
       hostOverrides: opts.hostOverrides,
       systemctlRunner: opts.systemctlRunner,
+      replaceProvidesFiles: opts.replaceProvidesFiles,
     });
     if ("error" in multi) {
       return { success: false, error: multi.error };
@@ -948,7 +961,7 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
     launchdRecords = multi.launchd;
     systemdRecords = multi.systemd;
   } else {
-    symlinkResult = await createArtifactSymlinks({
+    const applyResult = await createArtifactSymlinks({
       type: manifest.type,
       manifest,
       arc,
@@ -956,9 +969,14 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
       installDir: installPath,
       consumerDir: opts.consumerDir,
       quiet: opts.yes,
+      replaceProvidesFiles: opts.replaceProvidesFiles,
     });
-    if (symlinkResult.filesMissingSource.length) {
-      const detail = symlinkResult.filesMissingSource
+    symlinkResult = applyResult;
+    if (applyResult.unsafeTargets.length) {
+      return { success: false, error: formatProvidesFileConflicts(applyResult.unsafeTargets) };
+    }
+    if (applyResult.filesMissingSource.length) {
+      const detail = applyResult.filesMissingSource
         .map((f) => `  - ${f.source} -> ${f.target}`)
         .join("\n");
       return {
@@ -966,6 +984,9 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
         error:
           `Manifest declares provides.files entries whose source does not exist in the package:\n${detail}`,
       };
+    }
+    if (applyResult.filesOccupied.length) {
+      return { success: false, error: formatProvidesFileConflicts(applyResult.filesOccupied) };
     }
   }
   // 5b. Complete the post-landing Install Transaction.
@@ -1501,6 +1522,7 @@ export async function installSingleArtifact(
       quiet: opts.yes,
       hostOverrides: opts.hostOverrides,
       systemctlRunner: opts.systemctlRunner,
+      replaceProvidesFiles: opts.replaceProvidesFiles,
     });
     if ("error" in multi) {
       return { success: false, error: multi.error };
@@ -1509,7 +1531,7 @@ export async function installSingleArtifact(
     artifactLaunchdRecords = multi.launchd;
     artifactSystemdRecords = multi.systemd;
   } else {
-    symlinkResult = await createArtifactSymlinks({
+    const applyResult = await createArtifactSymlinks({
       type: manifest.type,
       manifest,
       arc,
@@ -1517,9 +1539,14 @@ export async function installSingleArtifact(
       installDir: artifactDir,
       consumerDir: opts.consumerDir,
       quiet: opts.yes,
+      replaceProvidesFiles: opts.replaceProvidesFiles,
     });
-    if (symlinkResult.filesMissingSource.length) {
-      const detail = symlinkResult.filesMissingSource
+    symlinkResult = applyResult;
+    if (applyResult.unsafeTargets.length) {
+      return { success: false, error: formatProvidesFileConflicts(applyResult.unsafeTargets) };
+    }
+    if (applyResult.filesMissingSource.length) {
+      const detail = applyResult.filesMissingSource
         .map((f) => `  - ${f.source} -> ${f.target}`)
         .join("\n");
       return {
@@ -1527,6 +1554,9 @@ export async function installSingleArtifact(
         error:
           `Manifest declares provides.files entries whose source does not exist in the package:\n${detail}`,
       };
+    }
+    if (applyResult.filesOccupied.length) {
+      return { success: false, error: formatProvidesFileConflicts(applyResult.filesOccupied) };
     }
   }
   // S1 (arc#244): library-artifact path — same config-split steering as the
@@ -1646,6 +1676,7 @@ async function installPerTarget(opts: {
   quiet?: boolean;
   hostOverrides?: HostOverrides;
   systemctlRunner?: SystemctlRunner;
+  replaceProvidesFiles?: boolean;
 }): Promise<MultiTargetInstallResult | { error: string }> {
   const ordered = orderTargetsForInstall(opts.targets);
   const merged: ArtifactSymlinkRecord = {
@@ -1759,10 +1790,15 @@ async function installPerTarget(opts: {
         installDir: opts.installPath,
         consumerDir: opts.consumerDir,
         quiet: opts.quiet,
+        replaceProvidesFiles: opts.replaceProvidesFiles,
       });
     } catch (err) {
       await rollbackAll();
       return { error: `[${targetId}] ${errorMessage(err)}` };
+    }
+    if (r.unsafeTargets.length) {
+      await rollbackAll();
+      return { error: `[${targetId}] ${formatProvidesFileConflicts(r.unsafeTargets)}` };
     }
     if (r.filesMissingSource.length) {
       const detail = r.filesMissingSource
@@ -1773,6 +1809,10 @@ async function installPerTarget(opts: {
         error:
           `[${targetId}] provides.files entries whose source does not exist in the package:\n${detail}`,
       };
+    }
+    if (r.filesOccupied.length) {
+      await rollbackAll();
+      return { error: `[${targetId}] ${formatProvidesFileConflicts(r.filesOccupied)}` };
     }
     merged.symlinks.push(...r.record.symlinks);
     merged.shims.names.push(...r.record.shims.names);
@@ -1957,6 +1997,9 @@ function gitOut(repoPath: string, ...args: string[]): string {
     cwd: repoPath,
     stdout: "pipe",
     stderr: "pipe",
+    // `...args` is caller-supplied, so this call cannot be shown free of
+    // `config --global|--system`. Pin rather than lean on the allowlist.
+    env: spawnEnv(),
   });
   return result.exitCode === 0 ? result.stdout.toString().trim() : "";
 }
@@ -2104,10 +2147,13 @@ export function defaultToolProbe(name: string): ReturnType<ToolProbe> {
   if (!path) return { found: false };
 
   try {
+    // env: `path` is an ARBITRARY tool named by a manifest's `requires`. What
+    // it does on `--version` is not ours to assume — see spawnEnv().
     const probe = Bun.spawnSync([path, "--version"], {
       stdout: "pipe",
       stderr: "pipe",
       timeout: 5_000,
+      env: spawnEnv(),
     });
     const output = `${probe.stdout.toString()}\n${probe.stderr.toString()}`;
     return { found: true, path, version: parseToolVersion(output) };

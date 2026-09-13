@@ -1,4 +1,5 @@
 import type { DeviceCodeResponse, DeviceVerifyResponse, DeviceAuthResult } from "../types.js";
+import { spawnEnv } from "./user-home.js";
 
 interface PollOptions {
   interval: number;
@@ -114,7 +115,9 @@ export async function pollForToken(
 export function openBrowser(url: string): boolean {
   try {
     const cmd = process.platform === "darwin" ? "open" : "xdg-open";
-    Bun.spawn([cmd, url], { stdout: "ignore", stderr: "ignore" });
+    // env: the browser launcher inherits the caller's environment; without an
+    // explicit env it would get the SPAWN-time one instead — see spawnEnv().
+    Bun.spawn([cmd, url], { stdout: "ignore", stderr: "ignore", env: spawnEnv() });
     return true;
   } catch (_err) {
     // spawn failed -- caller handles via return value

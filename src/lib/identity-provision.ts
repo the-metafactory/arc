@@ -65,7 +65,7 @@ import {
   readFileSync,
 } from "node:fs";
 import { join } from "node:path";
-import { homedir } from "node:os";
+import { userHome } from "./user-home.js";
 import { randomBytes } from "node:crypto";
 import { Database } from "bun:sqlite";
 import { getPublicKeyAsync } from "@noble/ed25519";
@@ -89,13 +89,13 @@ export function agentDidFromId(agentId: string): string {
 
 /** Resolve the canonical NKey seed path for an agent id, honoring an override base. */
 export function nkeyPathForAgent(agentId: string, natsDir?: string): string {
-  const base = natsDir ?? join(homedir(), ".config", "nats");
+  const base = natsDir ?? join(userHome(), ".config", "nats");
   return join(base, `${agentId}.nk`);
 }
 
 /** Resolve the default instance-state directory for an agent id, honoring an override base. */
 export function instanceDirForAgent(agentId: string, agentsBaseDir?: string): string {
-  const base = agentsBaseDir ?? join(homedir(), ".config", "cortex", "agents");
+  const base = agentsBaseDir ?? join(userHome(), ".config", "cortex", "agents");
   return join(base, agentId);
 }
 
@@ -106,7 +106,7 @@ export function instanceDirForAgent(agentId: string, agentsBaseDir?: string): st
  * instance dir. Honors an override base (tests + the `MF_SIDECAR_DIR` contract).
  */
 export function provisionSidecarPathForAgent(agentId: string, sidecarDir?: string): string {
-  const base = sidecarDir ?? join(homedir(), ".config", "metafactory", "agents");
+  const base = sidecarDir ?? join(userHome(), ".config", "metafactory", "agents");
   return join(base, `${agentId}.provision.json`);
 }
 

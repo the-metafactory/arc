@@ -7,6 +7,7 @@ import {
   installNodeDependencies,
   reportNodeDependencyResult,
 } from "../../src/lib/artifact-installer.js";
+import { spawnEnv } from "../../src/lib/user-home.js";
 
 let testDir: string;
 
@@ -78,7 +79,14 @@ describe("installNodeDependencies", () => {
       // Simulate a bundle repo cloned WITH a committed lockfile: generate one
       // via a plain install, matching how an author would have committed it
       // after `bun install` in their own repo.
-      Bun.spawnSync(["bun", "install"], { cwd: testDir, stdout: "pipe", stderr: "pipe" });
+      Bun.spawnSync(["bun", "install"], {
+      cwd: testDir,
+      stdout: "pipe",
+      stderr: "pipe",
+      // env: a REAL `bun install`. Without this it writes into the
+      // spawn-time home's module cache — see spawnEnv().
+      env: spawnEnv(),
+    });
       expect(existsSync(join(testDir, "bun.lock"))).toBe(true);
       await rm(join(testDir, "node_modules"), { recursive: true, force: true });
 
@@ -102,7 +110,14 @@ describe("installNodeDependencies", () => {
         join(testDir, "package.json"),
         JSON.stringify({ name: "fixture", version: "1.0.0", dependencies: { yaml: "^2.7.0" } }),
       );
-      Bun.spawnSync(["bun", "install"], { cwd: testDir, stdout: "pipe", stderr: "pipe" });
+      Bun.spawnSync(["bun", "install"], {
+      cwd: testDir,
+      stdout: "pipe",
+      stderr: "pipe",
+      // env: a REAL `bun install`. Without this it writes into the
+      // spawn-time home's module cache — see spawnEnv().
+      env: spawnEnv(),
+    });
       expect(existsSync(join(testDir, "bun.lock"))).toBe(true);
       await rm(join(testDir, "node_modules"), { recursive: true, force: true });
 
@@ -158,7 +173,14 @@ describe("installNodeDependencies", () => {
         join(testDir, "package.json"),
         JSON.stringify({ name: "fixture", version: "1.0.0", dependencies: { yaml: "^2.7.0" } }),
       );
-      Bun.spawnSync(["bun", "install"], { cwd: testDir, stdout: "pipe", stderr: "pipe" });
+      Bun.spawnSync(["bun", "install"], {
+      cwd: testDir,
+      stdout: "pipe",
+      stderr: "pipe",
+      // env: a REAL `bun install`. Without this it writes into the
+      // spawn-time home's module cache — see spawnEnv().
+      env: spawnEnv(),
+    });
       expect(existsSync(join(testDir, "bun.lock"))).toBe(true);
       await rm(join(testDir, "node_modules"), { recursive: true, force: true });
 

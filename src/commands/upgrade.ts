@@ -25,8 +25,6 @@ import {
   type MemberMove,
 } from "../lib/composition-upgrade.js";
 import { readCompositionReferences, validateCompositionFields } from "../lib/composition.js";
-import { createSymlink } from "../lib/symlinks.js";
-import { resolveProvidesTarget } from "../lib/provides-target.js";
 import { findGitRoot } from "../lib/paths.js";
 import { loadSources } from "../lib/sources.js";
 import { findInAllSources } from "../lib/remote-registry.js";
@@ -42,11 +40,27 @@ import { validateTemplateAliases } from "../lib/validate-manifest.js";
 import { wireExtensions } from "../lib/extensions.js";
 import { requireBrokerForManifest } from "../lib/nats-broker.js";
 import { runSomaSkillProjection } from "../lib/soma-projection.js";
-import { installNodeDependencies, reportNodeDependencyResult, dropUntrackedBunLock } from "../lib/artifact-installer.js";
+import {
+  createArtifactSymlinks,
+  dropUntrackedBunLock,
+  formatProvidesFileConflicts,
+  installNodeDependencies,
+  reportNodeDependencyResult,
+} from "../lib/artifact-installer.js";
 
 export interface UpgradeOptions {
   /** Re-run the upgrade pipeline even when already at the latest version. */
   force?: boolean;
+  /**
+   * arc#420 opt-in, same semantics as `arc install --replace`: when a
+   * `provides.files` target that the upgraded version wants is occupied by
+   * content this package does not own, remove it OUTRIGHT (no `.pre-arc`
+   * backup) instead of refusing, with an unconditional stderr warning naming
+   * what was removed. Defaults to false (refuse). An OWNED symlink from the
+   * previous version is updated silently either way — that is the ordinary
+   * upgrade, and the flag has no bearing on it.
+   */
+  replaceProvidesFiles?: boolean;
   /**
    * Internal: packages already upgraded by this command (arc#346). Threads
    * through the `depends_on.packages` cascade so a shared dep or a cycle is
@@ -352,6 +366,27 @@ function scanRootRefusal(devRoot: string): string | null {
 }
 
 /**
+ * The install options for moving ONE factory member to its new pin.
+ *
+ * Broken out of `upgradeFactory`'s `moveMember` closure so the flag threading
+ * is testable (arc#421 round 4, minor): this was the one `install()` left on
+ * the upgrade path that dropped `replaceProvidesFiles`. It failed SAFE — a
+ * member whose `provides.files` target is occupied refuses — but it refused
+ * while telling the operator to pass the flag they had just passed.
+ */
+export function memberMoveInstallOptions(
+  move: MemberMove,
+  opts?: Pick<UpgradeOptions, "replaceProvidesFiles">,
+): { repoUrl: string; pinnedRef: string; yes: true; replaceProvidesFiles?: boolean } {
+  return {
+    repoUrl: move.ref,
+    pinnedRef: move.to,
+    yes: true,
+    replaceProvidesFiles: opts?.replaceProvidesFiles,
+  };
+}
+
+/**
  * Find candidate consumer repos for a rules template.
  *
  * ## arc#423 — why there is no longer a default scan root
@@ -518,7 +553,7 @@ async function cascadeDependencyUpgrades(
   host: HostAdapter,
   manifest: { depends_on?: { packages?: { name: string }[] } },
   seen: Set<string>,
-  opts?: { force?: boolean },
+  opts?: Pick<UpgradeOptions, "force" | "replaceProvidesFiles">,
 ): Promise<UpgradeResult[]> {
   const cascaded: UpgradeResult[] = [];
   for (const dep of manifest.depends_on?.packages ?? []) {
@@ -528,7 +563,11 @@ async function cascadeDependencyUpgrades(
     // A missing/disabled dep is not this function's concern (install path).
     if (existing?.status !== "active" || !existsSync(existing.install_path)) continue;
     cascaded.push(
-      await upgradePackage(db, arc, host, dep.name, { force: opts?.force, _seen: seen }),
+      await upgradePackage(db, arc, host, dep.name, {
+        force: opts?.force,
+        replaceProvidesFiles: opts?.replaceProvidesFiles,
+        _seen: seen,
+      }),
     );
   }
   return cascaded;
@@ -757,15 +796,60 @@ export async function upgradePackage(
   // install payload is provides.files — without this re-drop, a governance
   // package that adds or moves a drop between versions never lands it on
   // upgrade.
+  //
+  // arc#421 round 2 (BLOCKER): this re-drop used to call resolveProvidesTarget
+  // + createSymlink DIRECTLY, never reaching planArtifactSymlinks — so BOTH
+  // install-time guards (arc#419 unexpanded `$VAR`, arc#420 occupied target)
+  // were bypassed on every upgrade. A `$FOO` target created a literal `$FOO`
+  // directory relative to cwd and an operator's directory was silently
+  // displaced to a `.pre-arc` sidecar, at exit 0 with an empty stderr. compass
+  // ships as `type: governance`, so this is its NORMAL upgrade path. The
+  // re-drop now goes through the SAME plan-then-apply pair install uses
+  // (planArtifactSymlinks runs inside createArtifactSymlinks), which makes the
+  // guards structural rather than duplicated: there is no second code path
+  // left to forget them.
+  //
+  // `skipTemplates` because the template regeneration for a governance package
+  // is done further down, into every consumer repo findConsumerRepos discovers
+  // — not into process.cwd(), which is what this step would otherwise do.
   if (
     (manifest.type === "component" || manifest.type === "governance") &&
     manifest.provides?.files?.length
   ) {
-    for (const file of manifest.provides.files) {
-      const sourcePath = join(installPath, file.source);
-      const targetPath = resolveProvidesTarget(file.target);
-      await mkdir(dirname(targetPath), { recursive: true });
-      await createSymlink(sourcePath, targetPath);
+    const redrop = await createArtifactSymlinks({
+      type: manifest.type,
+      manifest,
+      arc,
+      host,
+      installDir: installPath,
+      quiet: true,
+      replaceProvidesFiles: opts?.replaceProvidesFiles,
+      skipTemplates: true,
+    });
+    const refused = [...redrop.unsafeTargets, ...redrop.filesOccupied];
+    if (refused.length) {
+      // Refused at PLAN time — nothing was written, so rolling the code pull
+      // back leaves the previous version installed and working with its DB row
+      // untouched (the version bump happens only after this point).
+      const note = rollback();
+      return {
+        success: false,
+        name,
+        oldVersion,
+        error: formatProvidesFileConflicts(refused) + note,
+      };
+    }
+    if (redrop.filesMissingSource.length) {
+      const note = rollback();
+      const detail = redrop.filesMissingSource
+        .map((f) => `  - ${f.source} -> ${f.target}`)
+        .join("\n");
+      return {
+        success: false,
+        name,
+        oldVersion,
+        error: `provides.files sources missing in the upgraded package:\n${detail}` + note,
+      };
     }
   }
 
@@ -1078,8 +1162,7 @@ async function upgradeComposition(
   // 6. The members, each through the ordinary pinned-install path.
   const moveMember =
     opts?._moveMember ??
-    ((move: MemberMove) =>
-      install({ arc, host, db, repoUrl: move.ref, pinnedRef: move.to, yes: true }));
+    ((move: MemberMove) => install({ arc, host, db, ...memberMoveInstallOptions(move, opts) }));
 
   const memberResults: NonNullable<UpgradeResult["members"]> = [];
   for (const move of moves) {
@@ -1165,7 +1248,7 @@ async function upgradeComposition(
 export async function upgradeAll(
   db: Database,
   arc: ArcPaths, host: HostAdapter,
-  opts?: { force?: boolean }
+  opts?: Pick<UpgradeOptions, "force" | "replaceProvidesFiles">
 ): Promise<UpgradeResult[]> {
   const results: UpgradeResult[] = [];
   // One shared set across the whole run: when a package cascades an upgrade to
@@ -1187,7 +1270,12 @@ export async function upgradeAll(
     const upgradable = checks.filter((c) => c.upgradable);
     for (const check of upgradable) {
       if (seen.has(check.name)) continue;
-      const result = await upgradePackage(db, arc, host, check.name, { _seen: seen });
+      // `...opts` FIRST, exactly as the force branch above. Dropping it here
+      // (arc#421 round 2) made `arc upgrade --replace` silently behave
+      // differently from `arc upgrade <name> --replace`: the flag was accepted,
+      // then discarded, and the refusal told the operator to pass the flag they
+      // had just passed.
+      const result = await upgradePackage(db, arc, host, check.name, { ...opts, _seen: seen });
       results.push(result);
     }
   }
@@ -1261,7 +1349,7 @@ export async function upgradeLibrary(
   db: Database,
   arc: ArcPaths, host: HostAdapter,
   libraryName: string,
-  opts?: { force?: boolean }
+  opts?: Pick<UpgradeOptions, "force" | "replaceProvidesFiles">
 ): Promise<UpgradeResult[]> {
   const artifacts = listByLibrary(db, libraryName);
   if (!artifacts.length) {

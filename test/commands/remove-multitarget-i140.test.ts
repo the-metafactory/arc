@@ -106,7 +106,7 @@ runtime:
 provides:
   files:
     - source: ${opts.name}.md
-      target: ~/.config/cortex/agents.d/${opts.name}.md
+      target: ${cortexRoot}/agents.d/${opts.name}.md
   binary: bin/${opts.name}
   plist: services/ai.meta-factory.${opts.name}.plist
 ${lifecycleYaml}`,
@@ -123,33 +123,33 @@ ${lifecycleYaml}`,
 
 async function installBot(name: string, lifecycle?: any) {
   const repo = await makeStandaloneBotRepo({ name, lifecycle });
-  // Override env HOME so provides.files (~/.config/...) lands inside env.root
-  // — without this, sage-shape installs leak into the developer's real ~/.
-  const originalHome = process.env.HOME;
-  process.env.HOME = env.root;
-  try {
-    const result = await install({
-      arc: env.arc, host: env.host, db: env.db,
-      repoUrl: repo.url, yes: true,
-      hostOverrides: hostOverrides(),
-    });
-    return result;
-  } finally {
-    process.env.HOME = originalHome;
-  }
+  // makeStandaloneBotRepo's provides.files target is `${cortexRoot}/…`
+  // (absolute, sandboxed) rather than `~/…`. resolveProvidesTarget expands `~`
+  // via os.homedir(), which DOES honour `$HOME` when it is set at process
+  // SPAWN — what it ignores is an in-process `process.env.HOME = …` assignment
+  // after the process has started (Bun resolves the value once and caches it):
+  //
+  //   bun -e 'process.env.HOME="/tmp/x"; console.log(os.homedir())'  → real home
+  //   HOME=/tmp/x bun -e 'console.log(os.homedir())'                 → /tmp/x
+  //
+  // So the in-process HOME dance this file used to do could never have worked,
+  // and a `~`-based target here leaked into the developer's real
+  // `~/.config/cortex/agents.d` on every run — invisible previously because
+  // createSymlink silently replaced whatever was there; arc#420's
+  // occupied-target refusal now surfaces exactly that. Passing the sandboxed
+  // root explicitly is the fix that depends on neither behaviour.
+  return await install({
+    arc: env.arc, host: env.host, db: env.db,
+    repoUrl: repo.url, yes: true,
+    hostOverrides: hostOverrides(),
+  });
 }
 
 async function removeBot(name: string) {
-  const originalHome = process.env.HOME;
-  process.env.HOME = env.root;
-  try {
-    return await remove(env.db, env.arc, env.host, name, {
-      quiet: true,
-      hostOverrides: hostOverrides(),
-    });
-  } finally {
-    process.env.HOME = originalHome;
-  }
+  return await remove(env.db, env.arc, env.host, name, {
+    quiet: true,
+    hostOverrides: hostOverrides(),
+  });
 }
 
 describe("remove: multi-target uninstall", () => {

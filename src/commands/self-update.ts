@@ -1,6 +1,7 @@
 import { readFileSync } from "fs";
 import { join } from "path";
 import { dropUntrackedBunLock, installNodeDependencies } from "../lib/artifact-installer.js";
+import { spawnEnv } from "../lib/user-home.js";
 
 export interface SelfUpdateResult {
   success: boolean;
@@ -137,7 +138,9 @@ export function checkSelfUpdate(): SelfUpdateCheck {
   try {
     const result = Bun.spawnSync(
       ["gh", "release", "view", "--repo", "the-metafactory/arc", "--json", "tagName", "--jq", ".tagName"],
-      { stdout: "pipe", stderr: "pipe", timeout: 5000 }
+      // env: gh reads and refreshes its own state under `~/.config/gh` —
+      // see spawnEnv().
+      { stdout: "pipe", stderr: "pipe", timeout: 5000, env: spawnEnv() }
     );
     if (result.exitCode === 0) {
       const tag = result.stdout.toString().trim().replace(/^v/, "");

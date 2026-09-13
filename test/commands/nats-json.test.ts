@@ -29,9 +29,9 @@ import {
   type NscRunner,
 } from "../../src/commands/nats.js";
 import { ArcNatsCommandError, ARC_NATS_SCHEMA } from "../../src/lib/json-response.js";
-import { mkdtempSync, writeFileSync, mkdirSync, existsSync, unlinkSync } from "node:fs";
+import { mkdtempSync, writeFileSync, mkdirSync, existsSync, statSync, unlinkSync } from "node:fs";
 import { join, dirname } from "node:path";
-import { tmpdir, homedir } from "node:os";
+import { tmpdir, homedir as realHomedir } from "node:os";
 
 const TEST_ACCOUNT = "OP_TEST_JSON";
 const TEST_BOT = "arc-json-test-bot";
@@ -557,12 +557,38 @@ describe("setupOperator --json: aggregate shape", () => {
   });
 
   test("mixed outcome: one valid + one invalid name; summary 1 ok / 1 failed", async () => {
-    // The valid bot's addBot call would proceed to filesystem + identity
-    // writes; to keep this hermetic we shadow $HOME to a tmp directory so
-    // nothing touches the real `~/.config/nats` or myelin registry.
+    // The valid bot's addBot call proceeds to real filesystem + identity
+    // writes. Shadowing $HOME in-process (what this test used to do) could
+    // never have worked: `src/commands/nats.ts` derived its creds dir from
+    // `os.homedir()` into a MODULE-LOAD constant, and `os.homedir()` ignores an
+    // in-process `process.env.HOME` assignment anyway (it honours $HOME only as
+    // set at process SPAWN). So this test was writing ~25 `.nk` seeds, a
+    // `.creds` file, `~/.config/metafactory/principals.json` entries and a
+    // `~/.sigstore/root` tree into the OPERATOR'S REAL HOME on every run
+    // (arc#421 round 2, M1).
+    //
+    // Both halves are now fixed at the source: nats.ts and identity.ts resolve
+    // their roots per call via `userHome()` (src/lib/user-home.ts), and
+    // `METAFACTORY_CONFIG_DIR` is honoured at call time too — so the pins below
+    // actually take effect. `test/helpers/real-home-guard.ts` (a `bun test`
+    // preload) fails the whole run if any of this regresses.
+    const VALID_BOT_CREDS_IN_REAL_HOME = join(
+      realHomedir(),
+      ".config",
+      "nats",
+      "arc-json-setupok.creds",
+    );
+    const realHomeCredsStamp = (): string => {
+      const st = statSync(VALID_BOT_CREDS_IN_REAL_HOME, { throwIfNoEntry: false });
+      return st ? `${st.size}:${st.mtimeMs}` : "absent";
+    };
+    const credsStampBefore = realHomeCredsStamp();
+
     const TMP_HOME = mkdtempSync(join(tmpdir(), "arc-a131-home-"));
     const origHome = process.env.HOME;
+    const origConfigDir = process.env.METAFACTORY_CONFIG_DIR;
     process.env.HOME = TMP_HOME;
+    process.env.METAFACTORY_CONFIG_DIR = join(TMP_HOME, ".config", "metafactory");
 
     const VALID_BOT = "arc-json-setupok";
     try {
@@ -590,9 +616,25 @@ describe("setupOperator --json: aggregate shape", () => {
       expect(okBot?.pubKey).toBe(FAKE_USER_PUBKEY);
       expect(badBot?.ok).toBe(false);
       expect(badBot?.error?.code).toBe("VALIDATION_ERROR");
+      // The writes landed in the sandbox, not the real home — assert it here
+      // too, so this test carries its own proof rather than relying only on
+      // the suite-level guard.
+      expect(existsSync(join(TMP_HOME, ".config", "nats", `${VALID_BOT}.creds`))).toBe(true);
+      expect(
+        existsSync(join(TMP_HOME, ".config", "metafactory", "principals.json")),
+      ).toBe(true);
+      // …and the real home's copy of that path is UNCHANGED. Asserting
+      // "absent" would be wrong: an earlier, leaky run of this very test left
+      // a real `~/.config/nats/arc-json-setupok.creds` behind on at least one
+      // machine, and deciding what is residue and what is the operator's own
+      // NATS credential is the operator's call, not this suite's. So compare
+      // the stamp instead — present-and-untouched passes, a fresh write fails.
+      expect(realHomeCredsStamp()).toBe(credsStampBefore);
     } finally {
       if (origHome !== undefined) process.env.HOME = origHome;
       else delete process.env.HOME;
+      if (origConfigDir !== undefined) process.env.METAFACTORY_CONFIG_DIR = origConfigDir;
+      else delete process.env.METAFACTORY_CONFIG_DIR;
     }
   });
 });

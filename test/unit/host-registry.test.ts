@@ -93,3 +93,28 @@ describe("orderTargetsForInstall", () => {
     ]);
   });
 });
+
+/**
+ * arc#421 round 4 (minor). `createClaudeCodeHost` resolved its default root
+ * through a raw `homedir()`, which no in-process `$HOME` pin can redirect —
+ * and that root is the parent of every skill, agent, command and hook arc
+ * installs. Detected by the real-home guard, but not prevented.
+ */
+describe("arc#421 — the claude-code default root is sandboxable", () => {
+  test("the default root follows an in-process $HOME pin", async () => {
+    const { createClaudeCodeHost } = await import("../../src/lib/hosts/claude-code.js");
+    const prev = process.env.HOME;
+    process.env.HOME = "/tmp/arc-claude-root-probe";
+    try {
+      expect(createClaudeCodeHost().paths.root).toBe("/tmp/arc-claude-root-probe/.claude");
+    } finally {
+      if (prev === undefined) delete process.env.HOME;
+      else process.env.HOME = prev;
+    }
+  });
+
+  test("an explicitly injected root still wins", async () => {
+    const { createClaudeCodeHost } = await import("../../src/lib/hosts/claude-code.js");
+    expect(createClaudeCodeHost({ root: "/tmp/explicit" }).paths.root).toBe("/tmp/explicit");
+  });
+});

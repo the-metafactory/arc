@@ -10,6 +10,7 @@ import { loadSources, getSourceType } from "../lib/sources.js";
 import { findInAllSources } from "../lib/remote-registry.js";
 import { parsePackageRef } from "../lib/registry-install.js";
 import { fetchMetafactoryPackageDetail } from "../lib/metafactory-api.js";
+import { spawnEnv } from "../lib/user-home.js";
 import type { InstalledSkill, ArcManifest, ArcPaths, MetafactoryPackageDetail } from "../types.js";
 
 export interface InfoResult {
@@ -287,7 +288,9 @@ async function fetchReleaseNotesFromUrl(repoUrl: string, version: string): Promi
   try {
     const result = Bun.spawnSync(
       ["gh", "release", "view", tag, "--repo", nwo, "--json", "body", "--jq", ".body"],
-      { stdout: "pipe", stderr: "pipe", timeout: 5000 }
+      // env: gh reads and refreshes its own state under `~/.config/gh` —
+      // see spawnEnv().
+      { stdout: "pipe", stderr: "pipe", timeout: 5000, env: spawnEnv() }
     );
     if (result.exitCode === 0) {
       const body = result.stdout.toString().trim();

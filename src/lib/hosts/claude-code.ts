@@ -1,7 +1,7 @@
 import { join } from "path";
 import { existsSync } from "fs";
-import { homedir } from "os";
 import type { ArtifactType, HostAdapter, HostPaths } from "../../types.js";
+import { userHome } from "../user-home.js";
 
 /**
  * Claude Code host adapter.
@@ -24,7 +24,10 @@ export function claudeCodePaths(claudeRoot: string): HostPaths {
 }
 
 export function createClaudeCodeHost(opts?: { root?: string }): HostAdapter {
-  const root = opts?.root ?? join(homedir(), ".claude");
+  // `userHome()`, not a raw `homedir()` (arc#421 round 4, minor): this is the
+  // default root for every skill, agent, command and hook arc installs, and a
+  // raw `homedir()` here is unreachable by an in-process $HOME pin.
+  const root = opts?.root ?? join(userHome(), ".claude");
   return {
     id: "claude-code",
     paths: claudeCodePaths(root),

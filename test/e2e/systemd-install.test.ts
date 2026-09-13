@@ -43,9 +43,16 @@ import { remove } from "../../src/commands/remove.js";
 import { createTestEnv, type TestEnv } from "../helpers/test-env.js";
 import { getSkill } from "../../src/lib/db.js";
 import { linuxSystemdPaths } from "../../src/lib/hosts/linux-systemd.js";
+import { spawnEnv } from "../../src/lib/user-home.js";
 
 function systemctlUser(args: string[]) {
-  return Bun.spawnSync(["systemctl", "--user", ...args], { stdout: "pipe", stderr: "pipe" });
+  // env: `systemctl --user` resolves unit state from the environment —
+  // see spawnEnv().
+  return Bun.spawnSync(["systemctl", "--user", ...args], {
+    stdout: "pipe",
+    stderr: "pipe",
+    env: spawnEnv(),
+  });
 }
 
 function canRunSystemdE2E(): boolean {

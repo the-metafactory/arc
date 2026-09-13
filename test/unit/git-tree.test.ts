@@ -4,11 +4,17 @@ import { mkdirSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { dirtyWorktreeEntries, restoreHead } from "../../src/lib/git-tree.js";
+import { spawnEnv } from "../../src/lib/user-home.js";
 
 let repo: string;
 
 function git(...args: string[]): { code: number; out: string } {
-  const r = Bun.spawnSync(["git", ...args], { cwd: repo, stdout: "pipe", stderr: "pipe" });
+  const r = Bun.spawnSync(["git", ...args], {
+    cwd: repo,
+    stdout: "pipe",
+    stderr: "pipe",
+    env: spawnEnv(),
+  });
   return { code: r.exitCode, out: r.stdout.toString().trim() };
 }
 
@@ -35,7 +41,7 @@ describe("dirtyWorktreeEntries", () => {
   });
 
   test("a modified tracked file is reported", () => {
-    Bun.spawnSync(["sh", "-c", `echo two > ${join(repo, "tracked.txt")}`]);
+    Bun.spawnSync(["sh", "-c", `echo two > ${join(repo, "tracked.txt")}`], { env: spawnEnv() });
     const entries = dirtyWorktreeEntries(repo);
     expect(entries.length).toBe(1);
     expect(entries[0]).toContain("tracked.txt");
@@ -46,9 +52,9 @@ describe("dirtyWorktreeEntries", () => {
     // own droppings — counting them would make the guard fire on nearly every
     // package with a package.json.
     mkdirSync(join(repo, "node_modules"), { recursive: true });
-    Bun.spawnSync(["sh", "-c", `echo x > ${join(repo, "node_modules", "m.txt")}`]);
-    Bun.spawnSync(["sh", "-c", `echo '{}' > ${join(repo, "bun.lock")}`]);
-    Bun.spawnSync(["sh", "-c", `echo x > ${join(repo, ".DS_Store")}`]);
+    Bun.spawnSync(["sh", "-c", `echo x > ${join(repo, "node_modules", "m.txt")}`], { env: spawnEnv() });
+    Bun.spawnSync(["sh", "-c", `echo '{}' > ${join(repo, "bun.lock")}`], { env: spawnEnv() });
+    Bun.spawnSync(["sh", "-c", `echo x > ${join(repo, ".DS_Store")}`], { env: spawnEnv() });
     expect(dirtyWorktreeEntries(repo)).toEqual([]);
   });
 

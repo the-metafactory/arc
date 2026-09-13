@@ -4,6 +4,7 @@ import { join } from "path";
 import YAML from "yaml";
 import { install } from "../../src/commands/install.js";
 import { getSkill } from "../../src/lib/db.js";
+import { spawnEnv } from "../../src/lib/user-home.js";
 import {
   createTestEnv,
   createMockSkillRepo,
@@ -21,7 +22,12 @@ afterEach(async () => {
 });
 
 function git(repoPath: string, ...args: string[]): string {
-  const r = Bun.spawnSync(["git", ...args], { cwd: repoPath, stdout: "pipe", stderr: "pipe" });
+  const r = Bun.spawnSync(["git", ...args], {
+    cwd: repoPath,
+    stdout: "pipe",
+    stderr: "pipe",
+    env: spawnEnv(),
+  });
   return r.exitCode === 0 ? r.stdout.toString().trim() : "";
 }
 

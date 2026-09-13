@@ -8,7 +8,7 @@
 
 import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync, chmodSync } from "node:fs";
 import { join, dirname } from "node:path";
-import { homedir } from "node:os";
+import { spawnEnv, userHome } from "../lib/user-home.js";
 import { generateIdentity } from "./identity.js";
 import {
   ArcNatsCommandError,
@@ -17,7 +17,19 @@ import {
   classifyError,
 } from "../lib/json-response.js";
 
-const DEFAULT_CREDS_DIR = join(homedir(), ".config", "nats");
+/**
+ * The default NATS creds directory, resolved AT CALL TIME (arc#421 round 2).
+ *
+ * Was a module-load `const` computed from `os.homedir()`. Because `os.homedir()`
+ * ignores an in-process `process.env.HOME` mutation AND the constant was baked
+ * before any test's `beforeAll` could run, `test/commands/nats-json.test.ts`'s
+ * sandbox never took effect and a plain `bun test` wrote `.nk` seeds and a
+ * `.creds` file into the OPERATOR'S REAL `~/.config/nats`. Resolving per call
+ * makes the path sandboxable; in production `userHome()` is `os.homedir()`.
+ */
+function defaultCredsDir(): string {
+  return join(userHome(), ".config", "nats");
+}
 const NAMING_RE = /^[a-z](?:[a-z0-9]|-(?=[a-z0-9]))*$/;
 const NATS_SUBJECT_RE = /^[a-zA-Z0-9.*>_-]+$/;
 // NSC account names are any-case (nsc accepts "metafactory" as readily as
@@ -28,11 +40,15 @@ const NATS_SUBJECT_RE = /^[a-zA-Z0-9.*>_-]+$/;
 const ACCOUNT_NAME_RE = /^[A-Za-z][A-Za-z0-9_-]*$/;
 
 // NSC config can live in several locations depending on version/platform
-const NSC_CONFIG_CANDIDATES = [
-  join(homedir(), ".config", "nats", "nsc", "nsc.json"),
-  join(homedir(), ".nsc", "nsc.json"),
-  join(process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config"), "nsc", "nsc.json"),
-];
+// Resolved per call for the same reason as defaultCredsDir() above.
+function nscConfigCandidates(): string[] {
+  const home = userHome();
+  return [
+    join(home, ".config", "nats", "nsc", "nsc.json"),
+    join(home, ".nsc", "nsc.json"),
+    join(process.env.XDG_CONFIG_HOME ?? join(home, ".config"), "nsc", "nsc.json"),
+  ];
+}
 
 /**
  * Result of an nsc invocation. Shape matches the subset of Bun.spawnSync
@@ -48,7 +64,14 @@ export interface NscResult {
 export type NscRunner = (args: string[]) => NscResult;
 
 const defaultRunner: NscRunner = (args) => {
-  const result = Bun.spawnSync(["nsc", ...args], { stderr: "pipe", stdout: "pipe" });
+  // env: nsc creates and rewrites its store under $HOME (or $XDG_*) — see
+  // spawnEnv(). Without it the child gets the SPAWN-time environ and `nsc env`
+  // writes `~/.config/nats/nsc/nsc.json` into the real home.
+  const result = Bun.spawnSync(["nsc", ...args], {
+    stderr: "pipe",
+    stdout: "pipe",
+    env: spawnEnv(),
+  });
   return {
     exitCode: result.exitCode,
     stdout: result.stdout.toString(),
@@ -196,7 +219,7 @@ function validateAccountName(name: string): void {
 }
 
 export function detectAccount(): string {
-  for (const candidate of NSC_CONFIG_CANDIDATES) {
+  for (const candidate of nscConfigCandidates()) {
     if (!existsSync(candidate)) continue;
     try {
       const config = JSON.parse(readFileSync(candidate, "utf-8")) as { account?: unknown };
@@ -218,7 +241,7 @@ export function detectAccount(): string {
 }
 
 function defaultCredsPath(name: string): string {
-  return join(DEFAULT_CREDS_DIR, `${name}.creds`);
+  return join(defaultCredsDir(), `${name}.creds`);
 }
 
 /**
@@ -316,15 +339,16 @@ function revokeAndPushUser(account: string, name: string): string {
 }
 
 function ensureDefaultCredsDir(): void {
-  if (!existsSync(DEFAULT_CREDS_DIR)) {
-    mkdirSync(DEFAULT_CREDS_DIR, { recursive: true, mode: 0o700 });
+  const dir = defaultCredsDir();
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
   }
-  chmodSync(DEFAULT_CREDS_DIR, 0o700);
+  chmodSync(dir, 0o700);
 }
 
 function writeCredsFile(path: string, content: string): void {
   // Only enforce directory permissions on the default creds dir
-  if (dirname(path) === DEFAULT_CREDS_DIR) {
+  if (dirname(path) === defaultCredsDir()) {
     ensureDefaultCredsDir();
   }
   writeFileSync(path, content, { mode: 0o600 });
@@ -1140,7 +1164,7 @@ function nscKeystoreBase(): string {
   if (explicit && explicit.length > 0) return explicit;
   const xdg = process.env.XDG_DATA_HOME;
   if (xdg && xdg.length > 0) return join(xdg, "nats", "nsc", "keys");
-  return join(homedir(), ".local", "share", "nats", "nsc", "keys");
+  return join(userHome(), ".local", "share", "nats", "nsc", "keys");
 }
 
 /**
