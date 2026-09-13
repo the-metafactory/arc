@@ -1,5 +1,5 @@
-import { existsSync, readdirSync } from "fs";
-import { join, dirname } from "path";
+import { existsSync, readdirSync, statSync } from "fs";
+import { join, dirname, isAbsolute } from "path";
 import { cp, mkdir } from "fs/promises";
 import type { ArcManifest, ArcPaths, HostAdapter, RulesTemplate } from "../types.js";
 import type { Database } from "bun:sqlite";
@@ -300,6 +300,57 @@ export interface ConsumerCandidate {
 }
 
 /**
+ * The outcome of consumer discovery.
+ *
+ * `rootRefusal` carries the NAMED reason a configured `BLUEPRINT_DEV_ROOT`
+ * produced no scan. An operator who sets the variable has asked for fan-out;
+ * silently scanning nothing when the value is unusable (`~` unexpanded by the
+ * shell, a relative path, a typo'd path that does not exist) reads exactly like
+ * "no consumers found" — and this change's whole claim is that arc names every
+ * refusal instead of swallowing it.
+ */
+export interface ConsumerScan {
+  candidates: ConsumerCandidate[];
+  rootRefusal?: string;
+}
+
+/**
+ * Why a configured scan root cannot be used, or null when it can.
+ *
+ * Checked before `readdirSync` so the diagnosis names the fault rather than
+ * reporting a generic ENOENT for all four shapes.
+ */
+function scanRootRefusal(devRoot: string): string | null {
+  const raw = devRoot;
+  if (!raw.trim()) {
+    return `BLUEPRINT_DEV_ROOT is set but empty — scanning nothing; unset it, or give an absolute path`;
+  }
+  if (raw.startsWith("~")) {
+    return (
+      `BLUEPRINT_DEV_ROOT="${raw}" starts with an unexpanded "~" — scanning nothing. ` +
+      `arc does not expand tildes; quote-free or export an absolute path`
+    );
+  }
+  if (!isAbsolute(raw)) {
+    return (
+      `BLUEPRINT_DEV_ROOT="${raw}" is a relative path — scanning nothing. ` +
+      `A scan root must be absolute so it cannot depend on the cwd arc happens to run in`
+    );
+  }
+  if (!existsSync(raw)) {
+    return `BLUEPRINT_DEV_ROOT="${raw}" does not exist — scanning nothing`;
+  }
+  try {
+    if (!statSync(raw).isDirectory()) {
+      return `BLUEPRINT_DEV_ROOT="${raw}" is not a directory — scanning nothing`;
+    }
+  } catch (err: unknown) {
+    return `BLUEPRINT_DEV_ROOT="${raw}" cannot be read (${errorMessage(err)}) — scanning nothing`;
+  }
+  return null;
+}
+
+/**
  * Find candidate consumer repos for a rules template.
  *
  * ## arc#423 — why there is no longer a default scan root
@@ -328,25 +379,30 @@ export interface ConsumerCandidate {
 export function findConsumerRepos(
   templates: RulesTemplate[],
   seam?: ConsumerScanSeam,
-): ConsumerCandidate[] {
+): ConsumerScan {
   const configFiles = templates.map((t) => t.config);
   const env = seam?.env ?? process.env;
   const cwd = seam?.cwd ?? process.cwd();
   const candidates: ConsumerCandidate[] = [];
+  let rootRefusal: string | undefined;
 
   // NO DEFAULT. An unset BLUEPRINT_DEV_ROOT means "scan nothing" (arc#423).
+  // A SET but unusable one is a refusal with a name, not a silent no-op.
   const devRoot = env.BLUEPRINT_DEV_ROOT;
-  if (devRoot) {
-    try {
-      for (const entry of readdirSync(devRoot, { withFileTypes: true })) {
-        if (!entry.isDirectory()) continue;
-        const repoDir = join(devRoot, entry.name);
-        if (configFiles.some((c) => existsSync(join(repoDir, c)))) {
-          candidates.push({ dir: repoDir, origin: "scan" });
+  if (devRoot !== undefined) {
+    rootRefusal = scanRootRefusal(devRoot) ?? undefined;
+    if (!rootRefusal) {
+      try {
+        for (const entry of readdirSync(devRoot, { withFileTypes: true })) {
+          if (!entry.isDirectory()) continue;
+          const repoDir = join(devRoot, entry.name);
+          if (configFiles.some((c) => existsSync(join(repoDir, c)))) {
+            candidates.push({ dir: repoDir, origin: "scan" });
+          }
         }
+      } catch (err: unknown) {
+        rootRefusal = `BLUEPRINT_DEV_ROOT="${devRoot}" could not be scanned (${errorMessage(err)})`;
       }
-    } catch (_err: unknown) {
-      // Configured dev root doesn't exist or can't be read — scan nothing.
     }
   }
 
@@ -358,7 +414,7 @@ export function findConsumerRepos(
     else candidates.push({ dir: cwd, origin: "cwd" });
   }
 
-  return candidates;
+  return rootRefusal ? { candidates, rootRefusal } : { candidates };
 }
 
 /**
@@ -373,12 +429,17 @@ async function regenerateConsumerTemplates(
   installPath: string,
   packageName: string,
   templates: RulesTemplate[],
+  packageAliases?: string[],
   seam?: ConsumerScanSeam,
 ): Promise<void> {
-  for (const candidate of findConsumerRepos(templates, seam)) {
+  const scan = findConsumerRepos(templates, seam);
+  if (scan.rootRefusal) console.log(`  ⊘ ${scan.rootRefusal}`);
+
+  for (const candidate of scan.candidates) {
     // A scanned dir must prove itself a declared consumer; a cwd the operator
     // chose does not have to.
-    const opts = candidate.origin === "scan" ? { packageName } : undefined;
+    const opts =
+      candidate.origin === "scan" ? { packageName, packageAliases } : undefined;
     const results = await generateRules(installPath, templates, candidate.dir, opts);
 
     for (const r of results) {
@@ -637,7 +698,12 @@ export async function upgradePackage(
     // type:governance like compass) regenerates them in its consumers
     // (arc#203).
     if (manifest.provides?.templates?.length) {
-      await regenerateConsumerTemplates(installPath, name, manifest.provides.templates);
+      await regenerateConsumerTemplates(
+      installPath,
+      name,
+      manifest.provides.templates,
+      manifest.provides.templateAliases,
+    );
     }
     commitSwap();
     // Cascade even when this package is already current: a dependency (e.g. a
@@ -751,7 +817,12 @@ export async function upgradePackage(
   // (compass) both regenerate the templates they declare into consumers
   // (arc#203).
   if (manifest.provides?.templates?.length) {
-    await regenerateConsumerTemplates(installPath, name, manifest.provides.templates);
+    await regenerateConsumerTemplates(
+      installPath,
+      name,
+      manifest.provides.templates,
+      manifest.provides.templateAliases,
+    );
   }
 
   // Re-wire extensions (if declared)

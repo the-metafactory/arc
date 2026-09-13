@@ -14,6 +14,8 @@ import { join } from "path";
 import YAML from "yaml";
 import type { RulesTemplate, RulesConfig } from "../types.js";
 import { errorMessage, isErrno } from "./errors.js";
+import { canonicalMemberKey } from "./composition-identity.js";
+import { templateAliasSet } from "./template-aliases.js";
 
 export interface GenerateResult {
   target: string;
@@ -34,21 +36,12 @@ export interface GenerateRulesOptions {
    * (an explicit `consumerDir`, i.e. the operator named it).
    */
   packageName?: string;
-}
-
-/**
- * Reduce a template identifier to its stem — the first `-`-delimited segment,
- * lowercased.
- *
- * Live consumer configs in the wild spell the SAME provider three ways:
- * crucible says `compass-core`, cortex and halden say `compass-standards`, and
- * the installed package is `compass`. Requiring an exact string match would
- * refuse every real consumer and break the feature the gate is meant to protect;
- * comparing stems accepts all three while still refusing an unrelated package
- * (`OverlayPkg` vs `compass-core`) — which is the whole of arc#423.
- */
-function templateStem(id: string): string {
-  return id.trim().toLowerCase().split("-")[0] ?? "";
+  /**
+   * Other spellings of `packageName` a consumer may legitimately declare, from
+   * the providing package's `provides.templateAliases`. See
+   * `lib/template-aliases.ts` for why this is a set and not a prefix.
+   */
+  packageAliases?: readonly string[];
 }
 
 /**
@@ -58,28 +51,67 @@ function templateStem(id: string): string {
  * has given no package authority to rewrite its files. This is the exact
  * condition that let 136 repos be clobbered — they matched only by carrying a
  * file called `agents-md.yaml`.
+ *
+ * The comparison is EXACT against the package's alias set, after scope-stripping
+ * and lowercasing. It used to compare `-`-delimited stems, which made
+ * `template: compass-evil` authority for package `compass` — a gate answering
+ * yes to a package it had never been shown.
  */
 export function declaresTemplateProvider(
   config: RulesConfig,
   packageName: string,
+  aliases?: readonly string[],
 ): boolean {
   const declared = typeof config.template === "string" ? config.template : "";
-  if (!declared) return false;
-  if (declared.toLowerCase() === packageName.toLowerCase()) return true;
-  return templateStem(declared) === templateStem(packageName);
+  if (!declared.trim()) return false;
+  return templateAliasSet(packageName, aliases).has(canonicalMemberKey(declared));
 }
 
 /**
- * Placeholders still unsubstituted after a render — `{FOO}` / `{foo_bar}`.
+ * The exact `{token}` spellings this render was ASKED to substitute.
  *
- * Deliberately narrow: ALL-CAPS or all-lower snake tokens only, so ordinary
- * prose braces and code samples in a template body are not mistaken for
- * placeholders.
+ * Every non-reserved config key contributes the three forms
+ * `substitutePlaceholders` emits — `{KEY}`, `{key}` and the key as written —
+ * plus `{PROJECT_SPECIFIC_LABELS}`, which the render always handles. Keys whose
+ * value is not a string are included deliberately: the config named the key, so
+ * a token left standing for it is a failed substitution, not prose.
  */
-export function residualPlaceholders(output: string): string[] {
+export function declaredPlaceholders(config: RulesConfig): Set<string> {
+  const declared = new Set<string>(["PROJECT_SPECIFIC_LABELS"]);
+  for (const key of Object.keys(config)) {
+    if (RESERVED_KEYS.has(key)) continue;
+    declared.add(key.toUpperCase());
+    declared.add(key.toLowerCase());
+    declared.add(key);
+  }
+  return declared;
+}
+
+/**
+ * Placeholders the config addressed that the render nonetheless left standing.
+ *
+ * ## Why this compares against a declared set (arc#423 MAJOR 1)
+ *
+ * The first cut refused on ANY `{snake_token}` surviving the render. That test
+ * is refuted by the only live template there is: compass-core's
+ * `CLAUDE.md.template` carries `{branch}`, `{path}`, `{slug}` and `{type}` as
+ * PROSE — worktree and branch naming examples — so every legitimate
+ * `arc upgrade compass` refused with "template left 4 placeholder(s)
+ * unsubstituted", and the goal (never write a stub) took the feature down with it.
+ *
+ * A brace token is a failed substitution only when it names a key the config
+ * could have supplied. A `{branch}` no config key addresses is prose, and a
+ * template is allowed to contain prose. What must still fail loudly is the
+ * incident's shape — a key the config DID supply whose token survived anyway (a
+ * non-string value, or a token reintroduced by a section injected after
+ * substitution ran) — because that is what truncates a repo's real CLAUDE.md
+ * down to a stub.
+ */
+export function unrenderedPlaceholders(output: string, declared: Set<string>): string[] {
   const found = new Set<string>();
-  for (const m of output.matchAll(/\{([A-Z][A-Z0-9_]*|[a-z][a-z0-9_]*)\}/g)) {
-    if (m[1]) found.add(m[1]);
+  for (const m of output.matchAll(/\{([A-Za-z][A-Za-z0-9_]*)\}/g)) {
+    const token = m[1];
+    if (token && declared.has(token)) found.add(token);
   }
   return [...found];
 }
@@ -131,7 +163,23 @@ async function generateSingleRule(
   let config: RulesConfig;
   try {
     const configContent = await readFile(configPath, "utf-8");
-    config = YAML.parse(configContent) as RulesConfig;
+    const parsed: unknown = YAML.parse(configContent);
+    // An EMPTY config file parses to `null`, and a document whose root is a
+    // scalar or a list parses to something with no `.template`. Reading
+    // `config.template` off `null` throws an uncaught TypeError out of this
+    // function; neither call site wraps it, so a single empty `agents-md.yaml`
+    // anywhere under the scan root aborted the whole upgrade mid-swap.
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return {
+        target,
+        success: false,
+        refused: true,
+        error:
+          `refused ${consumerDir}: ${tmpl.config} is empty or is not a YAML mapping ` +
+          `— it declares no template provider, so it grants no authority to write ${target}`,
+      };
+    }
+    config = parsed as RulesConfig;
   } catch (err) {
     if (isErrno(err) && err.code === "ENOENT") {
       // No config file — skip optional templates, error on required
@@ -147,7 +195,10 @@ async function generateSingleRule(
   // is not consent to have CLAUDE.md rewritten. When the caller names the
   // providing package (i.e. this dir came from a SCAN, not from an operator
   // naming it), the consumer's config must declare that package via `template:`.
-  if (opts?.packageName && !declaresTemplateProvider(config, opts.packageName)) {
+  if (
+    opts?.packageName &&
+    !declaresTemplateProvider(config, opts.packageName, opts.packageAliases)
+  ) {
     const declared = typeof config.template === "string" ? config.template : "(none)";
     return {
       target,
@@ -200,11 +251,10 @@ async function generateSingleRule(
 
   // 8. arc#423 G3 — a half-rendered template is an ERROR, not an output.
   // The incident's 136 files were not merely written to the wrong repo; they
-  // were written as the bare stub `# {PROJECT_NAME}`, because the real configs
-  // key on `repo_name` and the substitution left the placeholder standing. A
-  // render that could not populate its placeholders has produced nothing worth
-  // writing, so it must fail loudly rather than truncate a real file to a stub.
-  const residual = residualPlaceholders(output);
+  // were written as the bare stub `# {PROJECT_NAME}` — a placeholder the render
+  // was asked to fill and did not. Only tokens the config ADDRESSES count;
+  // prose braces in the template body are prose (see `unrenderedPlaceholders`).
+  const residual = unrenderedPlaceholders(output, declaredPlaceholders(config));
   if (residual.length) {
     return {
       target,
@@ -213,7 +263,7 @@ async function generateSingleRule(
         `refused ${join(consumerDir, target)}: template left ` +
         `${residual.length} placeholder(s) unsubstituted ` +
         `(${residual.map((p) => `{${p}}`).join(", ")}) — ` +
-        `${tmpl.config} supplies no value for them`,
+        `${tmpl.config} declares the key but the render did not populate it`,
     };
   }
 

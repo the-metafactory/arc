@@ -11,18 +11,22 @@
  * 301 -> 3), because the real repos key their placeholders on `repo_name` and
  * the substitution silently left `{PROJECT_NAME}` unpopulated and wrote it anyway.
  *
- * Three gates, one per test below:
- *   G1  the scan root is injected, never resolved from a raw `homedir()`;
+ * Three gates:
+ *   G1  the scan root is injected, never resolved from a raw `homedir()`, and a
+ *       set-but-unusable root is refused BY NAME rather than scanning nothing;
  *   G2  a repo is a consumer only when its config DECLARES the providing package
- *       via `template:` — sitting under a scan root is not authority to rewrite;
- *   G3  an unsubstituted `{PLACEHOLDER}` left in the render is an ERROR, not output.
+ *       via `template:` — sitting under a scan root is not authority to rewrite,
+ *       and the match is exact against the package's alias set, not a stem;
+ *   G3  a placeholder the config ADDRESSES that the render left standing is an
+ *       ERROR, not output. Only those: a `{branch}` no config key addresses is
+ *       prose, and refusing on it broke every legitimate `arc upgrade compass`.
  */
 
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { createTestEnv, type TestEnv } from "../helpers/test-env.js";
 import { install } from "../../src/commands/install.js";
 import { findConsumerRepos, upgradePackage } from "../../src/commands/upgrade.js";
-import { generateRules } from "../../src/lib/rules.js";
+import { declaresTemplateProvider, generateRules } from "../../src/lib/rules.js";
 import { mkdir, rm, writeFile } from "fs/promises";
 import { existsSync } from "fs";
 import { join } from "path";
@@ -122,14 +126,16 @@ describe("arc#423 G1 — no scan outside an explicitly configured root", () => {
     ];
 
     // The incident's condition: HOME pinned, BLUEPRINT_DEV_ROOT absent.
-    const candidates = findConsumerRepos(templates, {
+    const scan = findConsumerRepos(templates, {
       env: { HOME: fakeHome }, // no BLUEPRINT_DEV_ROOT
       cwd: cwdSandbox,
     });
 
     // cwd only — the pinned home's Developer tree is never reached.
-    expect(candidates).toEqual([{ dir: cwdSandbox, origin: "cwd" }]);
-    expect(candidates.some((c) => c.dir.startsWith(fakeHome))).toBe(false);
+    expect(scan.candidates).toEqual([{ dir: cwdSandbox, origin: "cwd" }]);
+    expect(scan.candidates.some((c) => c.dir.startsWith(fakeHome))).toBe(false);
+    // UNSET is not a refusal — it is the documented default, so nothing to name.
+    expect(scan.rootRefusal).toBeUndefined();
 
     // And an explicitly configured root DOES fan out — the gate is not an
     // off-switch, it is a demand for explicit authority.
@@ -137,7 +143,8 @@ describe("arc#423 G1 — no scan outside an explicitly configured root", () => {
       env: { BLUEPRINT_DEV_ROOT: join(fakeHome, "Developer") },
       cwd: cwdSandbox,
     });
-    expect(configured).toContainEqual({ dir: bystander, origin: "scan" });
+    expect(configured.candidates).toContainEqual({ dir: bystander, origin: "scan" });
+    expect(configured.rootRefusal).toBeUndefined();
   });
 });
 
@@ -152,9 +159,16 @@ describe("arc#423 G2 — a scan root is not authority; the consumer must declare
     await mkdir(foreign, { recursive: true });
     // Declares compass-core — NOT the package being upgraded. This is what
     // every one of the 136 clobbered repos looked like.
+    //
+    // It supplies `project_name`, and that is the whole point of the case
+    // (arc#423 MAJOR 3). With `repo_name` instead, the render leaves
+    // `{PROJECT_NAME}` standing and G3 refuses the write — so deleting the G2
+    // gate entirely left the suite green and the test proved nothing about G2.
+    // Supplying the key makes the render succeed, which means the ONLY thing
+    // that can save this file is the authority gate under test.
     await writeFile(
       join(foreign, "agents-md.yaml"),
-      YAML.stringify({ template: "compass-core", repo_name: "Foreign" }),
+      YAML.stringify({ template: "compass-core", project_name: "Foreign" }),
     );
     const untouched = "# Foreign\n\nNot this package's to rewrite.\n";
     await writeFile(join(foreign, "CLAUDE.md"), untouched);
@@ -199,15 +213,80 @@ describe("arc#423 G2 — a scan root is not authority; the consumer must declare
   });
 });
 
+describe("arc#423 G2 — a stem collision is not a declaration", () => {
+  /**
+   * The first cut matched `template:` against the package name by stem
+   * (`split("-")[0]`), so `compass-evil` was authority for `compass`: a gate
+   * answering yes to a package it had never been shown. Matching is now exact
+   * against the package's alias set.
+   */
+  test("compass-evil / compass-core-evil / compassx are refused; the three live spellings are not", async () => {
+    const pkgDir = join(env.root, "alias-pkg");
+    await mkdir(join(pkgDir, "templates"), { recursive: true });
+    await writeFile(join(pkgDir, "templates", "CLAUDE.md.template"), "# {PROJECT_NAME}\n\nROW\n");
+    const templates = [
+      { source: "templates/CLAUDE.md.template", target: "CLAUDE.md", config: "agents-md.yaml" },
+    ];
+
+    /** Render into a fresh repo declaring `declared`; true when it was written. */
+    async function accepted(declared: string): Promise<boolean> {
+      const dir = join(env.root, `alias-${Buffer.from(declared).toString("hex")}`);
+      await mkdir(dir, { recursive: true });
+      await writeFile(
+        join(dir, "agents-md.yaml"),
+        YAML.stringify({ template: declared, project_name: "Repo" }),
+      );
+      const results = await generateRules(pkgDir, templates, dir, { packageName: "compass" });
+      return results[0]?.success ?? false;
+    }
+
+    // Refused — a different package that merely shares a prefix.
+    for (const evil of ["compass-evil", "compass-core-evil", "compassx", "compass-"]) {
+      expect({ declared: evil, accepted: await accepted(evil) }).toEqual({
+        declared: evil,
+        accepted: false,
+      });
+    }
+
+    // Accepted — the three live spellings, plus scope/case variants of them.
+    for (const good of [
+      "compass",
+      "compass-core",
+      "compass-standards",
+      "@metafactory/compass-core",
+      "Compass-Core",
+    ]) {
+      expect({ declared: good, accepted: await accepted(good) }).toEqual({
+        declared: good,
+        accepted: true,
+      });
+    }
+  });
+
+  test("a manifest's own templateAliases replace the built-in shim", () => {
+    const cfg = (t: string) => ({ template: t }) as unknown as Parameters<
+      typeof declaresTemplateProvider
+    >[0];
+    // Declared aliases are the package's own statement of its names, so they
+    // win outright — arc does not union its compatibility list back in.
+    expect(declaresTemplateProvider(cfg("compass-new"), "compass", ["compass-new"])).toBe(true);
+    expect(declaresTemplateProvider(cfg("compass"), "compass", ["compass-new"])).toBe(true);
+    expect(declaresTemplateProvider(cfg("compass-core"), "compass", ["compass-new"])).toBe(false);
+    // A package with neither declaration nor shim matches its own name only.
+    expect(declaresTemplateProvider(cfg("RulesPkg2"), "RulesPkg2")).toBe(true);
+    expect(declaresTemplateProvider(cfg("RulesPkg2-evil"), "RulesPkg2")).toBe(false);
+  });
+});
+
 // ---------------------------------------------------------------------------
-// G3 — an unpopulated substitution is an error, never a written stub.
+// G3 — an unpopulated substitution is an error, never a written stub; but only
+//      for a placeholder the config actually addresses.
 // ---------------------------------------------------------------------------
 
 describe("arc#423 G3 — a failed substitution fails loudly instead of writing a stub", () => {
-  test("a template whose placeholder the config does not supply is refused, not written", async () => {
+  test("a key the config declares but the render leaves standing is refused, not written", async () => {
     const pkgDir = join(env.root, "stub-pkg");
     await mkdir(join(pkgDir, "templates"), { recursive: true });
-    // `{PROJECT_NAME}` — the placeholder the real repos never supply.
     await writeFile(
       join(pkgDir, "templates", "CLAUDE.md.template"),
       "# {PROJECT_NAME}\n\nBODY\n",
@@ -215,11 +294,13 @@ describe("arc#423 G3 — a failed substitution fails loudly instead of writing a
 
     const consumer = join(env.root, "stub-consumer");
     await mkdir(consumer, { recursive: true });
+    // `project_name` IS declared — so the render was asked to fill
+    // `{PROJECT_NAME}` — but its value is not a string, so substitution skipped
+    // it and the token survived. That is the incident's shape: a real CLAUDE.md
+    // about to be truncated to the bare stub `# {PROJECT_NAME}`.
     await writeFile(
       join(consumer, "agents-md.yaml"),
-      // Declares the package, but supplies `repo_name`, not `project_name` —
-      // exactly the real-world config shape that produced `# {PROJECT_NAME}`.
-      YAML.stringify({ template: "StubPkg", repo_name: "Consumer" }),
+      "template: StubPkg\nproject_name: null\n",
     );
     const untouched = "# Consumer\n\nReal content that must survive.\n";
     await writeFile(join(consumer, "CLAUDE.md"), untouched);
@@ -231,10 +312,112 @@ describe("arc#423 G3 — a failed substitution fails loudly instead of writing a
       { packageName: "StubPkg" },
     );
 
-    // Loud failure, naming the placeholder.
     expect(results[0]?.success).toBe(false);
     expect(results[0]?.error ?? "").toContain("PROJECT_NAME");
-    // And nothing was written.
+    expect(await Bun.file(join(consumer, "CLAUDE.md")).text()).toBe(untouched);
+  });
+
+  test("prose braces no config key addresses are prose, and the render succeeds", async () => {
+    // The shape of the only live template there is: compass-core's
+    // CLAUDE.md.template carries `{branch}`, `{path}`, `{slug}` and `{type}` as
+    // worktree/branch naming EXAMPLES. Refusing on any surviving `{token}` made
+    // every legitimate `arc upgrade compass` fail.
+    const pkgDir = join(env.root, "prose-pkg");
+    await mkdir(join(pkgDir, "templates"), { recursive: true });
+    const body =
+      "# {PROJECT_NAME}\n\nWorktrees: `../{repo}-{branch}`\nBranches: `{type}/{slug}`\nPath: `{path}`\n";
+    await writeFile(join(pkgDir, "templates", "CLAUDE.md.template"), body);
+
+    const consumer = join(env.root, "prose-consumer");
+    await mkdir(consumer, { recursive: true });
+    await writeFile(
+      join(consumer, "agents-md.yaml"),
+      YAML.stringify({ template: "ProsePkg", project_name: "Prose" }),
+    );
+
+    const results = await generateRules(
+      pkgDir,
+      [{ source: "templates/CLAUDE.md.template", target: "CLAUDE.md", config: "agents-md.yaml" }],
+      consumer,
+      { packageName: "ProsePkg" },
+    );
+
+    expect(results[0]?.success).toBe(true);
+    const written = await Bun.file(join(consumer, "CLAUDE.md")).text();
+    // The declared placeholder rendered; the prose survived verbatim.
+    expect(written).toContain("# Prose");
+    expect(written).toContain("`{type}/{slug}`");
+    expect(written).toContain("`{path}`");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A configured-but-unusable scan root is a NAMED refusal, not a silent no-op.
+// ---------------------------------------------------------------------------
+
+describe("arc#423 — an unusable BLUEPRINT_DEV_ROOT is named", () => {
+  const templates = [
+    { source: "templates/CLAUDE.md.template", target: "CLAUDE.md", config: "agents-md.yaml" },
+  ];
+
+  test.each([
+    ["~/Developer", "unexpanded"],
+    ["", "empty"],
+    ["relative/dev", "relative"],
+    ["/nonexistent-scan-root-arc423", "does not exist"],
+  ])("BLUEPRINT_DEV_ROOT=%p is refused by name", (value, needle) => {
+    const scan = findConsumerRepos(templates, {
+      env: { BLUEPRINT_DEV_ROOT: value },
+      cwd: "/",
+    });
+    expect(scan.candidates).toEqual([]);
+    expect(scan.rootRefusal ?? "").toContain(needle);
+    expect(scan.rootRefusal ?? "").toContain("BLUEPRINT_DEV_ROOT");
+  });
+
+  test("a root that is a FILE, not a directory, is refused by name", async () => {
+    const file = join(env.root, "not-a-dir");
+    await writeFile(file, "");
+    const scan = findConsumerRepos(templates, { env: { BLUEPRINT_DEV_ROOT: file }, cwd: "/" });
+    expect(scan.candidates).toEqual([]);
+    expect(scan.rootRefusal ?? "").toContain("is not a directory");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// An empty agents-md.yaml must not throw out of the render mid-upgrade.
+// ---------------------------------------------------------------------------
+
+describe("arc#423 — an empty or non-mapping config is refused, not thrown", () => {
+  test.each([
+    ["", "empty file"],
+    ["# only a comment\n", "comment only"],
+    ["- a\n- b\n", "a list"],
+    ["just a scalar\n", "a scalar"],
+  ])("a config that is %p does not throw", async (content, label) => {
+    const pkgDir = join(env.root, `empty-pkg-${Buffer.from(label).toString("hex")}`);
+    await mkdir(join(pkgDir, "templates"), { recursive: true });
+    await writeFile(join(pkgDir, "templates", "CLAUDE.md.template"), "# {PROJECT_NAME}\n");
+
+    const consumer = join(env.root, `empty-consumer-${Buffer.from(label).toString("hex")}`);
+    await mkdir(consumer, { recursive: true });
+    await writeFile(join(consumer, "agents-md.yaml"), content);
+    const untouched = "# Real\n\nSurvives.\n";
+    await writeFile(join(consumer, "CLAUDE.md"), untouched);
+
+    // `config.template` on a `null` parse threw an uncaught TypeError out of
+    // generateSingleRule; neither call site wraps it, so ONE empty config under
+    // the scan root aborted the whole upgrade mid-swap.
+    const results = await generateRules(
+      pkgDir,
+      [{ source: "templates/CLAUDE.md.template", target: "CLAUDE.md", config: "agents-md.yaml" }],
+      consumer,
+      { packageName: "EmptyPkg" },
+    );
+
+    expect(results[0]?.success).toBe(false);
+    expect(results[0]?.refused).toBe(true);
+    expect(results[0]?.error ?? "").toContain("not a YAML mapping");
     expect(await Bun.file(join(consumer, "CLAUDE.md")).text()).toBe(untouched);
   });
 });
