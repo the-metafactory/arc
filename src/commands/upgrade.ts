@@ -38,6 +38,7 @@ import {
 import { runScript } from "../lib/scripts.js";
 import { registerHooks, removeHooks, resolveHooksFromManifest } from "../lib/hooks.js";
 import { generateRules } from "../lib/rules.js";
+import { validateTemplateAliases } from "../lib/validate-manifest.js";
 import { wireExtensions } from "../lib/extensions.js";
 import { requireBrokerForManifest } from "../lib/nats-broker.js";
 import { runSomaSkillProjection } from "../lib/soma-projection.js";
@@ -424,14 +425,32 @@ export function findConsumerRepos(
  * Every path arc writes is printed, and every refusal is NAMED rather than
  * swallowed — a silently skipped repo and a silently clobbered one look
  * identical from the outside, which is how the original defect survived.
+ *
+ * `packageAliases` arrives from a manifest, so it is typed `unknown` here and
+ * checked before use (arc#426 round 2): a malformed declaration is NAMED at
+ * plan time and the whole regeneration stands down, rather than throwing a
+ * `TypeError` out of the middle of an upgrade or quietly handing write
+ * authority to a single-character alias.
  */
 async function regenerateConsumerTemplates(
   installPath: string,
   packageName: string,
   templates: RulesTemplate[],
-  packageAliases?: string[],
+  packageAliases?: unknown,
   seam?: ConsumerScanSeam,
 ): Promise<void> {
+  const aliasViolations = validateTemplateAliases({ templateAliases: packageAliases });
+  if (aliasViolations.length) {
+    for (const v of aliasViolations) {
+      console.log(
+        `  ⊘ refused: ${packageName}'s arc-manifest.yaml ${v.field} ${v.rule} — ` +
+          `this field decides which repos ${packageName} may rewrite, so nothing is regenerated`,
+      );
+    }
+    return;
+  }
+  const aliases = packageAliases as readonly string[] | undefined;
+
   const scan = findConsumerRepos(templates, seam);
   if (scan.rootRefusal) console.log(`  ⊘ ${scan.rootRefusal}`);
 
@@ -439,7 +458,7 @@ async function regenerateConsumerTemplates(
     // A scanned dir must prove itself a declared consumer; a cwd the operator
     // chose does not have to.
     const opts =
-      candidate.origin === "scan" ? { packageName, packageAliases } : undefined;
+      candidate.origin === "scan" ? { packageName, packageAliases: aliases } : undefined;
     const results = await generateRules(installPath, templates, candidate.dir, opts);
 
     for (const r of results) {

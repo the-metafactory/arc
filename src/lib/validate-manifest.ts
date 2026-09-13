@@ -173,6 +173,66 @@ export function validateStrictManifest(input: StrictValidationInput): Violation[
   // owns: shared shape/safety gate (arc#359). Reuses the same pure validator the
   // lenient loader throws on, so `arc validate` and install agree byte-for-byte.
   for (const v of validateOwns(manifest.owns)) add(v.field, v.rule);
+  // provides.templateAliases: the write-authority alias set (arc#423 G2). Same
+  // shared-validator posture as `owns` — the publish gate and the regeneration
+  // path call the SAME pure function, so a declaration arc would refuse at
+  // publish cannot be silently honoured at upgrade time, or vice versa.
+  for (const v of validateTemplateAliases(manifest.provides)) add(v.field, v.rule);
+
+  return violations;
+}
+
+/**
+ * Shape gate for `provides.templateAliases` (arc#426 round 2).
+ *
+ * This field decides WHICH consumer repos a package may rewrite (arc#423 G2),
+ * and until now nothing under `provides` was validated at all. Two live
+ * consequences, both reproduced:
+ *
+ *   - `templateAliases: [123]` reached `canonicalMemberKey`, which threw
+ *     `TypeError: name.trim is not a function` and aborted the whole upgrade
+ *     mid-swap — the same "one bad declaration stops everything" defect this
+ *     round fixed one level up for an empty `agents-md.yaml`.
+ *   - a YAML SCALAR (`templateAliases: compass-core`, the natural mistake for a
+ *     one-alias package) spread character by character, so `template: o` became
+ *     write authority for compass while `compass-core` — the real alias every
+ *     live consumer declares — was silently dropped, stopping regeneration for
+ *     every live consumer.
+ *
+ * The rule: absent, or a list of non-empty strings. Anything else is named at
+ * plan time. `templateAliasSet` additionally ignores unusable entries at the
+ * point of use, so a caller that never validated degrades to "no declaration"
+ * rather than to a throw.
+ */
+export function validateTemplateAliases(provides: unknown): Violation[] {
+  const violations: Violation[] = [];
+  if (provides === undefined || provides === null) return violations;
+  // The shape of `provides` itself is not this rule's business.
+  if (!isRecord(provides)) return violations;
+
+  const aliases = provides.templateAliases;
+  if (aliases === undefined || aliases === null) return violations;
+
+  if (!Array.isArray(aliases)) {
+    violations.push({
+      field: "provides.templateAliases",
+      rule:
+        `must be a list of non-empty strings (got ` +
+        `${typeof aliases === "object" ? "a mapping" : typeof aliases}) — a bare ` +
+        `scalar spreads character-by-character into single-letter aliases, making ` +
+        `\`template: o\` write authority and dropping the real alias`,
+    });
+    return violations;
+  }
+
+  aliases.forEach((entry, i) => {
+    if (typeof entry !== "string" || entry.trim().length === 0) {
+      violations.push({
+        field: `provides.templateAliases[${i}]`,
+        rule: `must be a non-empty string (got ${entry === null ? "null" : typeof entry})`,
+      });
+    }
+  });
 
   return violations;
 }

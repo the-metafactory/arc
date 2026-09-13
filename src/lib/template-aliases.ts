@@ -46,14 +46,28 @@ export const BUILTIN_TEMPLATE_ALIASES: Readonly<Record<string, readonly string[]
  * a package that has stated its own names has stated all of them, and silently
  * unioning a hard-coded list back in would put arc's opinion above the
  * package's own.
+ *
+ * ## Why `declared` is re-checked here (arc#426 round 2)
+ *
+ * `validateTemplateAliases` is the gate that names a bad declaration at plan
+ * time. This is the point-of-use floor beneath it, for a caller that reached
+ * here without validating: a non-list `declared` (a YAML scalar) used to spread
+ * character by character — `template: o` became authority for compass while
+ * `compass-core` was dropped — and a non-string entry threw
+ * `TypeError: name.trim is not a function` straight out of an upgrade. Neither
+ * is a safe way to decide who may rewrite a repo's CLAUDE.md, so an unusable
+ * declaration degrades to NO declaration (falling back to the shim), and an
+ * unusable entry contributes nothing.
  */
 export function templateAliasSet(
   packageName: string,
   declared?: readonly string[],
 ): Set<string> {
   const canonical = canonicalMemberKey(packageName);
-  const extra =
-    declared && declared.length > 0 ? declared : (BUILTIN_TEMPLATE_ALIASES[canonical] ?? []);
+  const usable = Array.isArray(declared)
+    ? declared.filter((n): n is string => typeof n === "string" && n.trim().length > 0)
+    : [];
+  const extra = usable.length > 0 ? usable : (BUILTIN_TEMPLATE_ALIASES[canonical] ?? []);
   const set = new Set<string>();
   for (const name of [packageName, ...extra]) {
     const key = canonicalMemberKey(name);

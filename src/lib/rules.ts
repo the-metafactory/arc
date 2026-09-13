@@ -106,6 +106,25 @@ export function declaredPlaceholders(config: RulesConfig): Set<string> {
  * non-string value, or a token reintroduced by a section injected after
  * substitution ran) — because that is what truncates a repo's real CLAUDE.md
  * down to a stub.
+ *
+ * ## What this does NOT catch (arc#426 round 2, F1 — arc#429)
+ *
+ * State the scope precisely: this refuses **a residual single-brace token whose
+ * key the config declares**. It is NOT a general "never write a half-rendered
+ * template" gate, and must not be described as one.
+ *
+ * The incident's own shape gets through: `agents-md.yaml` keys on `repo_name`
+ * while the template wants `{PROJECT_NAME}`, so `PROJECT_NAME` is undeclared,
+ * is classified as prose, and the stub is WRITTEN. The case variant
+ * `{Project_Name}` is the same hole. What actually contained the incident is
+ * G1 (no home-relative scan root) and G2 (declared consumers only), not this.
+ *
+ * Separating an unrendered placeholder from prose without a declaration is a
+ * text-scan guess, and the fix is a field — the TEMPLATE declares its own
+ * placeholders — not a casing heuristic bolted on here. Filed as arc#429.
+ *
+ * `unrenderableTokens` below is the one case that needs no declaration,
+ * because it is structural rather than a guess.
  */
 export function unrenderedPlaceholders(output: string, declared: Set<string>): string[] {
   const found = new Set<string>();
@@ -113,6 +132,32 @@ export function unrenderedPlaceholders(output: string, declared: Set<string>): s
     const token = m[1];
     if (token && declared.has(token)) found.add(token);
   }
+  return [...found];
+}
+
+/**
+ * `{{…}}` tokens left in the output — a STRUCTURAL refusal (arc#426, arc#428).
+ *
+ * `substitutePlaceholders` emits and matches `{KEY}` only. compass-core's real
+ * `templates/CLAUDE.md.template` is written in the other syntax
+ * (`{{template:repo_name}}`, `{{config:org.name}}`), and `declaredPlaceholders`'
+ * regex cannot even match a token containing a colon — so the accepted
+ * 9139-byte crucible render carried 30 unrendered tokens and still returned
+ * `success: true`. A template written entirely in that syntax renders nothing,
+ * produces no `{KEY}` residual, and passes every check.
+ *
+ * Unlike `unrenderedPlaceholders`, this consults NO declaration. It does not
+ * have to: arc cannot substitute this syntax at all, so a surviving `{{…}}`
+ * token is always a failed render and never prose. That makes it a structural
+ * statement — "arc cannot render this" — rather than a heuristic about intent.
+ *
+ * Teaching arc the syntax is arc#428's business. Refusing to WRITE it is this
+ * function's, and the two are independent: until #428 lands, a template in that
+ * syntax is refused by name instead of being copied out unrendered.
+ */
+export function unrenderableTokens(output: string): string[] {
+  const found = new Set<string>();
+  for (const m of output.matchAll(/\{\{[^{}]*\}\}/g)) found.add(m[0]);
   return [...found];
 }
 
@@ -249,7 +294,31 @@ async function generateSingleRule(
   // 7. Clean up any remaining injection markers
   output = output.replace(/<!-- inject:after:\S+ -->\n?/g, "");
 
-  // 8. arc#423 G3 — a half-rendered template is an ERROR, not an output.
+  // 8. arc#426 G4 — a residual `{{…}}` token is refused UNCONDITIONALLY.
+  // arc substitutes `{KEY}` only, so a token in compass-core's real
+  // `{{template:…}}` / `{{config:…}}` syntax is never rendered and is never
+  // prose. This gate consults no declaration deliberately (see
+  // `unrenderableTokens`): writing such a token is always a half-rendered
+  // template, so there is nothing to weigh. Rendering it is arc#428.
+  const unrenderable = unrenderableTokens(output);
+  if (unrenderable.length) {
+    return {
+      target,
+      success: false,
+      refused: true,
+      error:
+        `refused ${join(consumerDir, target)}: template ${tmpl.source} left ` +
+        `${unrenderable.length} token(s) arc cannot substitute ` +
+        `(${unrenderable.join(", ")}) — arc renders {KEY} only, so this output ` +
+        `is a half-rendered template, not a rendered one (arc#428)`,
+    };
+  }
+
+  // 9. arc#423 G3 — a residual token whose key the config DECLARES is an
+  // ERROR, not an output. Scope it honestly: this is not "never write a
+  // half-rendered template". A residual the config does NOT declare is prose
+  // here, which leaves the incident's own wrong-key shape (`repo_name` in the
+  // config, `{PROJECT_NAME}` in the template) written — see arc#429.
   // The incident's 136 files were not merely written to the wrong repo; they
   // were written as the bare stub `# {PROJECT_NAME}` — a placeholder the render
   // was asked to fill and did not. Only tokens the config ADDRESSES count;
@@ -267,7 +336,7 @@ async function generateSingleRule(
     };
   }
 
-  // 9. Write output
+  // 10. Write output
   const outputPath = join(consumerDir, target);
   await Bun.write(outputPath, output);
 

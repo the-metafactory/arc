@@ -1,6 +1,14 @@
 /**
  * arc#423 — a rules/governance upgrade may never write outside an explicitly
- * configured root, and may never write a half-rendered template.
+ * configured root.
+ *
+ * On the render side the claim is narrower than "never a half-rendered
+ * template", and is stated exactly: a residual `{token}` whose key the config
+ * DECLARES is refused (G3), and any residual `{{…}}` token is refused (G4).
+ * A residual whose key the config does not declare is classified as prose and
+ * is WRITTEN — including the incident's own wrong-key shape. That gap is
+ * arc#429, and the fix there is a field (the template declares its own
+ * placeholders), not a casing heuristic here.
  *
  * Observed 2026-09-13 on the maintainer's machine: `findConsumerRepos` resolved
  * `BLUEPRINT_DEV_ROOT ?? join(homedir(), "Developer")` through a RAW `homedir()`
@@ -11,7 +19,7 @@
  * 301 -> 3), because the real repos key their placeholders on `repo_name` and
  * the substitution silently left `{PROJECT_NAME}` unpopulated and wrote it anyway.
  *
- * Three gates:
+ * Four gates:
  *   G1  the scan root is injected, never resolved from a raw `homedir()`, and a
  *       set-but-unusable root is refused BY NAME rather than scanning nothing;
  *   G2  a repo is a consumer only when its config DECLARES the providing package
@@ -20,6 +28,10 @@
  *   G3  a placeholder the config ADDRESSES that the render left standing is an
  *       ERROR, not output. Only those: a `{branch}` no config key addresses is
  *       prose, and refusing on it broke every legitimate `arc upgrade compass`.
+ *   G4  a residual `{{…}}` token is refused UNCONDITIONALLY. arc substitutes
+ *       `{KEY}` only, so a token in the `{{template:…}}`/`{{config:…}}` syntax
+ *       is never rendered and never prose — writing it is always a half-
+ *       rendered template (arc#426 round 2 / arc#428).
  */
 
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
@@ -27,6 +39,8 @@ import { createTestEnv, type TestEnv } from "../helpers/test-env.js";
 import { install } from "../../src/commands/install.js";
 import { findConsumerRepos, upgradePackage } from "../../src/commands/upgrade.js";
 import { declaresTemplateProvider, generateRules } from "../../src/lib/rules.js";
+import { templateAliasSet } from "../../src/lib/template-aliases.js";
+import { validateTemplateAliases } from "../../src/lib/validate-manifest.js";
 import { mkdir, rm, writeFile } from "fs/promises";
 import { existsSync } from "fs";
 import { join } from "path";
@@ -419,5 +433,178 @@ describe("arc#423 — an empty or non-mapping config is refused, not thrown", ()
     expect(results[0]?.refused).toBe(true);
     expect(results[0]?.error ?? "").toContain("not a YAML mapping");
     expect(await Bun.file(join(consumer, "CLAUDE.md")).text()).toBe(untouched);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// G4 — a residual `{{…}}` token is a STRUCTURAL refusal (arc#426 round 2, F2).
+//
+// arc's `substitutePlaceholders` emits and matches `{KEY}` only. compass-core's
+// real `templates/CLAUDE.md.template` is written in `{{template:…}}` /
+// `{{config:…}}`, and `declaredPlaceholders`' `/\{([A-Za-z][A-Za-z0-9_]*)\}/g`
+// cannot match a token containing a colon — so the accepted 9139-byte crucible
+// render carried 30 unrendered tokens and still returned `success: true`.
+//
+// There is no prose ambiguity to weigh here, and so no declaration to consult:
+// arc CANNOT substitute that syntax, so writing it is ALWAYS a half-rendered
+// template. Rendering it is arc#428's business; refusing it is this gate's.
+// ---------------------------------------------------------------------------
+
+describe("arc#426 G4 — a residual {{…}} token is refused unconditionally", () => {
+  const tmpl = [
+    { source: "templates/CLAUDE.md.template", target: "CLAUDE.md", config: "agents-md.yaml" },
+  ];
+
+  /** The confirmation lane's minimal case A11, verbatim. */
+  test("A11 — `# {{template:repo_name}}` with `repo_name: crucible` is refused", async () => {
+    const pkgDir = join(env.root, "a11-pkg");
+    await mkdir(join(pkgDir, "templates"), { recursive: true });
+    await writeFile(join(pkgDir, "templates", "CLAUDE.md.template"), "# {{template:repo_name}}\n");
+
+    const consumer = join(env.root, "a11-consumer");
+    await mkdir(consumer, { recursive: true });
+    await writeFile(
+      join(consumer, "agents-md.yaml"),
+      "template: A11Pkg\nrepo_name: crucible\n",
+    );
+    const untouched = "# Crucible\n\nReal content that must survive.\n";
+    await writeFile(join(consumer, "CLAUDE.md"), untouched);
+
+    const results = await generateRules(pkgDir, tmpl, consumer, { packageName: "A11Pkg" });
+
+    expect(results[0]?.success).toBe(false);
+    // Named by token AND by file — a refusal you can act on.
+    expect(results[0]?.error ?? "").toContain("{{template:repo_name}}");
+    expect(results[0]?.error ?? "").toContain(join(consumer, "CLAUDE.md"));
+    expect(await Bun.file(join(consumer, "CLAUDE.md")).text()).toBe(untouched);
+  });
+
+  test("the real compass-core template shape is refused, not written", async () => {
+    const pkgDir = join(env.root, "cc-pkg");
+    await mkdir(join(pkgDir, "templates"), { recursive: true });
+    // The live shape: repeated `{{template:sops_path}}`, `{{template:repo_name}}`
+    // and `{{config:org.name}}` alongside single-brace PROSE that must stay prose.
+    await writeFile(
+      join(pkgDir, "templates", "CLAUDE.md.template"),
+      [
+        "# {{template:repo_name}} -- {{config:org.name}}",
+        "",
+        "Read `{{template:sops_path}}/dev-pipeline.md` first.",
+        "Then `{{template:sops_path}}/pr-review.md`.",
+        "",
+        "Worktrees: `../{repo}-{branch}`; branches `{type}/{slug}`.",
+        "",
+        "Regenerated for {{template:repo_name}}.",
+        "",
+      ].join("\n"),
+    );
+
+    const consumer = join(env.root, "cc-consumer");
+    await mkdir(consumer, { recursive: true });
+    // crucible's own unmodified key shape.
+    await writeFile(
+      join(consumer, "agents-md.yaml"),
+      YAML.stringify({ template: "compass-core", repo_name: "crucible" }),
+    );
+    const untouched = "# crucible -- The infrastructure factory\n\n492 lines of real content.\n";
+    await writeFile(join(consumer, "CLAUDE.md"), untouched);
+
+    const results = await generateRules(pkgDir, tmpl, consumer, {
+      packageName: "compass",
+      packageAliases: ["compass", "compass-core"],
+    });
+
+    expect(results[0]?.success).toBe(false);
+    const err = results[0]?.error ?? "";
+    // Every distinct token named, deduplicated, once.
+    expect(err).toContain("{{template:repo_name}}");
+    expect(err).toContain("{{template:sops_path}}");
+    expect(err).toContain("{{config:org.name}}");
+    expect(err).toContain("3 token(s)");
+    // Prose single braces are NOT dragged into this refusal.
+    expect(err).not.toContain("{slug}");
+    expect(await Bun.file(join(consumer, "CLAUDE.md")).text()).toBe(untouched);
+  });
+
+  test("the refusal does not depend on what the config declares", async () => {
+    // Same token, an EMPTY config beyond the declaration: still refused. The
+    // gate is structural, so `declaredPlaceholders` never enters into it.
+    const pkgDir = join(env.root, "g4-nodecl-pkg");
+    await mkdir(join(pkgDir, "templates"), { recursive: true });
+    await writeFile(join(pkgDir, "templates", "CLAUDE.md.template"), "# {{config:anything}}\n");
+
+    const consumer = join(env.root, "g4-nodecl-consumer");
+    await mkdir(consumer, { recursive: true });
+    await writeFile(join(consumer, "agents-md.yaml"), "template: G4Pkg\n");
+    await writeFile(join(consumer, "CLAUDE.md"), "# Real\n");
+
+    const results = await generateRules(pkgDir, tmpl, consumer, { packageName: "G4Pkg" });
+    expect(results[0]?.success).toBe(false);
+    expect(results[0]?.error ?? "").toContain("{{config:anything}}");
+    expect(await Bun.file(join(consumer, "CLAUDE.md")).text()).toBe("# Real\n");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// `provides.templateAliases` is validated where every other manifest field is
+// (arc#426 round 2, F3 promoted). Two live consequences, both reproduced:
+//   `[123]`   -> `TypeError: name.trim is not a function`, aborting the upgrade
+//   a SCALAR  -> spreads to single-character aliases, so `template: o` becomes
+//                authority and the real alias is silently dropped, stopping
+//                regeneration for every live consumer.
+// Same defect class this PR fixed one level up for `agents-md.yaml`.
+// ---------------------------------------------------------------------------
+
+describe("arc#426 — provides.templateAliases is validated, not trusted", () => {
+  test("absent or a list of non-empty strings is accepted", () => {
+    expect(validateTemplateAliases(undefined)).toEqual([]);
+    expect(validateTemplateAliases({})).toEqual([]);
+    expect(validateTemplateAliases({ templateAliases: ["compass", "compass-core"] })).toEqual([]);
+  });
+
+  test.each([
+    [[123], "provides.templateAliases[0]"],
+    [[null], "provides.templateAliases[0]"],
+    [["compass", ""], "provides.templateAliases[1]"],
+    [["compass", "   "], "provides.templateAliases[1]"],
+    [["compass", { a: 1 }], "provides.templateAliases[1]"],
+  ])("%p is refused by name", (aliases, field) => {
+    const v = validateTemplateAliases({ templateAliases: aliases });
+    expect(v.map((x) => x.field)).toContain(field);
+    expect(v[0]?.rule ?? "").toContain("non-empty string");
+  });
+
+  test.each([
+    ["compass-core", "a scalar"],
+    [{ compass: true }, "a mapping"],
+    [42, "a number"],
+  ])("a non-list (%p, %s) is refused by name", (aliases) => {
+    const v = validateTemplateAliases({ templateAliases: aliases });
+    expect(v.map((x) => x.field)).toEqual(["provides.templateAliases"]);
+    expect(v[0]?.rule ?? "").toContain("must be a list of non-empty strings");
+  });
+
+  test("`[123]` no longer throws out of the regeneration — it is a named refusal", () => {
+    // Before: `templateAliasSet` called `canonicalMemberKey(123)`, which threw
+    // `TypeError: name.trim is not a function` and aborted the upgrade.
+    expect(() =>
+      templateAliasSet("compass", [123] as unknown as readonly string[]),
+    ).not.toThrow();
+    // And the bad entry contributes nothing — `123` never becomes authority.
+    // An unusable declaration degrades to NO declaration, so the shim applies
+    // and live consumers keep regenerating.
+    const set = templateAliasSet("compass", [123] as unknown as readonly string[]);
+    expect([...set]).toEqual(["compass", "compass-core", "compass-standards"]);
+    expect(set.has("123")).toBe(false);
+  });
+
+  test("a YAML scalar no longer spreads into single-character aliases", () => {
+    // Before: `[...("compass-core")]` produced `c`,`o`,`m`,… so `template: o`
+    // was authority and `compass-core` — the real alias — was dropped.
+    const set = templateAliasSet("compass", "compass-core" as unknown as readonly string[]);
+    expect(set.has("o")).toBe(false);
+    expect(set.has("c")).toBe(false);
+    // Falls back to the built-in shim, so live consumers keep regenerating.
+    expect(set.has("compass-core")).toBe(true);
   });
 });
