@@ -85,6 +85,22 @@ filesystem write (arc#419 / arc#420):**
    install of the SAME package (the upgrade case) is always updated silently,
    regardless of `--replace`.
 
+Both refusals apply to `arc upgrade` exactly as they do to `arc install`.
+`arc upgrade` re-drops `provides.files` for `type: component` and
+`type: governance` (a governance package's entire payload is `provides.files`,
+so a drop added between versions lands only via that re-drop), and that re-drop
+runs through the same plan-then-apply path — so a `$FOO` target or an occupied
+target introduced by a new version refuses the upgrade rather than landing it.
+`arc upgrade --replace` opts in with identical semantics. The refusal happens
+before anything is written: the previous version stays installed and working,
+its database row untouched.
+
+**What these refusals do NOT cover.** A *primary drop* — the per-type symlink
+for a skill, tool, agent or prompt — still goes through `createSymlink`'s
+generic occupied-destination handling (arc#293), which renames whatever is
+there to a `.pre-arc` sidecar without a warning. Only `provides.files` targets
+are guarded here.
+
 ### Artifact Types
 
 | Type | Installed To | What It Is |
