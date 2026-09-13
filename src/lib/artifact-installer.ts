@@ -155,6 +155,21 @@ export interface ProvidesFileConflict {
 }
 
 /**
+ * Render provides.files conflicts (arc#419 unexpanded variables, arc#420
+ * occupied targets) into the one-per-line error format the other
+ * provides.files refusal (`filesMissingSource`, #84/#89) already uses.
+ *
+ * Lives here, beside `ProvidesFileConflict`, because BOTH the install path
+ * (`src/commands/install.ts`) and the upgrade re-drop
+ * (`src/commands/upgrade.ts`) surface the same refusal — an operator must not
+ * be able to tell which command refused from the wording.
+ */
+export function formatProvidesFileConflicts(conflicts: ProvidesFileConflict[]): string {
+  const detail = conflicts.map((c) => `  - ${c.target}: ${c.reason}`).join("\n");
+  return `provides.files entries refused:\n${detail}`;
+}
+
+/**
  * Classify what currently sits at a `provides.files` target relative to the
  * source THIS install would symlink there (arc#420).
  *
@@ -281,10 +296,15 @@ export function planArtifactSymlinks(opts: ArtifactSymlinkOpts): ArtifactSymlink
       unsafeTargets.push({
         source: join(installDir, file.source),
         target: resolvedTarget,
+        // The offending TOKEN alone is ambiguous — a target like `we$re/x`
+        // reports `$re`, which reads like a path nobody wrote. Name the
+        // declared target AND the resolved target alongside it so the operator
+        // can see exactly which manifest entry and which substring is at fault.
         reason:
           `provides.files target "${file.target}" resolved to "${resolvedTarget}", ` +
-          `which still contains an unexpanded variable ("${badToken}"). Refusing to ` +
-          `install rather than create a literal directory relative to cwd.`,
+          `which still contains the unexpanded variable "${badToken}" (in ` +
+          `"${resolvedTarget}"). Refusing to install rather than create a ` +
+          `literal directory relative to cwd.`,
       });
     }
   }
@@ -680,6 +700,16 @@ export async function createArtifactSymlinks(opts: {
   quiet?: boolean;
   /** arc#420 opt-in — see {@link ArtifactSymlinkOpts.replaceProvidesFiles}. */
   replaceProvidesFiles?: boolean;
+  /**
+   * Skip the `rules`/`governance` template-generation side effect, applying
+   * ONLY the symlink plan. Set by `arc upgrade`'s provides.files re-drop
+   * (upgrade.ts), which regenerates templates itself in a later step — into
+   * every consumer repo `findConsumerRepos` discovers, not into `process.cwd()`
+   * — so letting this step also render them would both duplicate the work and
+   * write a template into whatever directory the operator happened to run
+   * `arc upgrade` from. Defaults to false (install's behavior, unchanged).
+   */
+  skipTemplates?: boolean;
 }): Promise<{
   filesCreated: { source: string; target: string }[];
   filesMissingSource: { source: string; target: string }[];
@@ -727,7 +757,7 @@ export async function createArtifactSymlinks(opts: {
 
   // `rules` and `governance` are the types whose apply step has a side effect
   // with no symlink target (template generation into the consumer repo).
-  if (type === "rules" || type === "governance") {
+  if ((type === "rules" || type === "governance") && !opts.skipTemplates) {
     const templates = manifest.provides?.templates ?? [];
     if (templates.length) {
       const consumerDir = opts.consumerDir ?? process.cwd();

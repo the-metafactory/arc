@@ -19,8 +19,10 @@ import {
   type TestEnv,
 } from "../helpers/test-env.js";
 import { install } from "../../src/commands/install.js";
+import { upgradePackage } from "../../src/commands/upgrade.js";
 import { createArtifactSymlinks } from "../../src/lib/artifact-installer.js";
 import { getSkill } from "../../src/lib/db.js";
+import YAML from "yaml";
 
 let env: TestEnv;
 
@@ -193,5 +195,219 @@ describe("provides.files — arc#420 occupied-target refusal", () => {
     expect(applyAgain.filesOccupied).toHaveLength(0);
     expect(applyAgain.unsafeTargets).toHaveLength(0);
     expect(lstatSync(target).isSymbolicLink()).toBe(true);
+  });
+});
+
+/**
+ * arc#421 round 2 (BLOCKER): the SAME two guards on the `arc upgrade` path.
+ *
+ * `upgradePackage` re-drops `provides.files` for `type: component` and
+ * `type: governance` (arc#361 — a governance package's ENTIRE payload is
+ * provides.files, so without the re-drop a drop added between versions never
+ * lands). That re-drop used to call `resolveProvidesTarget` + `createSymlink`
+ * directly, bypassing `planArtifactSymlinks` — so on upgrade BOTH defects
+ * reproduced verbatim at exit 0 with an empty stderr: a `$FOO` target created
+ * a literal `$FOO` directory relative to cwd, and an operator's directory was
+ * silently displaced to a `.pre-arc` sidecar. compass ships as
+ * `type: governance`, so this is its NORMAL upgrade path.
+ */
+describe("provides.files — the same guards on the arc upgrade re-drop (arc#421)", () => {
+  /** Build a governance package (compass-core's shape) at `version`. */
+  async function writeGovManifest(
+    repoDir: string,
+    version: string,
+    files: { source: string; target: string }[],
+  ): Promise<void> {
+    await Bun.write(
+      join(repoDir, "arc-manifest.yaml"),
+      YAML.stringify({
+        name: "GovPkg",
+        version,
+        type: "governance",
+        tier: "custom",
+        description: "Mock governance engine (compass-core shape)",
+        author: { name: "tester", github: "tester" },
+        provides: { files },
+        depends_on: { tools: [{ name: "bun", version: ">=1.0.0" }] },
+        capabilities: {
+          filesystem: { read: [], write: [] },
+          network: [],
+          bash: { allowed: false },
+          secrets: [],
+        },
+      }),
+    );
+  }
+
+  function git(cwd: string, args: string[]): void {
+    Bun.spawnSync(["git", "-c", "user.name=Test", "-c", "user.email=test@test.com", ...args], {
+      cwd,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+  }
+
+  /**
+   * Install GovPkg v1 with ONE clean drop, then rewrite its manifest to v2
+   * with whatever `v2Files` describes and commit. Returns the v1 drop target
+   * so a caller can assert the previous version survived a refusal.
+   */
+  async function installV1ThenStageV2(
+    v2Files: { source: string; target: string }[],
+  ): Promise<{ repoDir: string; v1Target: string }> {
+    const repoDir = join(env.root, "mock-GovPkg");
+    mkdirSync(join(repoDir, "claude", "skills", "governance"), { recursive: true });
+    writeFileSync(join(repoDir, "claude", "skills", "governance", "SKILL.md"), "# gov\n");
+    mkdirSync(join(repoDir, "claude", "agents"), { recursive: true });
+    writeFileSync(join(repoDir, "claude", "agents", "governance.md"), "# agent\n");
+    writeFileSync(join(repoDir, "added-in-v2.md"), "packaged v2\n");
+
+    const v1Target = join(env.root, "fake-home", "gov-skill");
+    await writeGovManifest(repoDir, "1.0.0", [
+      { source: "claude/skills/governance", target: v1Target },
+    ]);
+    git(repoDir, ["init"]);
+    git(repoDir, ["add", "."]);
+    git(repoDir, ["commit", "-m", "v1"]);
+
+    const installed = await install({
+      arc: env.arc,
+      host: env.host,
+      db: env.db,
+      repoUrl: repoDir,
+      yes: true,
+    });
+    expect(installed.success).toBe(true);
+    expect(lstatSync(v1Target).isSymbolicLink()).toBe(true);
+
+    await writeGovManifest(repoDir, "2.0.0", [
+      { source: "claude/skills/governance", target: v1Target },
+      ...v2Files,
+    ]);
+    git(repoDir, ["add", "."]);
+    git(repoDir, ["commit", "-m", "v2"]);
+
+    return { repoDir, v1Target };
+  }
+
+  test("arc#419 — an unexpanded $VAR target added in v2 is refused on upgrade; nothing is created", async () => {
+    const { v1Target } = await installV1ThenStageV2([
+      { source: "added-in-v2.md", target: "$FOO/skills/website-oracle" },
+    ]);
+
+    const cwdBefore = process.cwd();
+    const result = await upgradePackage(env.db, env.arc, env.host, "GovPkg");
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("$FOO");
+    expect(result.error).toContain("unexpanded variable");
+    // The literal `$FOO` directory relative to cwd — the arc#419 bug, which
+    // reproduced verbatim on this path before the fix.
+    expect(existsSync(join(cwdBefore, "$FOO"))).toBe(false);
+
+    // Coherent state: the PREVIOUS version is still installed, its drop still
+    // resolves, and the DB row was not bumped.
+    const row = getSkill(env.db, "GovPkg");
+    expect(row?.version).toBe("1.0.0");
+    expect(row?.status).toBe("active");
+    expect(lstatSync(v1Target).isSymbolicLink()).toBe(true);
+    expect(existsSync(join(v1Target, "SKILL.md"))).toBe(true);
+  });
+
+  test("arc#420 — a target occupied by operator content is refused on upgrade; the content is untouched", async () => {
+    const occupied = join(env.root, "fake-home", "operator-dir");
+    mkdirSync(occupied, { recursive: true });
+    writeFileSync(join(occupied, "MINE.md"), "operator content\n");
+
+    const { v1Target } = await installV1ThenStageV2([
+      { source: "claude/agents/governance.md", target: occupied },
+    ]);
+
+    const result = await upgradePackage(env.db, env.arc, env.host, "GovPkg");
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain(occupied);
+    expect(result.error).toContain("--replace");
+
+    // No sidecar rename, no deletion — the exact failure the old path had.
+    expect(lstatSync(occupied).isSymbolicLink()).toBe(false);
+    expect(readFileSync(join(occupied, "MINE.md"), "utf-8")).toBe("operator content\n");
+    expect(existsSync(`${occupied}.pre-arc`)).toBe(false);
+
+    const row = getSkill(env.db, "GovPkg");
+    expect(row?.version).toBe("1.0.0");
+    expect(lstatSync(v1Target).isSymbolicLink()).toBe(true);
+  });
+
+  test("arc#420 — `arc upgrade --replace` removes the occupied content, warns, takes no backup", async () => {
+    const occupied = join(env.root, "fake-home", "operator-dir");
+    mkdirSync(occupied, { recursive: true });
+    writeFileSync(join(occupied, "MINE.md"), "operator content\n");
+
+    await installV1ThenStageV2([
+      { source: "claude/agents/governance.md", target: occupied },
+    ]);
+
+    const warnings: string[] = [];
+    const originalWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = (chunk: string | Uint8Array) => {
+      warnings.push(chunk.toString());
+      return true;
+    };
+    let result;
+    try {
+      result = await upgradePackage(env.db, env.arc, env.host, "GovPkg", {
+        replaceProvidesFiles: true,
+      });
+    } finally {
+      process.stderr.write = originalWrite;
+    }
+
+    expect(result.success).toBe(true);
+    expect(result.newVersion).toBe("2.0.0");
+    expect(lstatSync(occupied).isSymbolicLink()).toBe(true);
+    expect(existsSync(`${occupied}.pre-arc`)).toBe(false);
+    expect(
+      warnings.some((w) => w.includes(occupied) && w.toLowerCase().includes("not backed up")),
+    ).toBe(true);
+  });
+
+  test("an OWNED symlink from the previous version is updated silently — the ordinary upgrade still works", async () => {
+    // v2 changes nothing but the version: the v1 drop target is already a
+    // symlink pointing at exactly the source v2 will link there. That is the
+    // whole point of the re-drop, and it must NOT be refused as "occupied".
+    const { v1Target } = await installV1ThenStageV2([]);
+
+    const warnings: string[] = [];
+    const originalWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = (chunk: string | Uint8Array) => {
+      warnings.push(chunk.toString());
+      return true;
+    };
+    let result;
+    try {
+      result = await upgradePackage(env.db, env.arc, env.host, "GovPkg");
+    } finally {
+      process.stderr.write = originalWrite;
+    }
+
+    expect(result.success).toBe(true);
+    expect(result.newVersion).toBe("2.0.0");
+    expect(lstatSync(v1Target).isSymbolicLink()).toBe(true);
+    expect(existsSync(join(v1Target, "SKILL.md"))).toBe(true);
+    expect(getSkill(env.db, "GovPkg")?.version).toBe("2.0.0");
+    // Silent: no provides.files warning on the ordinary upgrade path.
+    expect(warnings.join("")).not.toContain("not backed up");
+  });
+
+  test("a NEW clean drop added in v2 lands on upgrade (the re-drop still does its job)", async () => {
+    const newTarget = join(env.root, "fake-home", "added-in-v2.md");
+    await installV1ThenStageV2([{ source: "added-in-v2.md", target: newTarget }]);
+
+    const result = await upgradePackage(env.db, env.arc, env.host, "GovPkg");
+
+    expect(result.success).toBe(true);
+    expect(existsSync(newTarget)).toBe(true);
+    expect(readFileSync(newTarget, "utf-8")).toBe("packaged v2\n");
   });
 });

@@ -951,7 +951,8 @@ program
   .description("Upgrade installed packages to latest version")
   .option("--check", "Only check for available upgrades, don't install")
   .option("--force", "Re-run upgrade pipeline even if already at latest version")
-  .action(async (name: string | undefined, opts: { check?: boolean; force?: boolean }) => {
+  .option("--replace", "Replace existing content at a provides.files target instead of refusing (arc#420). Same semantics as `arc install --replace`: no backup is taken, and a warning names what was removed. An owned symlink from the PREVIOUS version of this package is always updated silently regardless of this flag.")
+  .action(async (name: string | undefined, opts: { check?: boolean; force?: boolean; replace?: boolean }) => {
     const paths = createArcPaths();
     const host = getDefaultHost();
     await ensureDirectories(paths, host);
@@ -974,13 +975,13 @@ program
           console.log("All packages are up to date.");
         } else {
           console.log(`Upgrading ${upgradable.length} package(s)...\n`);
-          const results = await upgradeAll(db, paths, host);
+          const results = await upgradeAll(db, paths, host, { replaceProvidesFiles: opts.replace });
           console.log(formatUpgradeResults(results));
         }
       }
     } else if (!name && opts.force) {
       // Force upgrade all
-      const results = await upgradeAll(db, paths, host, { force: true });
+      const results = await upgradeAll(db, paths, host, { force: true, replaceProvidesFiles: opts.replace });
       if (!results.length) {
         console.log("No packages installed.");
       } else {
@@ -1002,10 +1003,10 @@ program
       }
 
       if (isLibraryUpgrade) {
-        const results = await upgradeLibrary(db, paths, host, name, { force: opts.force });
+        const results = await upgradeLibrary(db, paths, host, name, { force: opts.force, replaceProvidesFiles: opts.replace });
         console.log(formatUpgradeResults(results, { force: opts.force }));
       } else {
-        const result = await upgradePackage(db, paths, host, upgradeName, { force: opts.force });
+        const result = await upgradePackage(db, paths, host, upgradeName, { force: opts.force, replaceProvidesFiles: opts.replace });
         if (result.success) {
           if (result.oldVersion === result.newVersion) {
             if (opts.force) {

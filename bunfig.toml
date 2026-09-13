@@ -1,0 +1,6 @@
+# arc#421 round 2 (M1): every `bun test` run loads the real-home guard FIRST.
+# It pins $HOME + the XDG roots to a per-run temp sandbox and fails the run
+# loudly if anything under the operator's real config roots changed. See
+# test/helpers/real-home-guard.ts for the full rationale.
+[test]
+preload = ["./test/helpers/real-home-guard.ts"]

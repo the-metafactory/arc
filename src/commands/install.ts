@@ -27,9 +27,9 @@ import { satisfiesRange } from "../lib/semver.js";
 import { isSafePinRef, isSemverShapedRef, pinRefCandidates } from "../lib/pin-ref.js";
 import {
   type ArtifactSymlinkRecord,
-  type ProvidesFileConflict,
   artifactDropPresent,
   createArtifactSymlinks,
+  formatProvidesFileConflicts,
   installNodeDependencies,
   reportNodeDependencyResult,
   rollbackArtifactSymlinks,
@@ -466,16 +466,6 @@ export async function installPackageDependencies(
   }
 
   return { success: true };
-}
-
-/**
- * Render provides.files conflicts (arc#419 unexpanded variables, arc#420
- * occupied targets) into the one-per-line install error format the other
- * provides.files refusal (`filesMissingSource`, #84/#89) already uses.
- */
-function formatProvidesFileConflicts(conflicts: ProvidesFileConflict[]): string {
-  const detail = conflicts.map((c) => `  - ${c.target}: ${c.reason}`).join("\n");
-  return `provides.files entries refused:\n${detail}`;
 }
 
 /**

@@ -7,14 +7,31 @@
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync } from "node:fs";
 import { join } from "node:path";
-import { homedir } from "node:os";
+import { userHome } from "../lib/user-home.js";
 import { getPublicKeyAsync } from "@noble/ed25519";
 import { randomBytes } from "node:crypto";
 import { AGENT_ID_RE as NAMING_RE, formatDisplayName } from "../lib/agent-naming.js";
 
-const CONFIG_BASE = process.env.METAFACTORY_CONFIG_DIR ?? join(homedir(), ".config", "metafactory");
-const KEYS_DIR = join(CONFIG_BASE, "keys");
-const REGISTRY_PATH = join(CONFIG_BASE, "principals.json");
+/**
+ * The identity keystore base, resolved AT CALL TIME (arc#421 round 2).
+ *
+ * These three were module-load `const`s. `METAFACTORY_CONFIG_DIR` was
+ * therefore read ONCE, before any test could set it — which is exactly what
+ * `test/commands/identity.test.ts` tries to do in its `beforeAll`. The
+ * override silently did nothing and `bun test` wrote `keys/` and
+ * `principals.json` entries into the operator's REAL `~/.config/metafactory`.
+ * Resolving per call makes the documented `METAFACTORY_CONFIG_DIR` contract
+ * (see `src/lib/paths.ts`) actually hold.
+ */
+function configBase(): string {
+  return process.env.METAFACTORY_CONFIG_DIR ?? join(userHome(), ".config", "metafactory");
+}
+function keysDir(): string {
+  return join(configBase(), "keys");
+}
+function registryPath(): string {
+  return join(configBase(), "principals.json");
+}
 const DID_RE = /^did:mf:[a-z][a-z0-9._-]+$/;
 const BASE64_RE = /^[A-Za-z0-9+/]+=*$/;
 
@@ -35,14 +52,14 @@ export interface PrincipalRegistryFile {
 }
 
 function ensureKeysDir(): void {
-  if (!existsSync(KEYS_DIR)) {
-    mkdirSync(KEYS_DIR, { recursive: true, mode: 0o700 });
+  if (!existsSync(keysDir())) {
+    mkdirSync(keysDir(), { recursive: true, mode: 0o700 });
   }
-  chmodSync(KEYS_DIR, 0o700);
+  chmodSync(keysDir(), 0o700);
 }
 
 function keyPath(name: string): string {
-  return join(KEYS_DIR, `${name}.key`);
+  return join(keysDir(), `${name}.key`);
 }
 
 function validatePrincipal(p: unknown, index: number): asserts p is Principal {
@@ -57,22 +74,22 @@ function validatePrincipal(p: unknown, index: number): asserts p is Principal {
 }
 
 function loadRegistry(): PrincipalRegistryFile {
-  if (!existsSync(REGISTRY_PATH)) {
+  if (!existsSync(registryPath())) {
     return { version: 1, principals: [], trusted_hubs: [] };
   }
-  const raw = JSON.parse(readFileSync(REGISTRY_PATH, "utf-8")) as Partial<PrincipalRegistryFile>;
+  const raw = JSON.parse(readFileSync(registryPath(), "utf-8")) as Partial<PrincipalRegistryFile>;
   if (raw.version !== 1 || !Array.isArray(raw.principals)) {
-    throw new Error(`Invalid registry at ${REGISTRY_PATH}: expected version 1 with principals array`);
+    throw new Error(`Invalid registry at ${registryPath()}: expected version 1 with principals array`);
   }
   return raw as PrincipalRegistryFile;
 }
 
 function saveRegistry(registry: PrincipalRegistryFile): void {
-  if (!existsSync(CONFIG_BASE)) {
-    mkdirSync(CONFIG_BASE, { recursive: true });
+  if (!existsSync(configBase())) {
+    mkdirSync(configBase(), { recursive: true });
   }
-  writeFileSync(REGISTRY_PATH, JSON.stringify(registry, null, 2) + "\n");
-  console.log(`  registry: ${REGISTRY_PATH}`);
+  writeFileSync(registryPath(), JSON.stringify(registry, null, 2) + "\n");
+  console.log(`  registry: ${registryPath()}`);
 }
 
 export async function generateIdentity(
@@ -230,7 +247,7 @@ export function listPrincipals(): void {
   const registry = loadRegistry();
   if (registry.principals.length === 0) {
     console.log("No principals registered.");
-    console.log(`Registry: ${REGISTRY_PATH}`);
+    console.log(`Registry: ${registryPath()}`);
     return;
   }
 
@@ -244,5 +261,5 @@ export function listPrincipals(): void {
     console.log(`    created: ${p.created_at}`);
     console.log();
   }
-  console.log(`Registry: ${REGISTRY_PATH}`);
+  console.log(`Registry: ${registryPath()}`);
 }

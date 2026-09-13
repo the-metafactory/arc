@@ -124,13 +124,20 @@ ${lifecycleYaml}`,
 async function installBot(name: string, lifecycle?: any) {
   const repo = await makeStandaloneBotRepo({ name, lifecycle });
   // makeStandaloneBotRepo's provides.files target is `${cortexRoot}/…`
-  // (absolute, sandboxed) rather than `~/…` — resolveProvidesTarget expands
-  // `~` via os.homedir(), which does NOT track a `process.env.HOME`
-  // override under Bun (confirmed: `bun -e 'process.env.HOME=...; os.homedir()'`
-  // still returns the real home), so a `~`-based target here would leak into
-  // the developer's real `~/.config/cortex/agents.d` on every run —
-  // invisible previously because createSymlink silently replaced whatever
-  // was there; arc#420's occupied-target refusal now surfaces exactly that.
+  // (absolute, sandboxed) rather than `~/…`. resolveProvidesTarget expands `~`
+  // via os.homedir(), which DOES honour `$HOME` when it is set at process
+  // SPAWN — what it ignores is an in-process `process.env.HOME = …` assignment
+  // after the process has started (Bun resolves the value once and caches it):
+  //
+  //   bun -e 'process.env.HOME="/tmp/x"; console.log(os.homedir())'  → real home
+  //   HOME=/tmp/x bun -e 'console.log(os.homedir())'                 → /tmp/x
+  //
+  // So the in-process HOME dance this file used to do could never have worked,
+  // and a `~`-based target here leaked into the developer's real
+  // `~/.config/cortex/agents.d` on every run — invisible previously because
+  // createSymlink silently replaced whatever was there; arc#420's
+  // occupied-target refusal now surfaces exactly that. Passing the sandboxed
+  // root explicitly is the fix that depends on neither behaviour.
   return await install({
     arc: env.arc, host: env.host, db: env.db,
     repoUrl: repo.url, yes: true,

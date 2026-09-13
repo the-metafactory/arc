@@ -42,7 +42,7 @@
  */
 
 import { join } from "path";
-import { homedir } from "os";
+import { userHome } from "../user-home.js";
 import { existsSync } from "fs";
 
 /** The shared metafactory XDG root under `~/.config` (cortex wave-4 cutover). */
@@ -58,14 +58,18 @@ export const GROVE_CONFIG_DIRNAME = "grove";
  * `process.env` read of `CORTEX_CONFIG_DIR`.
  */
 export interface CortexConfigDirSeam {
-  /** Injectable `$HOME`. Defaults to `os.homedir()`. */
+  /** Injectable `$HOME`. Defaults to the process `$HOME` (`userHome()`). */
   home?: string;
   /** Injectable environment. Defaults to `process.env`. */
   env?: Record<string, string | undefined>;
 }
 
 function seamHome(seam?: CortexConfigDirSeam): string {
-  return seam?.home ?? homedir();
+  // `userHome()` rather than `homedir()` so an in-process `$HOME` pin (the
+  // test suite's real-home guard) reaches this resolver too — arc#421 round 2,
+  // M1. An explicitly injected `seam.home` still wins, which is what keeps
+  // `resolveCortexConfigRoot({ home })` callers hermetic and authoritative.
+  return seam?.home ?? userHome();
 }
 
 function seamEnv(seam?: CortexConfigDirSeam): Record<string, string | undefined> {

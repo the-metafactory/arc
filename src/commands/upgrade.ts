@@ -25,8 +25,6 @@ import {
   type MemberMove,
 } from "../lib/composition-upgrade.js";
 import { readCompositionReferences, validateCompositionFields } from "../lib/composition.js";
-import { createSymlink } from "../lib/symlinks.js";
-import { resolveProvidesTarget } from "../lib/provides-target.js";
 import { findGitRoot } from "../lib/paths.js";
 import { loadSources } from "../lib/sources.js";
 import { findInAllSources } from "../lib/remote-registry.js";
@@ -42,11 +40,27 @@ import { validateTemplateAliases } from "../lib/validate-manifest.js";
 import { wireExtensions } from "../lib/extensions.js";
 import { requireBrokerForManifest } from "../lib/nats-broker.js";
 import { runSomaSkillProjection } from "../lib/soma-projection.js";
-import { installNodeDependencies, reportNodeDependencyResult, dropUntrackedBunLock } from "../lib/artifact-installer.js";
+import {
+  createArtifactSymlinks,
+  dropUntrackedBunLock,
+  formatProvidesFileConflicts,
+  installNodeDependencies,
+  reportNodeDependencyResult,
+} from "../lib/artifact-installer.js";
 
 export interface UpgradeOptions {
   /** Re-run the upgrade pipeline even when already at the latest version. */
   force?: boolean;
+  /**
+   * arc#420 opt-in, same semantics as `arc install --replace`: when a
+   * `provides.files` target that the upgraded version wants is occupied by
+   * content this package does not own, remove it OUTRIGHT (no `.pre-arc`
+   * backup) instead of refusing, with an unconditional stderr warning naming
+   * what was removed. Defaults to false (refuse). An OWNED symlink from the
+   * previous version is updated silently either way — that is the ordinary
+   * upgrade, and the flag has no bearing on it.
+   */
+  replaceProvidesFiles?: boolean;
   /**
    * Internal: packages already upgraded by this command (arc#346). Threads
    * through the `depends_on.packages` cascade so a shared dep or a cycle is
@@ -518,7 +532,7 @@ async function cascadeDependencyUpgrades(
   host: HostAdapter,
   manifest: { depends_on?: { packages?: { name: string }[] } },
   seen: Set<string>,
-  opts?: { force?: boolean },
+  opts?: Pick<UpgradeOptions, "force" | "replaceProvidesFiles">,
 ): Promise<UpgradeResult[]> {
   const cascaded: UpgradeResult[] = [];
   for (const dep of manifest.depends_on?.packages ?? []) {
@@ -528,7 +542,11 @@ async function cascadeDependencyUpgrades(
     // A missing/disabled dep is not this function's concern (install path).
     if (existing?.status !== "active" || !existsSync(existing.install_path)) continue;
     cascaded.push(
-      await upgradePackage(db, arc, host, dep.name, { force: opts?.force, _seen: seen }),
+      await upgradePackage(db, arc, host, dep.name, {
+        force: opts?.force,
+        replaceProvidesFiles: opts?.replaceProvidesFiles,
+        _seen: seen,
+      }),
     );
   }
   return cascaded;
@@ -757,15 +775,60 @@ export async function upgradePackage(
   // install payload is provides.files — without this re-drop, a governance
   // package that adds or moves a drop between versions never lands it on
   // upgrade.
+  //
+  // arc#421 round 2 (BLOCKER): this re-drop used to call resolveProvidesTarget
+  // + createSymlink DIRECTLY, never reaching planArtifactSymlinks — so BOTH
+  // install-time guards (arc#419 unexpanded `$VAR`, arc#420 occupied target)
+  // were bypassed on every upgrade. A `$FOO` target created a literal `$FOO`
+  // directory relative to cwd and an operator's directory was silently
+  // displaced to a `.pre-arc` sidecar, at exit 0 with an empty stderr. compass
+  // ships as `type: governance`, so this is its NORMAL upgrade path. The
+  // re-drop now goes through the SAME plan-then-apply pair install uses
+  // (planArtifactSymlinks runs inside createArtifactSymlinks), which makes the
+  // guards structural rather than duplicated: there is no second code path
+  // left to forget them.
+  //
+  // `skipTemplates` because the template regeneration for a governance package
+  // is done further down, into every consumer repo findConsumerRepos discovers
+  // — not into process.cwd(), which is what this step would otherwise do.
   if (
     (manifest.type === "component" || manifest.type === "governance") &&
     manifest.provides?.files?.length
   ) {
-    for (const file of manifest.provides.files) {
-      const sourcePath = join(installPath, file.source);
-      const targetPath = resolveProvidesTarget(file.target);
-      await mkdir(dirname(targetPath), { recursive: true });
-      await createSymlink(sourcePath, targetPath);
+    const redrop = await createArtifactSymlinks({
+      type: manifest.type,
+      manifest,
+      arc,
+      host,
+      installDir: installPath,
+      quiet: true,
+      replaceProvidesFiles: opts?.replaceProvidesFiles,
+      skipTemplates: true,
+    });
+    const refused = [...redrop.unsafeTargets, ...redrop.filesOccupied];
+    if (refused.length) {
+      // Refused at PLAN time — nothing was written, so rolling the code pull
+      // back leaves the previous version installed and working with its DB row
+      // untouched (the version bump happens only after this point).
+      const note = rollback();
+      return {
+        success: false,
+        name,
+        oldVersion,
+        error: formatProvidesFileConflicts(refused) + note,
+      };
+    }
+    if (redrop.filesMissingSource.length) {
+      const note = rollback();
+      const detail = redrop.filesMissingSource
+        .map((f) => `  - ${f.source} -> ${f.target}`)
+        .join("\n");
+      return {
+        success: false,
+        name,
+        oldVersion,
+        error: `provides.files sources missing in the upgraded package:\n${detail}` + note,
+      };
     }
   }
 
@@ -1165,7 +1228,7 @@ async function upgradeComposition(
 export async function upgradeAll(
   db: Database,
   arc: ArcPaths, host: HostAdapter,
-  opts?: { force?: boolean }
+  opts?: Pick<UpgradeOptions, "force" | "replaceProvidesFiles">
 ): Promise<UpgradeResult[]> {
   const results: UpgradeResult[] = [];
   // One shared set across the whole run: when a package cascades an upgrade to
@@ -1261,7 +1324,7 @@ export async function upgradeLibrary(
   db: Database,
   arc: ArcPaths, host: HostAdapter,
   libraryName: string,
-  opts?: { force?: boolean }
+  opts?: Pick<UpgradeOptions, "force" | "replaceProvidesFiles">
 ): Promise<UpgradeResult[]> {
   const artifacts = listByLibrary(db, libraryName);
   if (!artifacts.length) {
