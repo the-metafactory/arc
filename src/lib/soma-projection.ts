@@ -1,6 +1,7 @@
 import type { ArcManifest } from "../types.js";
 import { resolveArtifactSourceDir } from "./artifact-installer.js";
 import { errorMessage } from "./errors.js";
+import { spawnEnv } from "./user-home.js";
 
 export type SomaSkillProjectionMode = "project" | "unproject";
 
@@ -43,9 +44,14 @@ export async function runSomaSkillProjection(
   }
 
   try {
+    // env: soma's ENTIRE JOB is writing `~/.soma` and projecting into
+    // `~/.claude`, and this runs on every `type: skill` install. Without an
+    // explicit env the child resolves the SPAWN-time home and projects into
+    // the operator's real one — see spawnEnv().
     const result = Bun.spawn([somaBin ?? "soma", command, skillDir, "--apply"], {
       stdout: "ignore",
       stderr: "pipe",
+      env: spawnEnv(),
     });
     const timeoutMs = resolveSomaTimeoutMs();
     const abortController = new AbortController();

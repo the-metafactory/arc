@@ -63,6 +63,13 @@ const h = (...parts: string[]): string => join(REAL_HOME, ...parts);
  * Every entry here is a destination arc's own code can reach. Adding one is
  * cheap; leaving one out is how the incident happened.
  */
+/**
+ * The `-wal` / `-shm` sidecars sqlite writes beside a database, and NOT the
+ * database itself. A live daemon rewrites these continuously; excluding the
+ * pair keeps the guard honest about the file that carries the data.
+ */
+const SQLITE_JOURNAL_SIDECARS = (db: string): string[] => [`${db}-wal`, `${db}-shm`];
+
 export const WATCHED: WatchedRoot[] = [
   {
     path: h(".config", "metafactory"),
@@ -72,11 +79,35 @@ export const WATCHED: WatchedRoot[] = [
     // still trip the guard. Nothing arc's tests write lands here.
     exclude: [h(".config", "metafactory", "blueprint")],
   },
-  { path: h(".config", "cortex"), why: "cortex agents/ — written by the identity provisioner" },
+  {
+    path: h(".config", "cortex"),
+    why: "cortex agents/ — written by the identity provisioner",
+    // Same shape as the blueprint exclusion below: a LIVE cortex stack writes
+    // its own runtime state while the suite runs, so a run that touched
+    // nothing would still trip the guard. Measured over a 60s idle window on
+    // this box: `network-cache/*.json` and a running agent's sqlite WAL.
+    // arc's destinations here are `agents/<name>/agent.yaml`, `agents.d/` and
+    // the `cortex.*.yaml` fragments — all still watched.
+    exclude: [h(".config", "cortex", "logs"), h(".config", "cortex", "network-cache")],
+    // A running agent's sqlite JOURNALS sit INSIDE `agents/<name>/`, beside the
+    // `agent.yaml` arc writes, so a subtree exclusion would be far too coarse.
+    // Only the `-wal` / `-shm` sidecars are skipped: arc's own
+    // `identity-provision.ts` CREATES `state.sqlite` itself, so the database
+    // file stays watched and a write to it is still a named failure.
+    excludeNames: SQLITE_JOURNAL_SIDECARS("state.sqlite"),
+  },
   { path: h(".config", "nats"), why: "nsc store + *.creds — written by the real nsc binary" },
   { path: h(".config", "nsc"), why: "alternate nsc store location" },
-  { path: h(".local", "share", "metafactory"), why: "XDG data root for installed packages" },
+  {
+    path: h(".local", "share", "metafactory"),
+    why: "XDG data root for installed packages",
+    // A live cortex mission-control daemon checkpoints its sqlite journal here
+    // throughout a 2-minute suite run. arc has no writer for that database —
+    // the `.db` itself stays watched, only the journals are skipped.
+    excludeNames: SQLITE_JOURNAL_SIDECARS("mission-control.db"),
+  },
   { path: h(".local", "share", "nats"), why: "XDG data root for nsc keystores" },
+  { path: h(".local", "state", "metafactory"), why: "XDG state root — a systemd unit's {{LOG_DIR}}" },
   { path: h(".nsc"), why: "legacy nsc store location" },
   { path: h(".sigstore"), why: "cosign's TUF cache — written by the real cosign binary" },
 
@@ -112,16 +143,71 @@ export const WATCHED: WatchedRoot[] = [
   {
     path: h("Developer"),
     why: "generateRules writes CLAUDE.md / AGENTS.md into every repo it scans",
-    // Bounded, and the bound is exactly arc's reach rather than a convenience.
-    // `findConsumerRepos` enumerates ONE level below `BLUEPRINT_DEV_ROOT` and
-    // `generateRules` writes at that repo's root, so a write lands at
-    // `<root>/<repo>/CLAUDE.md`. Depth 2 also covers a dev root pointed one
-    // level in (`~/Developer/<group>/<repo>/CLAUDE.md`), which is how this
-    // machine's worktrees are laid out. No path exclusions: everything in
-    // range is watched.
+    // ── What depth 2 covers, and what it does not (arc#421 round 4, MAJOR B) ─
+    //
+    // Round 3's comment here claimed the bound was "exactly arc's reach". It
+    // is not, and saying so was the defect: `findConsumerRepos` has TWO
+    // origins and only one of them is bounded.
+    //
+    //  - `scan` (upgrade.ts, the `BLUEPRINT_DEV_ROOT` branch) enumerates ONE
+    //    level below the dev root and writes at that repo's root. Depth 2
+    //    covers it for a dev root at `~/Developer` or one level in
+    //    (`~/Developer/<group>/<repo>/CLAUDE.md`), which is how this machine's
+    //    worktrees are laid out. That origin IS fully contained.
+    //  - `cwd` (upgrade.ts, the always-a-candidate branch) has NO depth bound
+    //    at all. Run arc by hand from `~/Developer/a/b/repo` and
+    //    `generateRules` writes there, deeper than this walk reaches.
+    //
+    // The residual is stated rather than hidden, and it is bounded in turn by
+    // what a TEST RUN can do: the suite's own `process.cwd()` is this
+    // repository's checkout, which `real-home-watch.test.ts` asserts falls
+    // inside the walk, and the preload pins `BLUEPRINT_DEV_ROOT` into the
+    // sandbox so no scan origin can point at a real tree. Raising the cap to
+    // cover an arbitrary operator cwd costs 248,634 files and 10s per
+    // snapshot for a case the suite cannot reach.
     maxDirDepth: 2,
+    // Declared, with a reason true of THIS root: `generateRules` writes at a
+    // repo's ROOT. It has no code path that lands inside a node_modules, so
+    // skipping them here is not the arc#421 MAJOR A defect — and the skip is
+    // still recorded as a marker, so one that APPEARS is reported.
+    prune: {
+      names: ["node_modules", ".git"],
+      why: "generateRules writes CLAUDE.md / AGENTS.md at a repo ROOT; it has no path into node_modules or .git, and .git churns from every other checkout on the box",
+    },
+  },
+
+  // ── arc#421 round 4, MAJOR B: destinations that resolve through a raw
+  // `homedir()` with no seam, and so were unwatched while the test claimed
+  // every reachable destination was. ────────────────────────────────────────
+  {
+    path: h(".local", "bin"),
+    why: "package binaries — `binDir()` (xdg-paths.ts) symlinks shims here",
+  },
+  {
+    path: h("Library", "LaunchAgents"),
+    why: "darwin-launchd drops a package's .plist here",
+  },
+  {
+    path: h(".config", "systemd", "user"),
+    why: "linux-systemd drops a package's unit here",
+  },
+  {
+    path: h(".bun"),
+    why: "`bun install`'s module cache — where arc's un-env'd spawn wrote 290 entries",
   },
 ];
+
+/**
+ * A destination arc NAMES but never creates, recorded here so its absence from
+ * `WATCHED` is a decision rather than an oversight:
+ *
+ * `~/Library/Logs/<package>` — `buildLaunchdTokens` substitutes it into a
+ * plist as `{{LOG_DIR}}`. arc has no `mkdir` for it; launchd creates it when
+ * the operator starts the service. Watching it would mean watching a directory
+ * every third-party app on a Mac writes to continuously, turning the guard
+ * into a coin flip for a path arc's own code cannot reach.
+ */
+export const NAMED_BUT_NEVER_WRITTEN = [h("Library", "Logs")] as const;
 
 const BEFORE = snapshotRoots(WATCHED);
 
@@ -129,7 +215,29 @@ const BEFORE = snapshotRoots(WATCHED);
 // A per-run sandbox home. Set BEFORE any test module is imported, so a module
 // that still computes a home-rooted constant at load time computes it against
 // the sandbox (as long as it resolves through `userHome()` / `$XDG_*`).
-const SANDBOX_HOME = mkdtempSync(join(tmpdir(), "arc-test-home-"));
+function makeSandboxHome(): string {
+  const base = tmpdir();
+  try {
+    return mkdtempSync(join(base, "arc-test-home-"));
+  } catch (err: unknown) {
+    // arc#421 round 4 (minor): a bare `mkdtempSync` throw here took the WHOLE
+    // suite down with 529 spurious failures and a stack trace pointing at a
+    // preload, for nothing worse than a `$TMPDIR` that does not exist. Say
+    // what is wrong instead.
+    throw new Error(
+      `real-home guard: cannot create a sandbox home under "${base}" ` +
+        `(${err instanceof Error ? err.message : String(err)}).\n` +
+        `  $TMPDIR is "${process.env.TMPDIR ?? "(unset)"}". Every test in this ` +
+        `suite runs against a temp home; without one the suite would write into ` +
+        `the operator's real home, so it refuses to start.\n` +
+        `  Fix: point $TMPDIR at a directory that exists, or unset it to use the ` +
+        `system default.`,
+      { cause: err },
+    );
+  }
+}
+
+const SANDBOX_HOME = makeSandboxHome();
 mkdirSync(join(SANDBOX_HOME, ".config"), { recursive: true });
 process.env.HOME = SANDBOX_HOME;
 process.env.XDG_CONFIG_HOME = join(SANDBOX_HOME, ".config");
@@ -168,5 +276,10 @@ const checkOnce = (): void => {
   check();
 };
 
-afterAll(checkOnce);
+// The final walk is the expensive one — ~350k files with nothing pruned over a
+// real destination — so it gets its own timeout rather than tripping bun's
+// 5s hook default and failing the run it was meant to verify.
+const CHECK_TIMEOUT_MS = 300_000;
+
+afterAll(checkOnce, CHECK_TIMEOUT_MS);
 process.on("exit", checkOnce);

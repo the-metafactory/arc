@@ -1,4 +1,4 @@
-import { describe, test, expect, afterAll } from "bun:test";
+import { describe, test, expect, afterAll, beforeEach, afterEach } from "bun:test";
 import {
   detectAccount,
   addBot,
@@ -6,7 +6,7 @@ import {
   __setNscRunnerForTests,
   __setNscInstallCheckForTests,
 } from "../../src/commands/nats.js";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, unlinkSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnEnv, userHome } from "../../src/lib/user-home.js";
@@ -99,11 +99,81 @@ afterAll(() => {
 });
 
 describe("nats commands", () => {
+  /**
+   * arc#421 round 4. Round 3 correctly stopped this suite reading the
+   * operator's real nsc store — but it replaced the old assertion with a skip,
+   * so `detectAccount` ended the round with ZERO coverage, and it is the
+   * function every other nats command defaults its account from.
+   *
+   * It has exactly three outcomes, and none of them needs a real store: the
+   * nsc.json candidates (read from `userHome()`, which the preload pins), the
+   * `nsc env` fallback (through `__setNscRunnerForTests`, already used below),
+   * and the refusal. All three are driven here against a home of their own.
+   */
   describe("detectAccount", () => {
-    test.skipIf(!NSC_STORE_READY)("detects current account from nsc config", () => {
-      const account = detectAccount();
-      expect(typeof account).toBe("string");
-      expect(account.length).toBeGreaterThan(0);
+    let home: string;
+    let prevHome: string | undefined;
+
+    beforeEach(() => {
+      home = mkdtempSync(join(tmpdir(), "arc-detect-acct-"));
+      prevHome = process.env.HOME;
+      process.env.HOME = home;
+    });
+    afterEach(() => {
+      __setNscRunnerForTests(null);
+      if (prevHome === undefined) delete process.env.HOME;
+      else process.env.HOME = prevHome;
+      rmSync(home, { recursive: true, force: true });
+    });
+
+    test("reads the account from ~/.config/nats/nsc/nsc.json", () => {
+      const dir = join(home, ".config", "nats", "nsc");
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "nsc.json"), JSON.stringify({ account: "SANDBOX_ACCT" }));
+      __setNscRunnerForTests(() => {
+        throw new Error("must not shell out when a config file answers");
+      });
+      expect(detectAccount()).toBe("SANDBOX_ACCT");
+    });
+
+    test("falls back to ~/.nsc/nsc.json when the first candidate is absent", () => {
+      const dir = join(home, ".nsc");
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "nsc.json"), JSON.stringify({ account: "LEGACY_ACCT" }));
+      expect(detectAccount()).toBe("LEGACY_ACCT");
+    });
+
+    test("skips an unparseable config and keeps looking", () => {
+      const first = join(home, ".config", "nats", "nsc");
+      mkdirSync(first, { recursive: true });
+      writeFileSync(join(first, "nsc.json"), "{ not json");
+      const legacy = join(home, ".nsc");
+      mkdirSync(legacy, { recursive: true });
+      writeFileSync(join(legacy, "nsc.json"), JSON.stringify({ account: "SECOND_ACCT" }));
+      expect(detectAccount()).toBe("SECOND_ACCT");
+    });
+
+    test("falls back to parsing `nsc env` when no config file carries an account", () => {
+      __setNscRunnerForTests((args) => {
+        expect(args).toEqual(["env"]);
+        return {
+          exitCode: 0,
+          stdout: "",
+          // nsc writes this table to stderr, which is why detectAccount reads both.
+          stderr: [
+            "+----------------------------------------+",
+            "| Current Operator | OP  | metafactory   |",
+            "| Current Account  |     | ENV_ACCT      |",
+            "+----------------------------------------+",
+          ].join("\n"),
+        };
+      });
+      expect(detectAccount()).toBe("ENV_ACCT");
+    });
+
+    test("refuses with ACCOUNT_NOT_FOUND rather than guessing", () => {
+      __setNscRunnerForTests(() => ({ exitCode: 0, stdout: "", stderr: "no table here" }));
+      expect(() => detectAccount()).toThrow(/Cannot detect NSC account/);
     });
   });
 

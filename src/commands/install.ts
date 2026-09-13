@@ -22,6 +22,7 @@ import {
   replaceCapabilities,
 } from "../lib/db.js";
 import { dirtyWorktreeEntries, restoreHead } from "../lib/git-tree.js";
+import { spawnEnv } from "../lib/user-home.js";
 import { runScript, runLifecycleScripts } from "../lib/scripts.js";
 import { satisfiesRange } from "../lib/semver.js";
 import { isSafePinRef, isSemverShapedRef, pinRefCandidates } from "../lib/pin-ref.js";
@@ -2143,10 +2144,13 @@ export function defaultToolProbe(name: string): ReturnType<ToolProbe> {
   if (!path) return { found: false };
 
   try {
+    // env: `path` is an ARBITRARY tool named by a manifest's `requires`. What
+    // it does on `--version` is not ours to assume — see spawnEnv().
     const probe = Bun.spawnSync([path, "--version"], {
       stdout: "pipe",
       stderr: "pipe",
       timeout: 5_000,
+      env: spawnEnv(),
     });
     const output = `${probe.stdout.toString()}\n${probe.stderr.toString()}`;
     return { found: true, path, version: parseToolVersion(output) };

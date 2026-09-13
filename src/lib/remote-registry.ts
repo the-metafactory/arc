@@ -10,6 +10,7 @@ import type {
 } from "../types.js";
 import { searchRegistry, findRegistryEntry } from "./registry.js";
 import { errorMessage } from "./errors.js";
+import { spawnEnv } from "./user-home.js";
 
 const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
 
@@ -317,7 +318,13 @@ export function rewriteRawToContentsApi(url: string): string | null {
 /** Try to get GitHub token from gh CLI auth */
 function getGhToken(): string | null {
   try {
-    const result = Bun.spawnSync(["gh", "auth", "token"], { stdout: "pipe", stderr: "pipe" });
+    // env: gh reads its token from `~/.config/gh` and can refresh it there —
+    // see spawnEnv().
+    const result = Bun.spawnSync(["gh", "auth", "token"], {
+      stdout: "pipe",
+      stderr: "pipe",
+      env: spawnEnv(),
+    });
     if (result.exitCode === 0) {
       return result.stdout.toString().trim();
     }

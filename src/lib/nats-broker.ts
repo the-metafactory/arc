@@ -32,6 +32,7 @@
 
 import * as net from "node:net";
 import { platform } from "node:os";
+import { spawnEnv } from "./user-home.js";
 
 /** Default broker URL when `NATS_URL` is unset. */
 export const DEFAULT_NATS_URL = "nats://127.0.0.1:4222";
@@ -50,7 +51,10 @@ export type Probe = (host: string, port: number, timeoutMs?: number) => Promise<
 export type PlatformFn = () => NodeJS.Platform;
 
 const defaultSpawnRunner: SpawnRunner = (cmd) => {
-  const result = Bun.spawnSync(cmd, { stdout: "pipe", stderr: "pipe" });
+  // env: `cmd` is a broker/nsc command line that resolves its own store under
+  // `$HOME`. The injectable runner is a seam a test must remember to use;
+  // this is the backstop for when it does not — see spawnEnv().
+  const result = Bun.spawnSync(cmd, { stdout: "pipe", stderr: "pipe", env: spawnEnv() });
   return {
     exitCode: result.exitCode,
     stdout: result.stdout.toString(),

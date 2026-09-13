@@ -14,6 +14,7 @@ import type {
   LibraryArtifactEntry,
 } from "../types.js";
 import { errorMessage, isErrno } from "./errors.js";
+import { spawnEnv } from "./user-home.js";
 import {
   createSymlink,
   createCliShim,
@@ -884,10 +885,15 @@ function stderrTail(result: { stderr?: Buffer }, exitCode: number | null): strin
 }
 
 function runBunInstall(dir: string, extraArgs: string[]) {
+  // env: MEASURED LEAK (arc#421 round 4). `bun install` writes its module
+  // cache to `$BUN_INSTALL`/`~/.bun/install/cache`; without an explicit env
+  // the child resolved the SPAWN-time home and one suite run put 290 entries
+  // into the operator's real cache, invisible to the test preload's pin.
   return Bun.spawnSync(["bun", "install", ...extraArgs], {
     cwd: dir,
     stdout: "pipe",
     stderr: "pipe",
+    env: spawnEnv(),
   });
 }
 

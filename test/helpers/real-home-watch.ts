@@ -20,30 +20,61 @@
  * Three changes make the budget bound what it claims to bound:
  *
  *  1. **Per root.** One root's size can no longer consume another's walk.
- *  2. **`node_modules` is pruned** everywhere beneath every root. It is never
- *     a destination arc writes to, and it is the entire reason the old budget
- *     ran out: pruning it takes `~/.config/metafactory` from 124,545 files to
- *     10,716.
- *  3. **Exhaustion is a LOUD FAILURE, not an early return.** A blind root is
+ *  2. **Exhaustion is a LOUD FAILURE, not an early return.** A blind root is
  *     reported by name and fails the run. A guard that goes quiet because it
  *     ran out of budget is worse than no guard, because the silence reads as
  *     a pass.
+ *
+ * ── Why `node_modules` is no longer pruned globally (arc#421 round 4, MAJOR A)
+ *
+ * Round 3 pruned every `node_modules` beneath every root, on the stated ground
+ * that it "is never a destination arc writes to". That was **false**, and
+ * falsest exactly where it mattered: `installNodeDependencies` runs
+ * `bun install` inside `~/.local/share/metafactory/arc/repos/<pkg>` and
+ * `~/.config/metafactory/pkg/repos/<pkg>`, both inside watched roots. The one
+ * spawn site round 3 left un-`env`'d wrote into precisely the tree the guard
+ * could not see, and `formatLeakReport` returned `null`.
+ *
+ * Pruning is therefore no longer a global constant. It is declared PER ROOT
+ * and must carry a reason that is true of THAT root — see `WatchedRoot.prune`.
+ * The two metafactory roots prune nothing. `~/Developer` still prunes
+ * `node_modules`, because arc's only writer there (`generateRules`) writes
+ * `CLAUDE.md` / `AGENTS.md` at a repo's ROOT and cannot land inside one.
+ *
+ * And a pruned directory is no longer skipped silently: a marker entry is
+ * recorded for it, so a `node_modules` that APPEARS where none existed is
+ * still reported by name.
  */
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 
-/** Directory names never walked, under any root. */
-export const PRUNED_DIR_NAMES: readonly string[] = ["node_modules"];
+/**
+ * Value recorded for a directory a root declines to descend into. Its presence
+ * in the snapshot is what makes the skip STATED rather than silent: a pruned
+ * directory that appears between two snapshots shows up as an addition.
+ */
+export const PRUNED_MARKER = "pruned-subtree";
 
 /**
  * Default per-root file budget.
  *
- * Sized against the measured worst case on a developer box with `node_modules`
- * pruned — `~/.local/share/metafactory` at 14,997 files — with enough headroom
- * that ordinary growth does not trip it, and low enough that a test which
- * explodes a tree inside a watched root still gets caught.
+ * Sized against the measured worst case on a developer box with NOTHING pruned
+ * — `~/.local/share/metafactory` at 142,883 files — with enough headroom that
+ * ordinary growth does not trip it, and low enough that a test which explodes
+ * a tree inside a watched root still gets caught.
  */
-export const DEFAULT_BUDGET = 60_000;
+export const DEFAULT_BUDGET = 300_000;
+
+/** A declared prune: the directory names skipped, and why that is safe HERE. */
+export interface PrunePolicy {
+  readonly names: readonly string[];
+  /**
+   * Why arc's own writer for THIS root cannot land inside those directories.
+   * A prune without a reason that is true of this root is how MAJOR A
+   * happened.
+   */
+  readonly why: string;
+}
 
 export interface WatchedRoot {
   /** Absolute path to watch. */
@@ -57,6 +88,13 @@ export interface WatchedRoot {
    */
   readonly exclude?: readonly string[];
   /**
+   * Basenames skipped ANYWHERE beneath this root — for churn a live process
+   * owns that is interleaved with arc's own destinations, so a subtree
+   * exclusion would be too coarse. Same rule as `exclude`: never use it to
+   * make a root cheap, and never on a name arc's own code can write.
+   */
+  readonly excludeNames?: readonly string[];
+  /**
    * Directory levels to descend below the root; the root itself is depth 0.
    * Omit for an unbounded walk. A bounded root is watched EXACTLY as deep as
    * arc's own writer can reach into it — see the `~/Developer` entry in
@@ -65,6 +103,12 @@ export interface WatchedRoot {
   readonly maxDirDepth?: number;
   /** Per-root override of {@link DEFAULT_BUDGET}. */
   readonly budget?: number;
+  /**
+   * Directory names not descended into, declared PER ROOT with a reason.
+   * Omit — the default — to walk everything. Never prune a directory arc's
+   * own code can write into; that is the arc#421 round 4 MAJOR A defect.
+   */
+  readonly prune?: PrunePolicy;
 }
 
 export interface RootSnapshot {
@@ -110,10 +154,20 @@ export function snapshotRoot(root: WatchedRoot): RootSnapshot {
 
     for (const entry of entries) {
       if (exhausted) return;
+      if (root.excludeNames?.includes(entry.name)) continue;
       const full = join(dir, entry.name);
 
       if (entry.isDirectory() && !entry.isSymbolicLink()) {
-        if (PRUNED_DIR_NAMES.includes(entry.name)) continue;
+        if (root.prune?.names.includes(entry.name)) {
+          // STATED, not silent: record the boundary so a pruned directory that
+          // appears where none existed is still reported by name.
+          if (files.size >= budget) {
+            exhausted = true;
+            return;
+          }
+          files.set(full, PRUNED_MARKER);
+          continue;
+        }
         if (root.maxDirDepth !== undefined && depth >= root.maxDirDepth) continue;
         walk(full, depth + 1);
         continue;

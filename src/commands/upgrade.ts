@@ -366,6 +366,27 @@ function scanRootRefusal(devRoot: string): string | null {
 }
 
 /**
+ * The install options for moving ONE factory member to its new pin.
+ *
+ * Broken out of `upgradeFactory`'s `moveMember` closure so the flag threading
+ * is testable (arc#421 round 4, minor): this was the one `install()` left on
+ * the upgrade path that dropped `replaceProvidesFiles`. It failed SAFE — a
+ * member whose `provides.files` target is occupied refuses — but it refused
+ * while telling the operator to pass the flag they had just passed.
+ */
+export function memberMoveInstallOptions(
+  move: MemberMove,
+  opts?: Pick<UpgradeOptions, "replaceProvidesFiles">,
+): { repoUrl: string; pinnedRef: string; yes: true; replaceProvidesFiles?: boolean } {
+  return {
+    repoUrl: move.ref,
+    pinnedRef: move.to,
+    yes: true,
+    replaceProvidesFiles: opts?.replaceProvidesFiles,
+  };
+}
+
+/**
  * Find candidate consumer repos for a rules template.
  *
  * ## arc#423 — why there is no longer a default scan root
@@ -1141,8 +1162,7 @@ async function upgradeComposition(
   // 6. The members, each through the ordinary pinned-install path.
   const moveMember =
     opts?._moveMember ??
-    ((move: MemberMove) =>
-      install({ arc, host, db, repoUrl: move.ref, pinnedRef: move.to, yes: true }));
+    ((move: MemberMove) => install({ arc, host, db, ...memberMoveInstallOptions(move, opts) }));
 
   const memberResults: NonNullable<UpgradeResult["members"]> = [];
   for (const move of moves) {

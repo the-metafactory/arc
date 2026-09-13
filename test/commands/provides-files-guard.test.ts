@@ -19,7 +19,7 @@ import {
   type TestEnv,
 } from "../helpers/test-env.js";
 import { install } from "../../src/commands/install.js";
-import { upgradeAll, upgradePackage } from "../../src/commands/upgrade.js";
+import { memberMoveInstallOptions, upgradeAll, upgradePackage } from "../../src/commands/upgrade.js";
 import { createArtifactSymlinks } from "../../src/lib/artifact-installer.js";
 import { getSkill } from "../../src/lib/db.js";
 import YAML from "yaml";
@@ -465,5 +465,42 @@ describe("provides.files — the same guards on the arc upgrade re-drop (arc#421
     expect(gov?.error).toContain("--replace");
     expect(lstatSync(occupied).isSymbolicLink()).toBe(false);
     expect(readFileSync(join(occupied, "MINE.md"), "utf-8")).toBe("operator content\n");
+  });
+});
+
+/**
+ * arc#421 round 4 (minor). `upgradeFactory` moves each member through
+ * `install()`; that one call dropped `replaceProvidesFiles`. It fails SAFE —
+ * the member refuses — but it refused while telling the operator to pass the
+ * flag they had just passed, which is the same defect round 3 fixed one level
+ * up in `upgradeAll`.
+ */
+describe("arc#421 — a factory member move carries --replace", () => {
+  const move = {
+    name: "member",
+    label: "member",
+    ref: "https://example.test/member",
+    from: "1.0.0",
+    to: "2.0.0",
+  };
+
+  test("the flag reaches the member's install", () => {
+    expect(memberMoveInstallOptions(move, { replaceProvidesFiles: true })).toEqual({
+      repoUrl: move.ref,
+      pinnedRef: move.to,
+      yes: true,
+      replaceProvidesFiles: true,
+    });
+  });
+
+  test("and is not invented when the operator did not pass it (the control)", () => {
+    expect(memberMoveInstallOptions(move, {}).replaceProvidesFiles).toBeUndefined();
+    expect(memberMoveInstallOptions(move).replaceProvidesFiles).toBeUndefined();
+  });
+
+  test("the pin and the unattended flag are still what a member move needs", () => {
+    const opts = memberMoveInstallOptions(move, { replaceProvidesFiles: false });
+    expect(opts.pinnedRef).toBe("2.0.0");
+    expect(opts.yes).toBe(true);
   });
 });

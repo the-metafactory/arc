@@ -9,6 +9,7 @@ import {
 } from "../../src/lib/paths.js";
 import { homedir } from "os";
 import { join } from "path";
+import { userHome } from "../../src/lib/user-home.js";
 import { mkdirSync, existsSync, writeFileSync, readFileSync, rmSync } from "fs";
 import { mkdtempSync } from "fs";
 import { tmpdir } from "os";
@@ -338,14 +339,21 @@ describe("isDirOnPath", () => {
 
 describe("getDefaultHost", () => {
   test("returns a Claude-Code host adapter", () => {
+    // arc#421 round 4 (minor): this asserted against a RAW `homedir()`, which
+    // is the operator's real home no matter what a test pins — so it was
+    // pinning in place the one behaviour that made `~/.claude` unsandboxable.
+    // The default root now resolves through `userHome()`; under the suite's
+    // preload that is the sandbox, and in production the two agree.
     const host = getDefaultHost();
+    const claude = join(userHome(), ".claude");
     expect(host.id).toBe("claude-code");
-    expect(host.paths.root).toBe(join(homedir(), ".claude"));
-    expect(host.paths.skillsDir).toBe(join(homedir(), ".claude", "skills"));
-    expect(host.paths.agentsDir).toBe(join(homedir(), ".claude", "agents"));
-    expect(host.paths.promptsDir).toBe(join(homedir(), ".claude", "commands"));
-    expect(host.paths.binDir).toBe(join(homedir(), ".claude", "bin"));
-    expect(host.paths.settingsPath).toBe(join(homedir(), ".claude", "settings.json"));
+    expect(host.paths.root).toBe(claude);
+    expect(host.paths.skillsDir).toBe(join(claude, "skills"));
+    expect(host.paths.agentsDir).toBe(join(claude, "agents"));
+    expect(host.paths.promptsDir).toBe(join(claude, "commands"));
+    expect(host.paths.binDir).toBe(join(claude, "bin"));
+    expect(host.paths.settingsPath).toBe(join(claude, "settings.json"));
+    expect(host.paths.root).not.toBe(join(homedir(), ".claude"));
   });
 
   test("accepts a custom root for test isolation", () => {
