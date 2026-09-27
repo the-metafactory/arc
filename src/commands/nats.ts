@@ -1404,6 +1404,112 @@ export function exportAccount(name: string, opts: ExportAccountOptions): ExportA
   return { account: name, pubKey, jwt, seedPath };
 }
 
+export interface EnableJetStreamOptions {
+  /** When true: suppress human-readable stdout; throw ArcNatsCommandError on failure. */
+  json?: boolean;
+}
+
+export interface EnableJetStreamResult {
+  account: string;
+  pubKey: string;
+  /** True iff `nsc edit account` ran this invocation. */
+  changed: boolean;
+}
+
+/**
+ * Does an account JWT carry JetStream limits? JetStream counts as on when
+ * `nats.limits.mem_storage` or `disk_storage` is non-zero (-1 = unlimited, >0 =
+ * a byte cap), at the top level or in any `tiered_limits` tier. `null` when the
+ * JWT does not decode.
+ */
+export function accountJwtHasJetStream(jwt: string): boolean | null {
+  const parts = jwt.split(".");
+  if (parts.length !== 3) return null;
+  const payload = parts[1];
+  let claims: unknown;
+  try {
+    const b64 = payload.replace(/-/g, "+").replace(/_/g, "/");
+    claims = JSON.parse(atob(b64 + "=".repeat((4 - (b64.length % 4)) % 4)));
+  } catch {
+    // Not base64url JSON — the caller reports "cannot verify".
+    return null;
+  }
+  if (claims === null || typeof claims !== "object") return null;
+  const nats = (claims as Record<string, unknown>).nats;
+  if (nats === null || typeof nats !== "object") return false;
+  const limits = (nats as Record<string, unknown>).limits;
+  if (limits === null || typeof limits !== "object") return false;
+  const l = limits as Record<string, unknown>;
+  const nonZero = (v: unknown): boolean => typeof v === "number" && v !== 0;
+  if (nonZero(l.mem_storage) || nonZero(l.disk_storage)) return true;
+  const tiers = l.tiered_limits;
+  if (tiers === null || typeof tiers !== "object") return false;
+  return Object.values(tiers).some((t) => {
+    if (t === null || typeof t !== "object") return false;
+    const tier = t as Record<string, unknown>;
+    return nonZero(tier.mem_storage) || nonZero(tier.disk_storage);
+  });
+}
+
+/** Read an account's raw JWT and classify its JetStream state. */
+function readAccountJetStream(name: string): boolean {
+  const jwt = nsc(["describe", "account", "-n", name, "--raw"]).trim();
+  const enabled = accountJwtHasJetStream(jwt);
+  if (enabled === null) {
+    throw new ArcNatsCommandError(
+      "NSC_COMMAND_FAILED",
+      `nsc describe account -n ${name} --raw did not return a decodable JWT (got: ${jwt.slice(0, 40)}…).`,
+    );
+  }
+  return enabled;
+}
+
+/**
+ * Grant an existing account JetStream with unlimited memory + disk storage
+ * (arc#384). `arc nats add-account` mints accounts with no JetStream limits, so a
+ * daemon landing in them cannot create its streams.
+ *
+ * Idempotent: a no-op when the account JWT already carries JetStream limits
+ * (hand-set caps are never overwritten). Otherwise runs
+ * `nsc edit account -n <name> --js-mem-storage -1 --js-disk-storage -1`, reads the
+ * JWT back, and fails with NSC_COMMAND_FAILED if the limits did not land.
+ * Operates on the current nsc operator, like `add-account`.
+ */
+export function enableJetStream(name: string, opts: EnableJetStreamOptions): EnableJetStreamResult {
+  const json = opts.json === true;
+  ensureNscInstalled(json);
+  validateAccountName(name);
+
+  const pubKey = tryGetPubKey("account", name);
+  if (pubKey === null) {
+    throw new ArcNatsCommandError(
+      "ACCOUNT_NOT_FOUND",
+      `account "${name}" not found under the current nsc operator. Create it with \`arc nats add-account ${name}\` first.`,
+    );
+  }
+
+  let changed = false;
+  if (!readAccountJetStream(name)) {
+    nsc(["edit", "account", "-n", name, "--js-mem-storage", "-1", "--js-disk-storage", "-1"]);
+    changed = true;
+    if (!readAccountJetStream(name)) {
+      throw new ArcNatsCommandError(
+        "NSC_COMMAND_FAILED",
+        `nsc edit account -n ${name} succeeded but the account JWT still has no JetStream limits.`,
+      );
+    }
+  }
+
+  if (!json) {
+    if (changed) console.log(`Enabled JetStream on nsc account: ${name} (mem/disk unlimited)`);
+    else console.log(`JetStream already enabled on nsc account: ${name} (no-op)`);
+    console.log(`  pubkey: ${pubKey}`);
+    if (changed) console.log("  push the updated account JWT to any running resolver (or refresh resolver_preload).");
+  }
+
+  return { account: name, pubKey, changed };
+}
+
 export interface ExportOperatorOptions {
   /** Operator name to export. When omitted, the current nsc operator is used. */
   name?: string;

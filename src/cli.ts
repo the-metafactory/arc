@@ -42,7 +42,7 @@ import { ARTIFACT_TYPES } from "./types.js";
 import type { ArcManifest, ArtifactType, PackageTier, RegistrySource, SourceType } from "./types.js";
 import { login } from "./commands/login.js";
 import { logout } from "./commands/logout.js";
-import { addBot, reissueBot, listBots, removeBot, setupOperator, addFederationExport, initOperator, addAccount, addFederatedUser, reissueFederatedUser, revokeFederatedUser, exportAccount, exportOperator, exportSystem } from "./commands/nats.js";
+import { addBot, reissueBot, listBots, removeBot, setupOperator, addFederationExport, initOperator, addAccount, addFederatedUser, reissueFederatedUser, revokeFederatedUser, exportAccount, enableJetStream, exportOperator, exportSystem } from "./commands/nats.js";
 import { provisionStreams, provisionConsumer } from "./commands/jetstream.js";
 import {
   ARC_NATS_SCHEMA,
@@ -63,6 +63,7 @@ import {
   type ReissueFederatedUserJson,
   type RevokeFederatedUserJson,
   type ExportAccountJson,
+  type EnableJetStreamJson,
   type ExportOperatorJson,
   type ExportSystemJson,
 } from "./lib/json-response.js";
@@ -2109,6 +2110,32 @@ nats
       return;
     }
     exportAccount(name, opts);
+  });
+
+nats
+  .command("enable-jetstream <name>")
+  .description("Grant an account JetStream (unlimited mem/disk) if it has none, verified by read-back (idempotent; arc#384)")
+  .option("--json", "Emit a single line of stable JSON (schema: arc.nats.operator.v1)")
+  .action((name: string, opts: { json?: boolean }) => {
+    if (opts.json) {
+      try {
+        const r = enableJetStream(name, { json: true });
+        const payload: EnableJetStreamJson = {
+          schema: ARC_NATS_OPERATOR_SCHEMA,
+          ok: true,
+          account: r.account,
+          pubKey: r.pubKey,
+          changed: r.changed,
+        };
+        emitJson(payload);
+        process.exit(0);
+      } catch (err) {
+        emitJson({ schema: ARC_NATS_OPERATOR_SCHEMA, ok: false, error: classifyError(err) });
+        process.exit(1);
+      }
+      return;
+    }
+    enableJetStream(name, opts);
   });
 
 nats
