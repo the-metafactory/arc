@@ -303,6 +303,20 @@ export interface ExportAccountJson extends JsonOperatorOkBase {
 }
 
 /**
+ * `arc nats enable-jetstream` result (schema: arc.nats.operator.v1, arc#384).
+ *
+ * Idempotent: `changed` is `false` when the account JWT already carried
+ * JetStream limits. On `ok: true` the limits were read back from the JWT.
+ */
+export interface EnableJetStreamJson extends JsonOperatorOkBase {
+  account: string;
+  /** A-prefixed account NKey public key. */
+  pubKey: string;
+  /** True iff `nsc edit account` ran this invocation. */
+  changed: boolean;
+}
+
+/**
  * `arc nats export-operator` result (schema: arc.nats.operator.v1).
  *
  * Read-only sibling of `export-account` (cortex#1265 / server-config bridge).
@@ -451,6 +465,7 @@ export function emitJson(
     | InitOperatorJson
     | AddAccountJson
     | ExportAccountJson
+    | EnableJetStreamJson
     | ExportOperatorJson
     | ExportSystemJson
     | AddFederatedUserJson
