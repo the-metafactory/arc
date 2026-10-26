@@ -36,7 +36,7 @@ function violation(result: ValidateResult, field: string): Violation {
 // chosen so the §4.2 derivation either matches (skill) or is skipped (the dir
 // does not match the metafactory grammar) — never violated.
 const PASSING_FIXTURES = [
-  "metafactory-skill-code-review", // skill (+ PascalCase SKILL.md)
+  "metafactory-skill-code-review", // skill (+ lowercase SKILL.md name)
   "metafactory-tool-formatter", // tool
   "metafactory-agent-scout", // agent
   "metafactory-prompt-summarize", // prompt

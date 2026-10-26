@@ -37,7 +37,7 @@ export interface StrictValidationInput {
   repoDirName: string;
   /**
    * `name:` from the package's SKILL.md frontmatter, when a SKILL.md was found.
-   * `undefined` means "no SKILL.md present" → the PascalCase check is skipped
+   * `undefined` means "no SKILL.md present" → the name check is skipped
    * (not every package is a skill). `null` means "SKILL.md present but no name
    * field" → that is itself a violation.
    */
@@ -117,18 +117,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
-}
-
-/**
- * Convert a lowercase-hyphenated package name to PascalCase for the SKILL.md
- * frontmatter `name:` (spec §4.2): `code-review` → `CodeReview`, `foo` → `Foo`.
- */
-export function toPascalCase(name: string): string {
-  return name
-    .split("-")
-    .filter((seg) => seg.length > 0)
-    .map((seg) => seg.charAt(0).toUpperCase() + seg.slice(1))
-    .join("");
 }
 
 /**
@@ -258,7 +246,7 @@ function validateSchema(manifest: Record<string, unknown>, add: Add): void {
 
 /**
  * Validate `name` and the §4.2 derivation rule. Returns the derived `<name>`
- * (from the repo dir grammar) so the SKILL.md PascalCase check can reuse it, or
+ * (from the repo dir grammar) so the SKILL.md name check can reuse it, or
  * the manifest name as a fallback, or null when neither is usable.
  */
 function validateName(
@@ -517,7 +505,8 @@ function validateNamespace(manifest: Record<string, unknown>, add: Add): void {
 
 /**
  * §4.2 SKILL.md frontmatter rule: when a SKILL.md is present its frontmatter
- * `name:` must be the PascalCase of the package name. `undefined` frontmatter
+ * `name:` must equal the lowercase package name, which is also the installed
+ * skill directory name (Agent Skills spec; arc#385). `undefined` frontmatter
  * name ⇒ no SKILL.md was found ⇒ rule skipped (not every package is a skill).
  */
 function validateSkillFrontmatterName(
@@ -533,15 +522,14 @@ function validateSkillFrontmatterName(
   const base = derivedName ?? (isNonEmptyString(manifest.name) ? manifest.name : null);
   if (base === null) return; // can't compute an expectation without a base name
 
-  const expected = toPascalCase(base);
   if (frontmatterName === null) {
-    add("SKILL.md:name", `is required and must be PascalCase '${expected}' (spec §4.2)`);
+    add("SKILL.md:name", `is required and must be '${base}' (spec §4.2)`);
     return;
   }
-  if (frontmatterName !== expected) {
+  if (frontmatterName !== base) {
     add(
       "SKILL.md:name",
-      `must be PascalCase of '${base}' → '${expected}' (spec §4.2); got '${frontmatterName}'`,
+      `must equal the package name '${base}' (spec §4.2); got '${frontmatterName}'`,
     );
   }
 }

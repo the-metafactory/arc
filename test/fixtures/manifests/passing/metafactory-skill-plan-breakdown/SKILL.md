@@ -1,5 +1,5 @@
 ---
-name: PlanBreakdown
+name: plan-breakdown
 description: Break a detailed plan into an epic + executor-grade sub-issues.
 ---
 
@@ -7,4 +7,4 @@ description: Break a detailed plan into an epic + executor-grade sub-issues.
 
 A passing skill fixture carrying the canonical `{ host, reason }` network
 capability. Manifest name `plan-breakdown` derives from the repo dir
-`metafactory-skill-plan-breakdown`, and this frontmatter name is its PascalCase.
+`metafactory-skill-plan-breakdown`, and this frontmatter name equals it.
