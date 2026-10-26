@@ -92,22 +92,22 @@ describe("arc validate command", () => {
     expect(result.lines.join("\n")).toContain("manifest");
   });
 
-  test("enforces the SKILL.md PascalCase rule when a SKILL.md is present", async () => {
+  test("enforces the SKILL.md name rule when a SKILL.md is present", async () => {
     const dir = await makePkgDir("metafactory-skill-code-review");
     await writeFile(join(dir, "arc-manifest.yaml"), CLEAN_MANIFEST);
     await mkdir(join(dir, "skill"), { recursive: true });
-    // Wrong: frontmatter name should be PascalCase "CodeReview".
-    await writeFile(join(dir, "skill", "SKILL.md"), "---\nname: code-review\n---\n# body\n");
+    // Wrong: frontmatter name should be the lowercase package name "code-review" (arc#385).
+    await writeFile(join(dir, "skill", "SKILL.md"), "---\nname: CodeReview\n---\n# body\n");
 
     const result = await validate(dir);
     expect(result.exitCode).toBe(1);
     expect(result.violations.some((v) => v.field === "SKILL.md:name")).toBe(true);
   });
 
-  test("clean manifest + correct PascalCase SKILL.md → exit 0", async () => {
+  test("clean manifest + correct lowercase SKILL.md → exit 0", async () => {
     const dir = await makePkgDir("metafactory-skill-code-review");
     await writeFile(join(dir, "arc-manifest.yaml"), CLEAN_MANIFEST);
-    await writeFile(join(dir, "SKILL.md"), "---\nname: CodeReview\n---\n# body\n");
+    await writeFile(join(dir, "SKILL.md"), "---\nname: code-review\n---\n# body\n");
 
     const result = await validate(dir);
     expect(result.exitCode).toBe(0);

@@ -113,7 +113,7 @@ async function loadManifestSource(
 /**
  * Read the `name:` from the package's SKILL.md frontmatter.
  * Returns:
- *   - `undefined` when no SKILL.md is found (the PascalCase rule is skipped),
+ *   - `undefined` when no SKILL.md is found (the name rule is skipped),
  *   - `null` when a SKILL.md exists but declares no frontmatter `name`,
  *   - the string value otherwise.
  */

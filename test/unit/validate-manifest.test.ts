@@ -1,7 +1,6 @@
 import { describe, test, expect } from "bun:test";
 import {
   validateStrictManifest,
-  toPascalCase,
   type StrictValidationInput,
 } from "../../src/lib/validate-manifest.js";
 import { toStrictName } from "../../src/lib/repo-name.js";
@@ -341,13 +340,17 @@ describe("namespace rule (optional; BARE scope ^[a-z0-9-]+$ — arc#369)", () =>
   });
 });
 
-describe("SKILL.md frontmatter name rule (§4.2 PascalCase)", () => {
-  test("pass: PascalCase of derived name", () => {
-    const input = { ...validInput(), skillFrontmatterName: "CodeReview" };
+describe("SKILL.md frontmatter name rule (§4.2, lowercase per arc#385)", () => {
+  test("pass: equals derived name", () => {
+    const input = { ...validInput(), skillFrontmatterName: "code-review" };
     expect(hasField(validateStrictManifest(input), "SKILL.md:name")).toBe(false);
   });
-  test("fail: non-PascalCase frontmatter name", () => {
-    const input = { ...validInput(), skillFrontmatterName: "code-review" };
+  test("fail: PascalCase frontmatter name", () => {
+    const input = { ...validInput(), skillFrontmatterName: "CodeReview" };
+    expect(hasField(validateStrictManifest(input), "SKILL.md:name")).toBe(true);
+  });
+  test("fail: name differs from derived name", () => {
+    const input = { ...validInput(), skillFrontmatterName: "review" };
     expect(hasField(validateStrictManifest(input), "SKILL.md:name")).toBe(true);
   });
   test("fail: SKILL.md present but no name (null)", () => {
@@ -396,15 +399,6 @@ describe("toStrictName (§4.2 derivation grammar)", () => {
     expect(toStrictName("tmp.abc123")).toBeNull();
     // An unknown <type> segment does not match the app-scoped grammar.
     expect(toStrictName("metafactory-cortex-widget-foo")).toBeNull();
-  });
-});
-
-describe("toPascalCase", () => {
-  test("hyphenated → PascalCase", () => {
-    expect(toPascalCase("code-review")).toBe("CodeReview");
-  });
-  test("single segment", () => {
-    expect(toPascalCase("security")).toBe("Security");
   });
 });
 

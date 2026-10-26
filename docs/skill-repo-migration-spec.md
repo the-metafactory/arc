@@ -59,7 +59,7 @@ metafactory-skill-<name>/
   README.md                 # what it is, install one-liner, artifact inventory
   LICENSE                   # Apache-2.0 default (DD-13); AGPL only where already chosen
   skill/
-    SKILL.md                # entrypoint: YAML frontmatter (PascalCase name) + routing table
+    SKILL.md                # entrypoint: YAML frontmatter (lowercase name = <name>) + routing table
     Workflows/              # one .md per discrete operation
     references/             # optional
   src/                      # tools used by the skill: bun-first TypeScript CLIs (src/cli.ts)
@@ -88,7 +88,7 @@ description: <one line>
 license: Apache-2.0
 author: { name: <full-name>, github: <username> }   # SINGULAR map is canonical; authors: list is rejected
 provides:
-  skill:    [{ name: <PascalCase>, path: skill/, trigger: <phrase> }]
+  skill:    [{ name: <name>, path: skill/, trigger: <phrase> }]
   cli:      [{ command: "bun src/cli.ts", name: <cmd> }]        # if src/ exists
   commands: [{ source: commands/<x>.md, target: <slash-name> }] # slash commands
   agents:   [{ source: agents/<x>.md }]
@@ -125,7 +125,7 @@ Consequences for this epic:
 
 ### 4.2 Name derivation rule
 
-`repo name = metafactory-skill-<name>` ⇒ manifest `name: <name>`; SKILL.md frontmatter `name:` = PascalCase of `<name>`. No more `release-manager` repo / `ReleaseManager` manifest / arbitrary divergence. The validator enforces the mapping.
+`repo name = metafactory-skill-<name>` ⇒ manifest `name: <name>`; SKILL.md frontmatter `name:` = `<name>`, lowercase, matching the installed skill directory as the Agent Skills spec requires (arc#385). No more `release-manager` repo / `ReleaseManager` manifest / arbitrary divergence. The validator enforces the mapping.
 
 ## 5. Migration inventory and dispositions
 
