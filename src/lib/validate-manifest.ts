@@ -119,7 +119,6 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
 
-
 /**
  * Validate a parsed manifest against the strict arc/v1 contract. Pure: returns
  * the full list of violations (empty ⇒ valid). Order is stable and roughly

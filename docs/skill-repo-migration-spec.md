@@ -125,7 +125,7 @@ Consequences for this epic:
 
 ### 4.2 Name derivation rule
 
-`repo name = metafactory-skill-<name>` ⇒ manifest `name: <name>`; SKILL.md frontmatter `name:` = `<name>`, lowercase, matching the installed skill directory as the Agent Skills spec requires (arc#385). No more `release-manager` repo / `ReleaseManager` manifest / arbitrary divergence. The validator enforces the mapping.
+`repo name = metafactory-skill-<name>` ⇒ manifest `name: <name>`; SKILL.md frontmatter `name:` = `<name>`, lowercase (arc#385). Install links the skill at `<skillsDir>/<manifest name>`, so this name also matches the installed skill directory, as the Agent Skills spec requires. No more `release-manager` repo / `ReleaseManager` manifest / arbitrary divergence. The validator enforces both name equalities; it does not inspect directories.
 
 ## 5. Migration inventory and dispositions
 
