@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { existsSync } from "fs";
 import { mkdir, readFile } from "fs/promises";
 import { join } from "path";
 import {
+  createMockLibraryRepo,
   createMockSkillRepo,
   createTestEnv,
   type TestEnv,
@@ -206,6 +208,77 @@ describe("Soma skill projection lifecycle (arc#251)", () => {
     }
 
     expect(stderr).toContain("soma unproject-skill unavailable");
+    expect(stderr).toContain("continuing without Soma projection");
+  });
+});
+
+describe("root-level SKILL.md library members (arc#437)", () => {
+  test("projects the member directory that holds SKILL.md", async () => {
+    const { callsPath } = await writeFakeSomaForEnv(
+      (path) => `#!/bin/sh\necho "$@" >> "${path}"\nexit 0\n`,
+      "soma-root-skill-calls.log",
+    );
+    const repo = await createMockLibraryRepo(env.root, {
+      name: "root-skill-pack",
+      artifacts: [
+        { path: "skills/alpha", name: "alpha", type: "skill", skillAtRoot: true },
+        { path: "skills/beta", name: "beta", type: "skill", skillAtRoot: true },
+      ],
+    });
+
+    const installed = await install({
+      arc: env.arc,
+      host: env.host,
+      db: env.db,
+      repoUrl: repo.url,
+      yes: true,
+    });
+    expect(installed.success).toBe(true);
+
+    const calls = (await readFile(callsPath, "utf8")).trim().split("\n");
+    expect(calls).toEqual([
+      expect.stringMatching(/^project-skill .+\/skills\/alpha --apply$/),
+      expect.stringMatching(/^project-skill .+\/skills\/beta --apply$/),
+    ]);
+    for (const call of calls) {
+      const skillDir = call.split(" ")[1];
+      expect(existsSync(join(skillDir, "SKILL.md"))).toBe(true);
+    }
+  });
+
+  test("install --yes still warns when soma projection fails", async () => {
+    await writeFakeSomaForEnv(
+      (path) =>
+        `#!/bin/sh\necho "$@" >> "${path}"\necho "projection failed" >&2\nexit 12\n`,
+      "soma-root-skill-failed.log",
+    );
+    const repo = await createMockLibraryRepo(env.root, {
+      name: "root-skill-warn",
+      artifacts: [
+        { path: "skills/gamma", name: "gamma", type: "skill", skillAtRoot: true },
+      ],
+    });
+
+    let stderr = "";
+    const originalWrite = process.stderr.write;
+    process.stderr.write = (chunk: string | Uint8Array) => {
+      stderr += chunk.toString();
+      return true;
+    };
+    try {
+      const installed = await install({
+        arc: env.arc,
+        host: env.host,
+        db: env.db,
+        repoUrl: repo.url,
+        yes: true,
+      });
+      expect(installed.success).toBe(true);
+    } finally {
+      process.stderr.write = originalWrite;
+    }
+
+    expect(stderr).toContain("soma project-skill failed for gamma");
     expect(stderr).toContain("continuing without Soma projection");
   });
 });

@@ -373,6 +373,8 @@ export async function createMockLibraryRepo(
        * non-zero exit (`exit 1`) to simulate a mid-sequence install failure.
        */
       postinstall?: { path: string; content: string };
+      /** Write SKILL.md at the artifact root instead of under skill/ (arc#437). */
+      skillAtRoot?: boolean;
     }[];
   }
 ): Promise<MockLibraryRepo> {
@@ -440,7 +442,7 @@ export async function createMockLibraryRepo(
     // Create type-specific content
     if (artifact.type === "skill") {
       await Bun.write(
-        join(artifactDir, "skill", "SKILL.md"),
+        join(artifactDir, ...(artifact.skillAtRoot ? [] : ["skill"]), "SKILL.md"),
         `# ${artifact.name}\n\nTest skill.\n`
       );
     } else if (artifact.type === "agent") {
