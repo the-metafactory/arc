@@ -512,7 +512,9 @@ export async function completeInstallTransaction(
   } else if (somaProjectionResult.attempted && !somaProjectionResult.skipped) {
     tx.recordSomaProjectionCleanup(installPath, manifest);
   }
-  if (somaProjectionResult.warning && !opts.quiet) {
+  // Printed even under --yes: a silent projection failure leaves the skill
+  // missing from every substrate but Claude Code (arc#437).
+  if (somaProjectionResult.warning) {
     process.stderr.write(
       `  ⚠ ${somaProjectionResult.warning}; continuing without Soma projection\n`,
     );

@@ -60,7 +60,8 @@ export const INSTALLABLE_ARTIFACT_TYPES = ARTIFACT_TYPES;
  * - pipeline -> join(baseDir, "pipeline") if it exists, else baseDir
  * - agent -> join(baseDir, "agent")
  * - prompt -> join(baseDir, "prompt")
- * - skill (default) -> join(baseDir, "skill")
+ * - skill, system (default) -> join(baseDir, "skill") if it exists, else baseDir
+ *   (a package may keep SKILL.md at its root, arc#437)
  */
 export function resolveArtifactSourceDir(type: ArtifactType | "rules" | "system", baseDir: string): string {
   switch (type) {
@@ -96,8 +97,12 @@ export function resolveArtifactSourceDir(type: ArtifactType | "rules" | "system"
 
     case "skill":
     case "system":
-    default:
-      return join(baseDir, "skill");
+    default: {
+      // A root-level SKILL.md is valid. Symlinking, Soma projection and the DB
+      // row all resolve through here, so they agree on the directory (arc#437).
+      const skillDir = join(baseDir, "skill");
+      return existsSync(skillDir) ? skillDir : baseDir;
+    }
   }
 }
 
@@ -458,8 +463,7 @@ export function planArtifactSymlinks(opts: ArtifactSymlinkOpts): ArtifactSymlink
     case "skill":
     case "system": {
       const skillsDir = requireHostDir(host, type);
-      const skillSourceDir = join(installDir, "skill");
-      const sourceDir = existsSync(skillSourceDir) ? skillSourceDir : installDir;
+      const sourceDir = resolveArtifactSourceDir(type, installDir);
       symlinkTargets.push({ source: sourceDir, target: join(skillsDir, manifest.name) });
 
       const cliEntries = extractAllCliInfo(manifest);
