@@ -1,5 +1,5 @@
 import { join, dirname, basename } from "path";
-import { existsSync, readdirSync, lstatSync, readlinkSync } from "fs";
+import { existsSync, readdirSync, lstatSync, readlinkSync, realpathSync } from "fs";
 import { mkdir, rm } from "fs/promises";
 import { readFileSync } from "fs";
 import YAML from "yaml";
@@ -27,6 +27,14 @@ import { generateRules } from "./rules.js";
 import { requireHostDir } from "./hosts/dispatch.js";
 import { resolveHost, type HostOverrides } from "./hosts/registry.js";
 import { resolveProvidesTarget, findUnexpandedVariable } from "./provides-target.js";
+import {
+  backupSkillTarget,
+  refuseSkillConflicts,
+  restoreSkillBackup,
+  skillConflictRefusalReason,
+  somaSkillSlot,
+  type SkillConflictResolver,
+} from "./skill-conflict.js";
 import { isDarwinLaunchdHost } from "./hosts/darwin-launchd.js";
 import { isLinuxSystemdHost } from "./hosts/linux-systemd.js";
 
@@ -123,6 +131,8 @@ export interface ArtifactSymlinkRecord {
   symlinks: string[];
   /** CLI shim files created via createCliShim (need removeCliShim, not unlink). */
   shims: { dir: string; names: string[] };
+  /** Occupied skill targets moved aside on `replace`; rollback moves them back. */
+  backups?: { target: string; backup: string }[];
 }
 
 /** Common option shape shared by the planner and the apply step. */
@@ -144,6 +154,12 @@ export interface ArtifactSymlinkOpts {
    * what happened. Defaults to false (refuse).
    */
   replaceProvidesFiles?: boolean;
+  /**
+   * soma-lifeos#17: decides each occupied skill target (a real directory, a
+   * file, or a symlink arc did not create for this package). Absent means
+   * refuse, so library code never prompts unless the CLI wired a resolver.
+   */
+  onSkillConflict?: SkillConflictResolver;
 }
 
 /** A single symlink the install will create: `source` linked at `target`. */
@@ -176,8 +192,9 @@ export function formatProvidesFileConflicts(conflicts: ProvidesFileConflict[]): 
 }
 
 /**
- * Classify what currently sits at a `provides.files` target relative to the
- * source THIS install would symlink there (arc#420).
+ * Classify what currently sits at a `provides.files` target (arc#420) or a
+ * skill target (soma-lifeos#17) relative to the source THIS install would
+ * symlink there.
  *
  *  - "absent": nothing at `target` — safe to create.
  *  - "owned": `target` is already a symlink pointing at exactly
@@ -190,7 +207,7 @@ export function formatProvidesFileConflicts(conflicts: ProvidesFileConflict[]): 
  * Read-only (lstat/readlink) — never writes, matching the rest of the
  * planner's "reads the disk, never mutates it" contract.
  */
-function classifyProvidesTargetOccupancy(
+export function classifyTargetOccupancy(
   target: string,
   expectedSource: string,
 ): "absent" | "owned" | "occupied" {
@@ -211,6 +228,15 @@ function classifyProvidesTargetOccupancy(
     }
   }
   return "occupied";
+}
+
+/** True when `path` resolves, through any chain of links, to `dir` itself. */
+function resolvesTo(path: string, dir: string): boolean {
+  try {
+    return realpathSync(path) === realpathSync(dir);
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -264,6 +290,13 @@ export interface ArtifactSymlinkPlan {
    * entry.
    */
   filesToReplace: ProvidesFileConflict[];
+  /**
+   * Skill slots occupied by content that does not resolve to this package's
+   * skill directory (soma-lifeos#17): arc's own host target, and for
+   * `type: skill` the Soma registry slot the projection would claim. The
+   * apply step asks `onSkillConflict` once per skill before it writes anything.
+   */
+  skillConflicts: PlannedSymlink[];
 }
 
 /**
@@ -275,6 +308,7 @@ export function planArtifactSymlinks(opts: ArtifactSymlinkOpts): ArtifactSymlink
   const { type, manifest, arc, host, installDir, replaceProvidesFiles } = opts;
   const symlinkTargets: PlannedSymlink[] = [];
   const shimNames: string[] = [];
+  const skillConflicts: PlannedSymlink[] = [];
   const declaredFiles = manifest.provides?.files ?? [];
   const empty = (
     overrides: Partial<ArtifactSymlinkPlan>,
@@ -285,6 +319,7 @@ export function planArtifactSymlinks(opts: ArtifactSymlinkOpts): ArtifactSymlink
     unsafeTargets: [],
     filesOccupied: [],
     filesToReplace: [],
+    skillConflicts: [],
     ...overrides,
   });
 
@@ -464,7 +499,14 @@ export function planArtifactSymlinks(opts: ArtifactSymlinkOpts): ArtifactSymlink
     case "system": {
       const skillsDir = requireHostDir(host, type);
       const sourceDir = resolveArtifactSourceDir(type, installDir);
-      symlinkTargets.push({ source: sourceDir, target: join(skillsDir, manifest.name) });
+      const skillLink = { source: sourceDir, target: join(skillsDir, manifest.name) };
+      symlinkTargets.push(skillLink);
+      const slots = type === "skill" ? [skillLink.target, somaSkillSlot(manifest.name)] : [skillLink.target];
+      for (const slot of slots) {
+        if (classifyTargetOccupancy(slot, sourceDir) === "occupied" && !resolvesTo(slot, sourceDir)) {
+          skillConflicts.push({ source: sourceDir, target: slot });
+        }
+      }
 
       const cliEntries = extractAllCliInfo(manifest);
       if (cliEntries.length) {
@@ -499,7 +541,7 @@ export function planArtifactSymlinks(opts: ArtifactSymlinkOpts): ArtifactSymlink
   for (const file of declaredFiles) {
     const source = join(installDir, file.source);
     const target = resolveProvidesTarget(file.target);
-    const state = classifyProvidesTargetOccupancy(target, source);
+    const state = classifyTargetOccupancy(target, source);
     if (state === "occupied") {
       if (replaceProvidesFiles) {
         filesToReplace.push({
@@ -521,7 +563,7 @@ export function planArtifactSymlinks(opts: ArtifactSymlinkOpts): ArtifactSymlink
     return empty({ filesOccupied });
   }
 
-  return empty({ symlinkTargets, shimNames, filesToReplace });
+  return empty({ symlinkTargets, shimNames, filesToReplace, skillConflicts });
 }
 
 /**
@@ -705,6 +747,8 @@ export async function createArtifactSymlinks(opts: {
   quiet?: boolean;
   /** arc#420 opt-in — see {@link ArtifactSymlinkOpts.replaceProvidesFiles}. */
   replaceProvidesFiles?: boolean;
+  /** soma-lifeos#17 — see {@link ArtifactSymlinkOpts.onSkillConflict}. */
+  onSkillConflict?: SkillConflictResolver;
   /**
    * Skip the `rules`/`governance` template-generation side effect, applying
    * ONLY the symlink plan. Set by `arc upgrade`'s provides.files re-drop
@@ -722,6 +766,10 @@ export async function createArtifactSymlinks(opts: {
   unsafeTargets: ProvidesFileConflict[];
   /** arc#420 — occupied targets refused at plan time (no --replace). */
   filesOccupied: ProvidesFileConflict[];
+  /** soma-lifeos#17 — occupied skill targets nobody chose for; nothing was written. */
+  skillsRefused: ProvidesFileConflict[];
+  /** soma-lifeos#17 — skill targets the principal kept; not linked, not in `record`. */
+  skillsKept: string[];
   record: ArtifactSymlinkRecord;
 }> {
   const { type, manifest, arc, host, installDir, quiet } = opts;
@@ -738,6 +786,8 @@ export async function createArtifactSymlinks(opts: {
       filesMissingSource: [],
       unsafeTargets: plan.unsafeTargets,
       filesOccupied: [],
+      skillsRefused: [],
+      skillsKept: [],
       record,
     };
   }
@@ -747,6 +797,8 @@ export async function createArtifactSymlinks(opts: {
       filesMissingSource: plan.filesMissingSource,
       unsafeTargets: [],
       filesOccupied: [],
+      skillsRefused: [],
+      skillsKept: [],
       record,
     };
   }
@@ -756,8 +808,27 @@ export async function createArtifactSymlinks(opts: {
       filesMissingSource: [],
       unsafeTargets: [],
       filesOccupied: plan.filesOccupied,
+      skillsRefused: [],
+      skillsKept: [],
       record,
     };
+  }
+
+  let replaceSkillSlots = false;
+  if (plan.skillConflicts.length) {
+    const shown =
+      plan.skillConflicts.find((c) => !lstatSync(c.target).isSymbolicLink()) ?? plan.skillConflicts[0];
+    const conflict = { name: manifest.name, ...shown };
+    const choice = await (opts.onSkillConflict ?? refuseSkillConflicts)(conflict);
+    const empty = { filesCreated: [], filesMissingSource: [], unsafeTargets: [], filesOccupied: [], record };
+    if (choice === "refuse") {
+      return { ...empty, skillsRefused: [{ ...shown, reason: skillConflictRefusalReason(conflict) }], skillsKept: [] };
+    }
+    if (choice === "keep") {
+      console.log(`  Kept your skill at ${shown.target}; '${manifest.name}' is not installed.`);
+      return { ...empty, skillsRefused: [], skillsKept: plan.skillConflicts.map((c) => c.target) };
+    }
+    replaceSkillSlots = true;
   }
 
   // `rules` and `governance` are the types whose apply step has a side effect
@@ -798,27 +869,40 @@ export async function createArtifactSymlinks(opts: {
     (manifest.provides?.files ?? []).map((f) => resolveProvidesTarget(f.target)),
   );
   const filesCreated: { source: string; target: string }[] = [];
-  for (const link of plan.symlinkTargets) {
-    const isProvidesFile = declaredFileTargets.has(link.target);
-    if (isProvidesFile) {
-      await mkdir(dirname(link.target), { recursive: true });
+  try {
+    if (replaceSkillSlots) {
+      for (const { target } of plan.skillConflicts) {
+        const backup = await backupSkillTarget(target, manifest.name, arc.stateRoot);
+        (record.backups ??= []).push({ target, backup });
+        console.log(`  Moved your existing skill at ${target} to ${backup}`);
+      }
     }
-    await createSymlink(link.source, link.target);
-    record.symlinks.push(link.target);
-    if (isProvidesFile) {
-      filesCreated.push({ source: link.source, target: link.target });
+    for (const link of plan.symlinkTargets) {
+      const isProvidesFile = declaredFileTargets.has(link.target);
+      if (isProvidesFile) {
+        await mkdir(dirname(link.target), { recursive: true });
+      }
+      await createSymlink(link.source, link.target);
+      record.symlinks.push(link.target);
+      if (isProvidesFile) {
+        filesCreated.push({ source: link.source, target: link.target });
+      }
     }
+
+    // Shims: createCliShim derives the SAME names from the manifest the plan did,
+    // so create them once when the plan expects a shim set (mirrors the prior
+    // per-type shim creation).
+    if (plan.shimNames.length) {
+      const created = await createCliShim(arc.shimDir, host.paths.binDir, manifest);
+      record.shims.names.push(...created);
+    }
+  } catch (err) {
+    // A backup taken above must not be stranded when a later step throws.
+    if (record.backups?.length) await rollbackArtifactSymlinks(record);
+    throw err;
   }
 
-  // Shims: createCliShim derives the SAME names from the manifest the plan did,
-  // so create them once when the plan expects a shim set (mirrors the prior
-  // per-type shim creation).
-  if (plan.shimNames.length) {
-    const created = await createCliShim(arc.shimDir, host.paths.binDir, manifest);
-    record.shims.names.push(...created);
-  }
-
-  return { filesCreated, filesMissingSource: [], unsafeTargets: [], filesOccupied: [], record };
+  return { filesCreated, filesMissingSource: [], unsafeTargets: [], filesOccupied: [], skillsRefused: [], skillsKept: [], record };
 }
 
 /**
@@ -854,6 +938,13 @@ export async function rollbackArtifactSymlinks(record: ArtifactSymlinkRecord): P
       if (!isErrno(err) || err.code !== "ENOENT") {
         console.warn(`  ⚠ rollback: failed to remove shim ${name}: ${errorMessage(err)}`);
       }
+    }
+  }
+  for (const { target, backup } of record.backups ?? []) {
+    try {
+      await restoreSkillBackup(backup, target);
+    } catch (err) {
+      console.warn(`  ⚠ rollback: failed to restore ${target} from ${backup}: ${errorMessage(err)}`);
     }
   }
 }
