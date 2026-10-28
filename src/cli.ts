@@ -5,7 +5,7 @@ import { createArcPaths, ensureDirectories, getDefaultHost, isDirOnPath, isArcDe
 import { migrateArcDirsIfNeeded, legacyArcLayout, toArcDirLayout } from "./lib/xdg-migrate.js";
 import { openDatabase, getSkill } from "./lib/db.js";
 import { extractAllCliInfo } from "./lib/symlinks.js";
-import { install, parseNameVersion } from "./commands/install.js";
+import { install, notActiveHint, parseNameVersion } from "./commands/install.js";
 import { buildCortexInstallSteering } from "./lib/hosts/cortex-config-split.js";
 import { isSafePinRef } from "./lib/pin-ref.js";
 import {
@@ -115,6 +115,7 @@ import {
 import { homedir, userInfo } from "os";
 import { join } from "path";
 import { parseLibraryRef } from "./lib/artifact-installer.js";
+import { parseOnConflict, skillConflictResolver, type SkillConflictResolver } from "./lib/skill-conflict.js";
 import { errorMessage } from "./lib/errors.js";
 import pkg from "../package.json" with { type: "json" };
 
@@ -162,6 +163,32 @@ function installResultProvidesCli(result: Awaited<ReturnType<typeof install>>): 
   ].filter((manifest): manifest is ArcManifest => Boolean(manifest));
 
   return manifests.some((manifest) => extractAllCliInfo(manifest).length > 0);
+}
+
+const ON_CONFLICT_HELP = "When a skill's target already holds a directory, file or symlink arc did not install: replace (back it up, then link) or keep (leave it, record the skill as kept). Without it arc asks in a terminal and refuses elsewhere; --yes does not choose.";
+
+function keptLine(result: Awaited<ReturnType<typeof install>>): string {
+  return `⏭️  Kept your own '${result.name}' skill — recorded as kept, not linked (\`arc list\` shows it)`;
+}
+
+function libraryInstalledLine(result: Awaited<ReturnType<typeof install>>): string {
+  const landed = result.artifacts?.filter((a) => a.success) ?? [];
+  const kept = landed.filter((a) => a.kept).length;
+  const keptNote = kept ? `; kept your own copy of ${kept} skill(s), not linked` : "";
+  return `✅ Installed ${landed.length - kept} artifact(s) from ${result.name}${keptNote}`;
+}
+
+/**
+ * soma-lifeos#17: `--on-conflict` answers every occupied skill target; without
+ * it an interactive terminal is asked and anything else refuses.
+ */
+function cliSkillConflictResolver(raw: string | undefined): SkillConflictResolver {
+  try {
+    return skillConflictResolver({ onConflict: parseOnConflict(raw), interactive: process.stdin.isTTY });
+  } catch (err) {
+    console.error(errorMessage(err));
+    process.exit(1);
+  }
 }
 
 function printShimPathNotice(paths: ReturnType<typeof createArcPaths>, result: Awaited<ReturnType<typeof install>>): void {
@@ -213,7 +240,8 @@ program
   .option("--config-dir <path>", "Target a config-split cortex stack by its config dir (or its pointer file). Roots cortex agents.d/ + personas/ at the stack subdir. (arc#244)")
   .option("--stack <name>", "Target a config-split cortex stack by name (resolves to <name> under the live cortex config dir — legacy ~/.config/cortex on a pre-cutover box, canonical ~/.config/metafactory/cortex on a migrated one). (arc#244)")
   .option("--replace", "Replace existing content at a provides.files target instead of refusing (arc#420). No backup is taken — a warning names what was removed. An owned symlink from a prior install of the SAME package is always updated silently regardless of this flag.")
-  .action(async (nameOrUrl: string, opts: { yes?: boolean; pin?: string; binDir?: string; strictSigning?: boolean; skipSecrets?: boolean; fromEnv?: boolean; secretBackend?: string; configDir?: string; stack?: string; replace?: boolean }) => {
+  .option("--on-conflict <choice>", ON_CONFLICT_HELP)
+  .action(async (nameOrUrl: string, opts: { yes?: boolean; pin?: string; binDir?: string; strictSigning?: boolean; skipSecrets?: boolean; fromEnv?: boolean; secretBackend?: string; configDir?: string; stack?: string; replace?: boolean; onConflict?: string }) => {
     // Non-TTY guard: fail loud rather than silently half-installing
     if (!opts.yes && !process.stdin.isTTY) {
       console.error("Error: arc install requires an interactive terminal for capability confirmation.");
@@ -225,6 +253,7 @@ program
     // heuristic; `keychain` forces the macOS Keychain (accepting its argv
     // exposure); `file` forces the chmod-600 file backend.
     const secretBackend = parseSecretBackendChoice(opts.secretBackend);
+    const onSkillConflict = cliSkillConflictResolver(opts.onConflict);
 
     // S1 (arc#244 / cortex#1133): resolve config-split stack targeting from
     // --config-dir / --stack into install steering. No flag → undefined
@@ -318,8 +347,8 @@ program
           return;
         }
         const hint =
-          existingRow.status === "disabled"
-            ? `Run \`arc enable ${resolved.name}\` to re-enable it, or \`arc remove ${resolved.name}\` first if you want a clean install.`
+          existingRow.status !== "active"
+            ? notActiveHint(resolved.name, existingRow.status)
             : `Run \`arc upgrade ${resolved.name}\`, or \`arc remove ${resolved.name}\` first if the existing install can't be upgraded in place.`;
         console.error(`'${resolved.name}' v${existingRow.version} is already installed (status: ${existingRow.status}). ${hint}`);
         process.exit(1);
@@ -470,6 +499,7 @@ program
         hostOverrides: cortexSteering.hostOverrides,
         cortexConfigEnv: cortexSteering.cortexConfigEnv,
         replaceProvidesFiles: opts.replace,
+        onSkillConflict,
       });
       if (result.success) {
         if (result.alreadyInstalled) {
@@ -483,7 +513,7 @@ program
           const verifyLabel = sigstoreVerified
             ? "(verified)"
             : "(SHA-256 + registry signature verified; Sigstore signature MISSING)";
-          console.log(`Installed ${result.name} v${result.version} ${verifyLabel}`);
+          console.log(result.kept ? keptLine(result) : `Installed ${result.name} v${result.version} ${verifyLabel}`);
           printShimPathNotice(paths, result);
         }
       } else {
@@ -492,17 +522,17 @@ program
       }
     } else if (isUrl) {
       // Direct git install
-      const result = await install({ arc: paths, host, db, repoUrl: nameOrUrl, yes: opts.yes, artifactName, pinnedRef, skipSecrets: opts.skipSecrets, fromEnv: opts.fromEnv, secretBackend, hostOverrides: cortexSteering.hostOverrides, cortexConfigEnv: cortexSteering.cortexConfigEnv, replaceProvidesFiles: opts.replace });
+      const result = await install({ arc: paths, host, db, repoUrl: nameOrUrl, yes: opts.yes, artifactName, pinnedRef, skipSecrets: opts.skipSecrets, fromEnv: opts.fromEnv, secretBackend, hostOverrides: cortexSteering.hostOverrides, cortexConfigEnv: cortexSteering.cortexConfigEnv, replaceProvidesFiles: opts.replace, onSkillConflict });
       if (result.success) {
         if (result.alreadyInstalled || result.repinned) {
           // arc#354: a pin-less re-run on an installed package is a no-op.
           // arc#396: a re-run carrying --pin moved the checkout instead.
           printAlreadyInstalledOrRepinned(result, pinnedRef);
         } else if (result.artifacts?.length) {
-          console.log(`\n✅ Installed ${result.artifacts.filter(a => a.success).length} artifact(s) from ${result.name}`);
+          console.log(`\n${libraryInstalledLine(result)}`);
           printShimPathNotice(paths, result);
         } else {
-          console.log(`\n✅ Installed ${result.name} v${result.version}`);
+          console.log(`\n${result.kept ? keptLine(result) : `✅ Installed ${result.name} v${result.version}`}`);
           printShimPathNotice(paths, result);
         }
       } else {
@@ -540,6 +570,7 @@ program
         hostOverrides: cortexSteering.hostOverrides,
         cortexConfigEnv: cortexSteering.cortexConfigEnv,
         replaceProvidesFiles: opts.replace,
+        onSkillConflict,
       });
       if (result.success) {
         if (result.alreadyInstalled || result.repinned) {
@@ -547,10 +578,10 @@ program
           // arc#396: a re-run carrying --pin moved the checkout instead.
           printAlreadyInstalledOrRepinned(result, pinnedRef);
         } else if (result.artifacts?.length) {
-          console.log(`✅ Installed ${result.artifacts.filter(a => a.success).length} artifact(s) from ${result.name}`);
+          console.log(libraryInstalledLine(result));
           printShimPathNotice(paths, result);
         } else {
-          console.log(`✅ Installed ${result.name} v${result.version}`);
+          console.log(result.kept ? keptLine(result) : `✅ Installed ${result.name} v${result.version}`);
           printShimPathNotice(paths, result);
         }
       } else {
@@ -952,7 +983,9 @@ program
   .option("--check", "Only check for available upgrades, don't install")
   .option("--force", "Re-run upgrade pipeline even if already at latest version")
   .option("--replace", "Replace existing content at a provides.files target instead of refusing (arc#420). Same semantics as `arc install --replace`: no backup is taken, and a warning names what was removed. An owned symlink from the PREVIOUS version of this package is always updated silently regardless of this flag.")
-  .action(async (name: string | undefined, opts: { check?: boolean; force?: boolean; replace?: boolean }) => {
+  .option("--on-conflict <choice>", ON_CONFLICT_HELP)
+  .action(async (name: string | undefined, opts: { check?: boolean; force?: boolean; replace?: boolean; onConflict?: string }) => {
+    const onSkillConflict = cliSkillConflictResolver(opts.onConflict);
     const paths = createArcPaths();
     const host = getDefaultHost();
     await ensureDirectories(paths, host);
@@ -975,13 +1008,13 @@ program
           console.log("All packages are up to date.");
         } else {
           console.log(`Upgrading ${upgradable.length} package(s)...\n`);
-          const results = await upgradeAll(db, paths, host, { replaceProvidesFiles: opts.replace });
+          const results = await upgradeAll(db, paths, host, { replaceProvidesFiles: opts.replace, onSkillConflict });
           console.log(formatUpgradeResults(results));
         }
       }
     } else if (!name && opts.force) {
       // Force upgrade all
-      const results = await upgradeAll(db, paths, host, { force: true, replaceProvidesFiles: opts.replace });
+      const results = await upgradeAll(db, paths, host, { force: true, replaceProvidesFiles: opts.replace, onSkillConflict });
       if (!results.length) {
         console.log("No packages installed.");
       } else {
@@ -1003,10 +1036,10 @@ program
       }
 
       if (isLibraryUpgrade) {
-        const results = await upgradeLibrary(db, paths, host, name, { force: opts.force, replaceProvidesFiles: opts.replace });
+        const results = await upgradeLibrary(db, paths, host, name, { force: opts.force, replaceProvidesFiles: opts.replace, onSkillConflict });
         console.log(formatUpgradeResults(results, { force: opts.force }));
       } else {
-        const result = await upgradePackage(db, paths, host, upgradeName, { force: opts.force, replaceProvidesFiles: opts.replace });
+        const result = await upgradePackage(db, paths, host, upgradeName, { force: opts.force, replaceProvidesFiles: opts.replace, onSkillConflict });
         if (result.success) {
           if (result.oldVersion === result.newVersion) {
             if (opts.force) {

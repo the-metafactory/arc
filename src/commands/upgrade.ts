@@ -16,6 +16,7 @@ import {
 import { readManifest, readLibraryArtifacts } from "../lib/manifest.js";
 import YAML from "yaml";
 import { install, installSingleArtifact, installPackageDependencies, type InstallResult } from "./install.js";
+import { keptSkillHint, type SkillConflictResolver } from "../lib/skill-conflict.js";
 import { recordCompositionSnapshot } from "./files.js";
 import { errorMessage } from "../lib/errors.js";
 import {
@@ -61,6 +62,13 @@ export interface UpgradeOptions {
    * upgrade, and the flag has no bearing on it.
    */
   replaceProvidesFiles?: boolean;
+  /**
+   * soma-lifeos#17, same semantics as `arc install --on-conflict` / the
+   * interactive prompt: decides a skill target occupied by content arc did not
+   * link there, for a skill this upgrade newly links (a library's new
+   * artifact, a new dependency). Absent refuses.
+   */
+  onSkillConflict?: SkillConflictResolver;
   /**
    * Internal: packages already upgraded by this command (arc#346). Threads
    * through the `depends_on.packages` cascade so a shared dep or a cycle is
@@ -376,13 +384,14 @@ function scanRootRefusal(devRoot: string): string | null {
  */
 export function memberMoveInstallOptions(
   move: MemberMove,
-  opts?: Pick<UpgradeOptions, "replaceProvidesFiles">,
-): { repoUrl: string; pinnedRef: string; yes: true; replaceProvidesFiles?: boolean } {
+  opts?: Pick<UpgradeOptions, "replaceProvidesFiles" | "onSkillConflict">,
+): { repoUrl: string; pinnedRef: string; yes: true; replaceProvidesFiles?: boolean; onSkillConflict?: SkillConflictResolver } {
   return {
     repoUrl: move.ref,
     pinnedRef: move.to,
     yes: true,
     replaceProvidesFiles: opts?.replaceProvidesFiles,
+    onSkillConflict: opts?.onSkillConflict,
   };
 }
 
@@ -553,7 +562,7 @@ async function cascadeDependencyUpgrades(
   host: HostAdapter,
   manifest: { depends_on?: { packages?: { name: string }[] } },
   seen: Set<string>,
-  opts?: Pick<UpgradeOptions, "force" | "replaceProvidesFiles">,
+  opts?: Pick<UpgradeOptions, "force" | "replaceProvidesFiles" | "onSkillConflict">,
 ): Promise<UpgradeResult[]> {
   const cascaded: UpgradeResult[] = [];
   for (const dep of manifest.depends_on?.packages ?? []) {
@@ -566,6 +575,7 @@ async function cascadeDependencyUpgrades(
       await upgradePackage(db, arc, host, dep.name, {
         force: opts?.force,
         replaceProvidesFiles: opts?.replaceProvidesFiles,
+        onSkillConflict: opts?.onSkillConflict,
         _seen: seen,
       }),
     );
@@ -597,7 +607,8 @@ export async function upgradePackage(
     return { success: false, name, oldVersion: "?", error: `"${name}" is not installed` };
   }
   if (skill.status !== "active") {
-    return { success: false, name, oldVersion: skill.version, error: `"${name}" is disabled — enable it first` };
+    const error = skill.status === "kept" ? keptSkillHint(name) : `"${name}" is disabled — enable it first`;
+    return { success: false, name, oldVersion: skill.version, error };
   }
 
   const installPath = skill.install_path;
@@ -889,6 +900,7 @@ export async function upgradePackage(
     arc,
     host,
     db,
+    onSkillConflict: opts?.onSkillConflict,
   });
   if (!packageDepsResult.success) {
     const note = rollback();
@@ -1248,7 +1260,7 @@ async function upgradeComposition(
 export async function upgradeAll(
   db: Database,
   arc: ArcPaths, host: HostAdapter,
-  opts?: Pick<UpgradeOptions, "force" | "replaceProvidesFiles">
+  opts?: Pick<UpgradeOptions, "force" | "replaceProvidesFiles" | "onSkillConflict">
 ): Promise<UpgradeResult[]> {
   const results: UpgradeResult[] = [];
   // One shared set across the whole run: when a package cascades an upgrade to
@@ -1349,7 +1361,7 @@ export async function upgradeLibrary(
   db: Database,
   arc: ArcPaths, host: HostAdapter,
   libraryName: string,
-  opts?: Pick<UpgradeOptions, "force" | "replaceProvidesFiles">
+  opts?: Pick<UpgradeOptions, "force" | "replaceProvidesFiles" | "onSkillConflict">
 ): Promise<UpgradeResult[]> {
   const artifacts = listByLibrary(db, libraryName);
   if (!artifacts.length) {
@@ -1373,6 +1385,7 @@ export async function upgradeLibrary(
   // This ensures per-artifact scripts, hooks, capabilities, and symlinks are all handled.
   const results: UpgradeResult[] = [];
   for (const artifact of artifacts) {
+    if (artifact.status === "kept") continue;
     const result = await upgradePackage(db, arc, host, artifact.name, opts);
     results.push(result);
   }
@@ -1403,6 +1416,7 @@ export async function upgradeLibrary(
             db,
             repoUrl: artifacts[0].repo_url,
             yes: true,
+            onSkillConflict: opts?.onSkillConflict,
           },
           artifactDir,
           artifactManifest,

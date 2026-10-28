@@ -531,7 +531,11 @@ export async function remove(
   // provides.files cleanup, CLI shim names, and hooks teardown. Best-effort:
   // if the manifest is unreadable (corrupted clone, manual rm -rf), fall
   // through with a null manifest — DB row and primary symlink still removed.
-  const manifest = await readManifest(skill.install_path).catch(() => null);
+  //
+  // soma-lifeos#17: nothing of a KEPT skill landed (its target is the
+  // principal's own copy), so its manifest drives no teardown at all.
+  const manifest =
+    skill.status === "kept" ? null : await readManifest(skill.install_path).catch(() => null);
 
   // arc#359: capture the owns declaration ONCE (the manifest is deleted with the
   // repo below) so both success returns can thread it into the result for the
@@ -615,8 +619,10 @@ export async function remove(
     }
   } else {
     // Skills: remove skill symlink
-    const skillLink = join(host.paths.skillsDir, name);
-    await removeSymlink(skillLink);
+    // soma-lifeos#17: a kept skill's target is the principal's own copy.
+    if (skill.status !== "kept") {
+      await removeSymlink(join(host.paths.skillsDir, name));
+    }
   }
 
   // Remove all CLI shims and bin symlinks (skills and tools)

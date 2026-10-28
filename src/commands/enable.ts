@@ -6,6 +6,7 @@ import { getSkill, updateSkillStatus } from "../lib/db.js";
 import { readManifest } from "../lib/manifest.js";
 import { createSymlink, createCliShim, extractAllCliInfo } from "../lib/symlinks.js";
 import { registerHooks, resolveHooksFromManifest } from "../lib/hooks.js";
+import { keptSkillHint } from "../lib/skill-conflict.js";
 
 export interface EnableResult {
   success: boolean;
@@ -29,6 +30,12 @@ export async function enable(
   }
   if (skill.status === "active") {
     return { success: false, error: `Skill '${name}' is already active` };
+  }
+  if (skill.status === "kept") {
+    return {
+      success: false,
+      error: `Skill '${name}' is kept, so arc does not link it. ${keptSkillHint(name)}`,
+    };
   }
 
   const isTool = skill.artifact_type === "tool";

@@ -36,6 +36,7 @@ import {
   rollbackArtifactSymlinks,
   toposortArtifacts,
 } from "../lib/artifact-installer.js";
+import { formatSkillConflictRefusals, keptSkillHint, type SkillConflictResolver } from "../lib/skill-conflict.js";
 import { extractRepoName, isInsideRepos, repoNameFromPreExtracted } from "../lib/repo-name.js";
 import { requireBrokerForManifest } from "../lib/nats-broker.js";
 import {
@@ -244,6 +245,12 @@ export interface InstallOptions {
    */
   replaceProvidesFiles?: boolean;
   /**
+   * soma-lifeos#17 — `--on-conflict` / the interactive prompt. Decides each
+   * skill target already occupied by content arc did not link there for this
+   * package. Absent refuses such a target, naming it.
+   */
+  onSkillConflict?: SkillConflictResolver;
+  /**
    * arc#400 — reference-composition seams (`type: bundle` / `type: factory`).
    *
    * Production leaves this absent: `defaultCompositionSeams()` supplies a real
@@ -280,6 +287,8 @@ export interface InstallResult {
    * branch), which is still a move.
    */
   repinned?: { ref: string; from: string; to: string };
+  /** soma-lifeos#17: the principal kept their own skill; recorded as `kept`, not linked. */
+  kept?: boolean;
   error?: string;
   manifest?: ArcManifest;
   evidence?: InstallTransactionEvidence;
@@ -314,6 +323,7 @@ export interface PackageDependencyContext {
   yes?: boolean;
   /** Per-host adapter overrides for multi-target / sandboxed-test installs. */
   hostOverrides?: HostOverrides;
+  onSkillConflict?: SkillConflictResolver;
 }
 
 /**
@@ -366,6 +376,14 @@ export async function installPackageDependencies(
         (db
           .prepare("SELECT * FROM skills WHERE repo_url = ? AND library_name IS NULL")
           .get(dep.repo) as InstalledSkill | null);
+      if (existing?.status === "kept") {
+        // soma-lifeos#17: the principal kept their own copy of this skill, so
+        // nothing of the package landed. Not re-asked here; said out loud.
+        process.stderr.write(
+          `arc: WARN — ${manifest.name} depends on '${dep.name}', which is kept: your own copy is in place and nothing of the package landed. ${keptSkillHint(dep.name)}\n`,
+        );
+        continue;
+      }
       if (existing?.status === "active") {
         // arc#354: declared compat range vs the installed version. Same
         // warn-don't-fail posture as the arc#284 depends_on.skills check —
@@ -444,6 +462,7 @@ export async function installPackageDependencies(
         db,
         repoUrl: dep.repo,
         yes: ctx.yes,
+        onSkillConflict: ctx.onSkillConflict,
       });
 
       if (!depResult.success) {
@@ -467,6 +486,13 @@ export async function installPackageDependencies(
   }
 
   return { success: true };
+}
+
+/** The hint for a package that is installed but not active. */
+export function notActiveHint(name: string, status: string): string {
+  return status === "kept"
+    ? keptSkillHint(name)
+    : `Run \`arc enable ${name}\` to re-enable it, or \`arc remove ${name}\` first if you want a clean install.`;
 }
 
 /**
@@ -537,7 +563,7 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
       }
       return {
         success: false,
-        error: `Skill '${existingByUrl.name}' is already installed (status: ${existingByUrl.status}). Run \`arc enable ${existingByUrl.name}\` to re-enable it, or \`arc remove ${existingByUrl.name}\` first if you want a clean install.`,
+        error: `Skill '${existingByUrl.name}' is already installed (status: ${existingByUrl.status}). ${notActiveHint(existingByUrl.name, existingByUrl.status)}`,
       };
     }
 
@@ -558,7 +584,7 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
         }
         return {
           success: false,
-          error: `Skill '${existingByPath.name}' is already installed (status: ${existingByPath.status}). Run \`arc enable ${existingByPath.name}\` to re-enable it, or \`arc remove ${existingByPath.name}\` first if you want a clean install.`,
+          error: `Skill '${existingByPath.name}' is already installed (status: ${existingByPath.status}). ${notActiveHint(existingByPath.name, existingByPath.status)}`,
         };
       }
       // If no DB entries reference this path, clean up stale clone
@@ -644,8 +670,8 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
       // Remaining cases: disabled (any version), or active at a DIFFERENT
       // version (the active+same-version case returned success above).
       const hint =
-        existingByName.status === "disabled"
-          ? `Run \`arc enable ${manifest.name}\` to re-enable it, or \`arc remove ${manifest.name}\` first if you want a clean install.`
+        existingByName.status !== "active"
+          ? notActiveHint(manifest.name, existingByName.status)
           : `Run \`arc upgrade ${manifest.name}\`, or \`arc remove ${manifest.name}\` first if the existing install can't be upgraded in place.`;
       return {
         success: false,
@@ -728,6 +754,7 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
     db,
     yes: opts.yes,
     hostOverrides: opts.hostOverrides,
+    onSkillConflict: opts.onSkillConflict,
   });
   if (!packageDepsResult.success) {
     return { success: false, error: packageDepsResult.error };
@@ -940,6 +967,7 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
   //     or installLaunchdArtifacts for darwin-launchd.
   //   - manifest.targets absent → existing single-host flow against opts.host.
   let symlinkResult: { record: ArtifactSymlinkRecord; filesMissingSource: { source: string; target: string }[] };
+  let skillsKept: string[];
   let launchdRecords: LaunchdInstallRecord[] = [];
   let systemdRecords: SystemdInstallRecord[] = [];
   if (manifest.targets && manifest.targets.length > 0) {
@@ -953,11 +981,13 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
       hostOverrides: opts.hostOverrides,
       systemctlRunner: opts.systemctlRunner,
       replaceProvidesFiles: opts.replaceProvidesFiles,
+      onSkillConflict: opts.onSkillConflict,
     });
     if ("error" in multi) {
       return { success: false, error: multi.error };
     }
     symlinkResult = { record: multi.symlinks, filesMissingSource: [] };
+    skillsKept = multi.kept;
     launchdRecords = multi.launchd;
     systemdRecords = multi.systemd;
   } else {
@@ -970,8 +1000,10 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
       consumerDir: opts.consumerDir,
       quiet: opts.yes,
       replaceProvidesFiles: opts.replaceProvidesFiles,
+      onSkillConflict: opts.onSkillConflict,
     });
     symlinkResult = applyResult;
+    skillsKept = applyResult.skillsKept;
     if (applyResult.unsafeTargets.length) {
       return { success: false, error: formatProvidesFileConflicts(applyResult.unsafeTargets) };
     }
@@ -987,6 +1019,9 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
     }
     if (applyResult.filesOccupied.length) {
       return { success: false, error: formatProvidesFileConflicts(applyResult.filesOccupied) };
+    }
+    if (applyResult.skillsRefused.length) {
+      return { success: false, error: formatSkillConflictRefusals(applyResult.skillsRefused) };
     }
   }
   // 5b. Complete the post-landing Install Transaction.
@@ -1050,6 +1085,7 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
     sourceTier: opts.sourceTier ?? manifest.tier ?? "custom",
     libraryName: opts.libraryName ?? null,
     postinstallEnv,
+    kept: skillsKept.length > 0,
     onTransaction: (handle) => {
       installTx = handle;
     },
@@ -1288,6 +1324,16 @@ async function installLibrary(
     // (re-)install when the drop is missing. Idempotent symlink creation makes
     // the re-drop safe.
     const existing = getSkill(db, artifactManifest.name);
+    if (existing?.status === "kept") {
+      // soma-lifeos#17: the principal already chose to keep their own copy;
+      // `arc remove` is how they take that back.
+      if (!opts.yes) {
+        console.log(`  ⏭️  ${artifactManifest.name} kept earlier (your own copy), skipping`);
+      }
+      tx.recordArtifactSkipped(artifactManifest.name, artifactManifest.version, artifactManifest.type);
+      results.push({ success: true, kept: true, name: artifactManifest.name, version: artifactManifest.version });
+      continue;
+    }
     if (existing?.status === "active") {
       const dropPresent = await artifactDropPresent({
         type: artifactManifest.type,
@@ -1367,7 +1413,11 @@ async function installLibrary(
     }
 
     if (!opts.yes) {
-      console.log(`  ✅ ${artifactResult.name} v${artifactResult.version}`);
+      console.log(
+        artifactResult.kept
+          ? `  ⏭️  ${artifactResult.name} kept (your own copy; not linked)`
+          : `  ✅ ${artifactResult.name} v${artifactResult.version}`,
+      );
     }
     // onTransaction always fires (before any hook/postinstall gate) on the path
     // that reaches a success return, so artifactTx is guaranteed set here. Guard
@@ -1383,6 +1433,7 @@ async function installLibrary(
       artifactTx,
       artifactManifest.version,
       artifactManifest.type,
+      artifactResult.kept ? ArtifactInstallState.KEPT : ArtifactInstallState.SUCCESS,
     );
   }
 
@@ -1510,6 +1561,7 @@ export async function installSingleArtifact(
   //   - manifest.targets absent → existing single-host flow against `host`
   //     (plain skills/tools/prompts — byte-identical to before).
   let symlinkResult: { record: ArtifactSymlinkRecord; filesMissingSource: { source: string; target: string }[] };
+  let skillsKept: string[];
   let artifactLaunchdRecords: LaunchdInstallRecord[] = [];
   let artifactSystemdRecords: SystemdInstallRecord[] = [];
   if (manifest.targets && manifest.targets.length > 0) {
@@ -1523,11 +1575,13 @@ export async function installSingleArtifact(
       hostOverrides: opts.hostOverrides,
       systemctlRunner: opts.systemctlRunner,
       replaceProvidesFiles: opts.replaceProvidesFiles,
+      onSkillConflict: opts.onSkillConflict,
     });
     if ("error" in multi) {
       return { success: false, error: multi.error };
     }
     symlinkResult = { record: multi.symlinks, filesMissingSource: [] };
+    skillsKept = multi.kept;
     artifactLaunchdRecords = multi.launchd;
     artifactSystemdRecords = multi.systemd;
   } else {
@@ -1540,8 +1594,10 @@ export async function installSingleArtifact(
       consumerDir: opts.consumerDir,
       quiet: opts.yes,
       replaceProvidesFiles: opts.replaceProvidesFiles,
+      onSkillConflict: opts.onSkillConflict,
     });
     symlinkResult = applyResult;
+    skillsKept = applyResult.skillsKept;
     if (applyResult.unsafeTargets.length) {
       return { success: false, error: formatProvidesFileConflicts(applyResult.unsafeTargets) };
     }
@@ -1557,6 +1613,9 @@ export async function installSingleArtifact(
     }
     if (applyResult.filesOccupied.length) {
       return { success: false, error: formatProvidesFileConflicts(applyResult.filesOccupied) };
+    }
+    if (applyResult.skillsRefused.length) {
+      return { success: false, error: formatSkillConflictRefusals(applyResult.skillsRefused) };
     }
   }
   // S1 (arc#244): library-artifact path — same config-split steering as the
@@ -1591,6 +1650,7 @@ export async function installSingleArtifact(
     sourceTier: opts.sourceTier ?? manifest.tier ?? "custom",
     libraryName,
     postinstallEnv: artifactPostinstallEnv,
+    kept: skillsKept.length > 0,
     onTransaction: (handle) => {
       artifactTx = handle;
       onTransaction?.(handle);
@@ -1663,6 +1723,7 @@ export async function installSingleArtifact(
  */
 interface MultiTargetInstallResult {
   symlinks: ArtifactSymlinkRecord;
+  kept: string[];
   launchd: LaunchdInstallRecord[];
   systemd: SystemdInstallRecord[];
 }
@@ -1677,11 +1738,13 @@ async function installPerTarget(opts: {
   hostOverrides?: HostOverrides;
   systemctlRunner?: SystemctlRunner;
   replaceProvidesFiles?: boolean;
+  onSkillConflict?: SkillConflictResolver;
 }): Promise<MultiTargetInstallResult | { error: string }> {
   const ordered = orderTargetsForInstall(opts.targets);
   const merged: ArtifactSymlinkRecord = {
     symlinks: [],
     shims: { dir: opts.arc.shimDir, names: [] },
+    backups: [],
   };
   const launchd: LaunchdInstallRecord[] = [];
   const systemd: SystemdInstallRecord[] = [];
@@ -1791,6 +1854,7 @@ async function installPerTarget(opts: {
         consumerDir: opts.consumerDir,
         quiet: opts.quiet,
         replaceProvidesFiles: opts.replaceProvidesFiles,
+        onSkillConflict: opts.onSkillConflict,
       });
     } catch (err) {
       await rollbackAll();
@@ -1814,11 +1878,21 @@ async function installPerTarget(opts: {
       await rollbackAll();
       return { error: `[${targetId}] ${formatProvidesFileConflicts(r.filesOccupied)}` };
     }
+    if (r.skillsRefused.length) {
+      await rollbackAll();
+      return { error: `[${targetId}] ${formatSkillConflictRefusals(r.skillsRefused)}` };
+    }
+    if (r.skillsKept.length) {
+      // Keep is all-or-nothing: a kept package lands nothing on any target.
+      await rollbackAll();
+      return { symlinks: { symlinks: [], shims: { dir: opts.arc.shimDir, names: [] } }, kept: r.skillsKept, launchd: [], systemd: [] };
+    }
     merged.symlinks.push(...r.record.symlinks);
     merged.shims.names.push(...r.record.shims.names);
+    merged.backups?.push(...(r.record.backups ?? []));
   }
 
-  return { symlinks: merged, launchd, systemd };
+  return { symlinks: merged, kept: [], launchd, systemd };
 }
 
 /**
@@ -2415,6 +2489,7 @@ function createMemberInstaller(ctx: {
   host: HostAdapter;
   db: Database;
   hostOverrides?: HostOverrides;
+  onSkillConflict?: SkillConflictResolver;
 }) {
   return async (member: ResolvedCompositionMember) => {
     let preExtractedPath = member.preExtractedPath;
@@ -2450,6 +2525,7 @@ function createMemberInstaller(ctx: {
       preExtractedPath,
       pinnedRef: preExtractedPath ? undefined : member.pinnedRef,
       hostOverrides: ctx.hostOverrides,
+      onSkillConflict: ctx.onSkillConflict,
     });
     return {
       success: result.success,
@@ -2495,6 +2571,7 @@ function defaultCompositionSeams(
         host: opts.host,
         db: opts.db,
         hostOverrides: opts.hostOverrides,
+        onSkillConflict: opts.onSkillConflict,
       }),
   };
 }

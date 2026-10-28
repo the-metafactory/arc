@@ -5,6 +5,7 @@ import { getSkill, updateSkillStatus } from "../lib/db.js";
 import { removeSymlink, removeCliShim, extractAllCliInfo } from "../lib/symlinks.js";
 import { readManifest } from "../lib/manifest.js";
 import { removeHooks } from "../lib/hooks.js";
+import { keptSkillHint } from "../lib/skill-conflict.js";
 
 export interface DisableResult {
   success: boolean;
@@ -28,6 +29,12 @@ export async function disable(
   }
   if (skill.status === "disabled") {
     return { success: false, error: `Skill '${name}' is already disabled` };
+  }
+  if (skill.status === "kept") {
+    return {
+      success: false,
+      error: `Skill '${name}' is kept, so arc does not unlink it. ${keptSkillHint(name)}`,
+    };
   }
 
   const isTool = skill.artifact_type === "tool";

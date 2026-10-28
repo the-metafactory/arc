@@ -87,6 +87,8 @@ export enum ArtifactInstallState {
   SKIPPED = "skipped",
   /** Installed cleanly in this run. */
   SUCCESS = "success",
+  /** Recorded in this run, but the principal kept their own skill instead of linking it (soma-lifeos#17). */
+  KEPT = "kept",
   /** Install attempt failed — the sequence stops here. */
   FAILED = "failed",
   /** Installed in this run, then unwound because a later artifact failed. */
@@ -122,6 +124,7 @@ export interface LibraryInstallTransaction {
     tx: InstallTransaction,
     version?: string,
     type?: string,
+    state?: ArtifactInstallState.SUCCESS | ArtifactInstallState.KEPT,
   ): void;
   /** Record the failing artifact; the sequence stops and rollback follows. */
   recordArtifactFailure(name: string, error: string, version?: string, type?: string): void;
@@ -154,12 +157,12 @@ export function beginLibraryInstallTransaction(opts: {
       details.push({ name, version, type, state: ArtifactInstallState.SKIPPED });
     },
 
-    recordArtifactSuccess(name, tx, version, type) {
+    recordArtifactSuccess(name, tx, version, type, state = ArtifactInstallState.SUCCESS) {
       details.push({
         name,
         version,
         type,
-        state: ArtifactInstallState.SUCCESS,
+        state,
         evidence: tx.evidence,
       });
       landed.push({ name, tx });
@@ -347,7 +350,7 @@ export function beginInstallTransaction(opts: {
       }
       for (const record of symlinkRecords) {
         try {
-          await rollbackArtifactSymlinks(record);
+          for (const warning of await rollbackArtifactSymlinks(record)) warn(warning);
         } catch (err) {
           warn(`failed to roll back symlinks: ${errorMessage(err)}`);
         }
@@ -388,6 +391,13 @@ export interface CompleteInstallTransactionOptions {
   sourceTier?: PackageTier;
   libraryName?: string | null;
   postinstallEnv?: Record<string, string>;
+  /**
+   * soma-lifeos#17: the principal kept their own skill. Only the `kept` DB row
+   * is written; hooks, extensions, node dependencies, postinstall and the Soma
+   * projection are skipped, as nothing of the package landed. Its
+   * `depends_on.packages` are separate packages, installed before the question.
+   */
+  kept?: boolean;
   onTransaction?: (tx: InstallTransaction) => void;
 }
 
@@ -398,6 +408,7 @@ export interface CompleteInstallTransactionResult {
   error?: string;
   manifest?: ArcManifest;
   evidence?: InstallTransactionEvidence;
+  kept?: boolean;
 }
 
 /**
@@ -412,7 +423,7 @@ export interface CompleteInstallTransactionResult {
 export async function completeInstallTransaction(
   opts: CompleteInstallTransactionOptions,
 ): Promise<CompleteInstallTransactionResult> {
-  const { host, db, repoUrl, installPath, manifest } = opts;
+  const { host, installPath, manifest } = opts;
   const tx = beginInstallTransaction({
     packageName: manifest.name,
     authorization: opts.authorization,
@@ -422,6 +433,7 @@ export async function completeInstallTransaction(
   tx.recordSymlinks(opts.symlinks);
   tx.recordLaunchd(opts.launchdRecords ?? []);
   tx.recordSystemd(opts.systemdRecords ?? []);
+  if (opts.kept) return commitInstall(tx, opts, "kept");
 
   const resolvedHooks = resolveHooksFromManifest(
     manifest.provides?.hooks,
@@ -520,6 +532,15 @@ export async function completeInstallTransaction(
     );
   }
 
+  return commitInstall(tx, opts, "active");
+}
+
+function commitInstall(
+  tx: InstallTransaction,
+  opts: CompleteInstallTransactionOptions,
+  status: "active" | "kept",
+): CompleteInstallTransactionResult {
+  const { db, repoUrl, installPath, manifest } = opts;
   const now = new Date().toISOString();
   // ArcManifest.type and ArtifactType are the same union since arc#361
   // (governance + system folded into ArtifactType) — no assertion needed.
@@ -533,7 +554,7 @@ export async function completeInstallTransaction(
       repo_url: repoUrl,
       install_path: installPath,
       skill_dir: existsSync(artifactSourceDir) ? artifactSourceDir : installPath,
-      status: "active",
+      status,
       artifact_type: artifactType,
       tier: opts.sourceTier ?? manifest.tier ?? "custom",
       customization_path: null,
@@ -552,6 +573,7 @@ export async function completeInstallTransaction(
     version: manifest.version,
     manifest,
     evidence: tx.evidence,
+    ...(status === "kept" ? { kept: true } : {}),
   };
 }
 
