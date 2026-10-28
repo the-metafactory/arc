@@ -906,7 +906,7 @@ export interface InstalledSkill {
   repo_url: string;
   install_path: string;
   skill_dir: string;
-  status: "active" | "disabled";
+  status: "active" | "disabled" | "kept";
   artifact_type: ArtifactType;
   tier: PackageTier;
   customization_path: string | null;

@@ -29,6 +29,12 @@ export async function disable(
   if (skill.status === "disabled") {
     return { success: false, error: `Skill '${name}' is already disabled` };
   }
+  if (skill.status === "kept") {
+    return {
+      success: false,
+      error: `Skill '${name}' is kept: your own copy sits at its target and arc does not unlink it. Run \`arc remove ${name}\`, then install again to choose replace or keep.`,
+    };
+  }
 
   const isTool = skill.artifact_type === "tool";
   const isAgent = skill.artifact_type === "agent";

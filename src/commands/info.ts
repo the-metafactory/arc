@@ -560,7 +560,7 @@ function formatInstalledLibraryInfo(result: InfoResult): string {
   for (const [type, items] of byType) {
     lines.push(`  ${type}s (${items.length}):`);
     for (const item of items) {
-      const statusBadge = item.status === "active" ? "\u2705" : "\u23F8\uFE0F";
+      const statusBadge = item.status === "active" ? "\u2705" : item.status === "kept" ? "\u23ED\uFE0F" : "\u23F8\uFE0F";
       lines.push(`    ${statusBadge} ${item.name} v${item.version}`);
     }
   }

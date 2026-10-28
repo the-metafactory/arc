@@ -30,6 +30,12 @@ export async function enable(
   if (skill.status === "active") {
     return { success: false, error: `Skill '${name}' is already active` };
   }
+  if (skill.status === "kept") {
+    return {
+      success: false,
+      error: `Skill '${name}' is kept: your own copy sits at its target and arc does not link it. Run \`arc remove ${name}\`, then install again to choose replace or keep.`,
+    };
+  }
 
   const isTool = skill.artifact_type === "tool";
   const isAgent = skill.artifact_type === "agent";

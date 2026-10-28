@@ -167,7 +167,7 @@ export function formatList(result: ListResult): string {
     if (sectionCount > 0) lines.push("");
     lines.push(`Installed ${label} (${items.length}):`, "");
     for (const s of items) {
-      const statusBadge = s.status === "active" ? "✅" : "⏸️";
+      const statusBadge = s.status === "active" ? "✅" : s.status === "kept" ? "⏭️" : "⏸️";
       const tierBadge = s.tier === "official" ? " (official)" : s.tier === "community" ? " (community)" : "";
       const customBadge = s.customization_path ? " *" : "";
       const libraryBadge = s.library_name ? ` 📚${s.library_name}` : "";
