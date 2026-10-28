@@ -156,7 +156,7 @@ describe("parseOnConflict", () => {
 });
 
 describe("needsPager", () => {
-  test("pages only output longer than the terminal", () => {
+  test("pages only text longer than the terminal", () => {
     expect(needsPager("a\nb\n", 24)).toBe(false);
     expect(needsPager("x\n".repeat(25), 24)).toBe(true);
     expect(needsPager("x\n".repeat(25), undefined)).toBe(false);

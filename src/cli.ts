@@ -165,6 +165,8 @@ function installResultProvidesCli(result: Awaited<ReturnType<typeof install>>): 
   return manifests.some((manifest) => extractAllCliInfo(manifest).length > 0);
 }
 
+const ON_CONFLICT_HELP = "When a skill's target already holds a directory, file or symlink arc did not install: replace (back it up, then link) or keep (leave it, record the skill as kept). Without it arc asks in a terminal and refuses elsewhere; --yes does not choose.";
+
 function keptLine(result: Awaited<ReturnType<typeof install>>): string {
   return `⏭️  Kept your own '${result.name}' skill — recorded as kept, not linked (\`arc list\` shows it)`;
 }
@@ -238,7 +240,7 @@ program
   .option("--config-dir <path>", "Target a config-split cortex stack by its config dir (or its pointer file). Roots cortex agents.d/ + personas/ at the stack subdir. (arc#244)")
   .option("--stack <name>", "Target a config-split cortex stack by name (resolves to <name> under the live cortex config dir — legacy ~/.config/cortex on a pre-cutover box, canonical ~/.config/metafactory/cortex on a migrated one). (arc#244)")
   .option("--replace", "Replace existing content at a provides.files target instead of refusing (arc#420). No backup is taken — a warning names what was removed. An owned symlink from a prior install of the SAME package is always updated silently regardless of this flag.")
-  .option("--on-conflict <choice>", "When a skill's target already holds a directory, file or symlink arc did not install: replace (back it up, then link) or keep (leave it, record the skill as kept). Without it arc asks in a terminal and refuses elsewhere; --yes does not choose.")
+  .option("--on-conflict <choice>", ON_CONFLICT_HELP)
   .action(async (nameOrUrl: string, opts: { yes?: boolean; pin?: string; binDir?: string; strictSigning?: boolean; skipSecrets?: boolean; fromEnv?: boolean; secretBackend?: string; configDir?: string; stack?: string; replace?: boolean; onConflict?: string }) => {
     // Non-TTY guard: fail loud rather than silently half-installing
     if (!opts.yes && !process.stdin.isTTY) {
@@ -981,7 +983,7 @@ program
   .option("--check", "Only check for available upgrades, don't install")
   .option("--force", "Re-run upgrade pipeline even if already at latest version")
   .option("--replace", "Replace existing content at a provides.files target instead of refusing (arc#420). Same semantics as `arc install --replace`: no backup is taken, and a warning names what was removed. An owned symlink from the PREVIOUS version of this package is always updated silently regardless of this flag.")
-  .option("--on-conflict <choice>", "When a skill's target already holds a directory, file or symlink arc did not install: replace (back it up, then link) or keep (leave it, record the skill as kept). Without it arc asks in a terminal and refuses elsewhere; --yes does not choose.")
+  .option("--on-conflict <choice>", ON_CONFLICT_HELP)
   .action(async (name: string | undefined, opts: { check?: boolean; force?: boolean; replace?: boolean; onConflict?: string }) => {
     const onSkillConflict = cliSkillConflictResolver(opts.onConflict);
     const paths = createArcPaths();

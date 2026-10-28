@@ -488,6 +488,13 @@ export async function installPackageDependencies(
   return { success: true };
 }
 
+/** The hint for a package that is installed but not active. */
+export function notActiveHint(name: string, status: string): string {
+  return status === "kept"
+    ? keptSkillHint(name)
+    : `Run \`arc enable ${name}\` to re-enable it, or \`arc remove ${name}\` first if you want a clean install.`;
+}
+
 /**
  * Install a skill from a git repo URL.
  *
@@ -500,12 +507,6 @@ export async function installPackageDependencies(
  * 6. Run bun install (if package.json in repo root)
  * 7. Record in database
  */
-export function notActiveHint(name: string, status: string): string {
-  return status === "kept"
-    ? keptSkillHint(name)
-    : `Run \`arc enable ${name}\` to re-enable it, or \`arc remove ${name}\` first if you want a clean install.`;
-}
-
 export async function install(opts: InstallOptions): Promise<InstallResult> {
   const { arc, host, db, repoUrl } = opts;
 

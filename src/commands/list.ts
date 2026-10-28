@@ -32,6 +32,11 @@ export interface ListOptions {
   library?: string;
 }
 
+/** The `arc list` / `arc info` badge for an installed package's status. */
+export function statusBadge(status: InstalledSkill["status"]): string {
+  return status === "active" ? "✅" : status === "kept" ? "⏭️" : "⏸️";
+}
+
 /**
  * List all installed skills with version and status.
  */
@@ -167,11 +172,11 @@ export function formatList(result: ListResult): string {
     if (sectionCount > 0) lines.push("");
     lines.push(`Installed ${label} (${items.length}):`, "");
     for (const s of items) {
-      const statusBadge = s.status === "active" ? "✅" : s.status === "kept" ? "⏭️" : "⏸️";
+      const badge = statusBadge(s.status);
       const tierBadge = s.tier === "official" ? " (official)" : s.tier === "community" ? " (community)" : "";
       const customBadge = s.customization_path ? " *" : "";
       const libraryBadge = s.library_name ? ` 📚${s.library_name}` : "";
-      lines.push(`  ${statusBadge} ${s.name} v${s.version} [${s.status}]${tierBadge}${customBadge}${libraryBadge}`);
+      lines.push(`  ${badge} ${s.name} v${s.version} [${s.status}]${tierBadge}${customBadge}${libraryBadge}`);
     }
     sectionCount++;
   };
