@@ -736,6 +736,21 @@ export async function artifactDropPresent(opts: {
   return true;
 }
 
+/** What {@link createArtifactSymlinks} did, or why it refused before writing. */
+export interface ApplyResult {
+  filesCreated: { source: string; target: string }[];
+  filesMissingSource: { source: string; target: string }[];
+  /** arc#419 — unexpanded-variable targets refused at plan time. */
+  unsafeTargets: ProvidesFileConflict[];
+  /** arc#420 — occupied targets refused at plan time (no --replace). */
+  filesOccupied: ProvidesFileConflict[];
+  /** soma-lifeos#17 — occupied skill targets nobody chose for; nothing was written. */
+  skillsRefused: ProvidesFileConflict[];
+  /** soma-lifeos#17 — skill targets the principal kept; not linked, not in `record`. */
+  skillsKept: string[];
+  record: ArtifactSymlinkRecord;
+}
+
 export async function createArtifactSymlinks(opts: {
   type: ArtifactType | "rules" | "system";
   manifest: ArcManifest;
@@ -759,19 +774,7 @@ export async function createArtifactSymlinks(opts: {
    * `arc upgrade` from. Defaults to false (install's behavior, unchanged).
    */
   skipTemplates?: boolean;
-}): Promise<{
-  filesCreated: { source: string; target: string }[];
-  filesMissingSource: { source: string; target: string }[];
-  /** arc#419 — unexpanded-variable targets refused at plan time. */
-  unsafeTargets: ProvidesFileConflict[];
-  /** arc#420 — occupied targets refused at plan time (no --replace). */
-  filesOccupied: ProvidesFileConflict[];
-  /** soma-lifeos#17 — occupied skill targets nobody chose for; nothing was written. */
-  skillsRefused: ProvidesFileConflict[];
-  /** soma-lifeos#17 — skill targets the principal kept; not linked, not in `record`. */
-  skillsKept: string[];
-  record: ArtifactSymlinkRecord;
-}> {
+}): Promise<ApplyResult> {
   const { type, manifest, arc, host, installDir, quiet } = opts;
   const record: ArtifactSymlinkRecord = { symlinks: [], shims: { dir: arc.shimDir, names: [] } };
 
@@ -779,39 +782,25 @@ export async function createArtifactSymlinks(opts: {
   // plan the drop-presence verifier consumes -- so this step only APPLIES the
   // plan to the filesystem (plus the `rules` template-generation side effect
   // that has no symlink target).
+  const result = (overrides: Partial<ApplyResult>): ApplyResult => ({
+    filesCreated: [],
+    filesMissingSource: [],
+    unsafeTargets: [],
+    filesOccupied: [],
+    skillsRefused: [],
+    skillsKept: [],
+    record,
+    ...overrides,
+  });
   const plan = planArtifactSymlinks(opts);
   if (plan.unsafeTargets.length) {
-    return {
-      filesCreated: [],
-      filesMissingSource: [],
-      unsafeTargets: plan.unsafeTargets,
-      filesOccupied: [],
-      skillsRefused: [],
-      skillsKept: [],
-      record,
-    };
+    return result({ unsafeTargets: plan.unsafeTargets });
   }
   if (plan.filesMissingSource.length) {
-    return {
-      filesCreated: [],
-      filesMissingSource: plan.filesMissingSource,
-      unsafeTargets: [],
-      filesOccupied: [],
-      skillsRefused: [],
-      skillsKept: [],
-      record,
-    };
+    return result({ filesMissingSource: plan.filesMissingSource });
   }
   if (plan.filesOccupied.length) {
-    return {
-      filesCreated: [],
-      filesMissingSource: [],
-      unsafeTargets: [],
-      filesOccupied: plan.filesOccupied,
-      skillsRefused: [],
-      skillsKept: [],
-      record,
-    };
+    return result({ filesOccupied: plan.filesOccupied });
   }
 
   let replaceSkillSlots = false;
@@ -820,13 +809,12 @@ export async function createArtifactSymlinks(opts: {
       plan.skillConflicts.find((c) => !lstatSync(c.target).isSymbolicLink()) ?? plan.skillConflicts[0];
     const conflict = { name: manifest.name, ...shown };
     const choice = await (opts.onSkillConflict ?? refuseSkillConflicts)(conflict);
-    const empty = { filesCreated: [], filesMissingSource: [], unsafeTargets: [], filesOccupied: [], record };
     if (choice === "refuse") {
-      return { ...empty, skillsRefused: [{ ...shown, reason: skillConflictRefusalReason(conflict) }], skillsKept: [] };
+      return result({ skillsRefused: [{ ...shown, reason: skillConflictRefusalReason(conflict) }] });
     }
     if (choice === "keep") {
       console.log(`  Kept your skill at ${shown.target}; '${manifest.name}' is not installed.`);
-      return { ...empty, skillsRefused: [], skillsKept: plan.skillConflicts.map((c) => c.target) };
+      return result({ skillsKept: plan.skillConflicts.map((c) => c.target) });
     }
     replaceSkillSlots = true;
   }
@@ -902,7 +890,7 @@ export async function createArtifactSymlinks(opts: {
     throw err;
   }
 
-  return { filesCreated, filesMissingSource: [], unsafeTargets: [], filesOccupied: [], skillsRefused: [], skillsKept: [], record };
+  return result({ filesCreated });
 }
 
 /**
@@ -921,7 +909,8 @@ export async function createArtifactSymlinks(opts: {
  * surfaced via console.warn so the user sees orphans they need to inspect
  * manually rather than failing silently.
  */
-export async function rollbackArtifactSymlinks(record: ArtifactSymlinkRecord): Promise<void> {
+export async function rollbackArtifactSymlinks(record: ArtifactSymlinkRecord): Promise<string[]> {
+  const warnings: string[] = [];
   for (const link of record.symlinks) {
     try {
       await removeSymlink(link);
@@ -944,9 +933,12 @@ export async function rollbackArtifactSymlinks(record: ArtifactSymlinkRecord): P
     try {
       await restoreSkillBackup(backup, target);
     } catch (err) {
-      console.warn(`  ⚠ rollback: failed to restore ${target} from ${backup}: ${errorMessage(err)}`);
+      const message = `failed to restore ${target} from ${backup}: ${errorMessage(err)}`;
+      console.warn(`  ⚠ rollback: ${message}`);
+      warnings.push(message);
     }
   }
+  return warnings;
 }
 
 export interface NodeDependencyInstallResult {

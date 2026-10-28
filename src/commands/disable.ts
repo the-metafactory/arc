@@ -5,6 +5,7 @@ import { getSkill, updateSkillStatus } from "../lib/db.js";
 import { removeSymlink, removeCliShim, extractAllCliInfo } from "../lib/symlinks.js";
 import { readManifest } from "../lib/manifest.js";
 import { removeHooks } from "../lib/hooks.js";
+import { keptSkillHint } from "../lib/skill-conflict.js";
 
 export interface DisableResult {
   success: boolean;
@@ -32,7 +33,7 @@ export async function disable(
   if (skill.status === "kept") {
     return {
       success: false,
-      error: `Skill '${name}' is kept: your own copy sits at its target and arc does not unlink it. Run \`arc remove ${name}\`, then install again to choose replace or keep.`,
+      error: `Skill '${name}' is kept, so arc does not unlink it. ${keptSkillHint(name)}`,
     };
   }
 

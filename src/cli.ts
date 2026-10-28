@@ -5,7 +5,7 @@ import { createArcPaths, ensureDirectories, getDefaultHost, isDirOnPath, isArcDe
 import { migrateArcDirsIfNeeded, legacyArcLayout, toArcDirLayout } from "./lib/xdg-migrate.js";
 import { openDatabase, getSkill } from "./lib/db.js";
 import { extractAllCliInfo } from "./lib/symlinks.js";
-import { install, parseNameVersion } from "./commands/install.js";
+import { install, notActiveHint, parseNameVersion } from "./commands/install.js";
 import { buildCortexInstallSteering } from "./lib/hosts/cortex-config-split.js";
 import { isSafePinRef } from "./lib/pin-ref.js";
 import {
@@ -345,10 +345,8 @@ program
           return;
         }
         const hint =
-          existingRow.status === "kept"
-            ? `Your own copy of the skill was kept. Run \`arc remove ${resolved.name}\`, then install again to choose replace or keep.`
-            : existingRow.status === "disabled"
-            ? `Run \`arc enable ${resolved.name}\` to re-enable it, or \`arc remove ${resolved.name}\` first if you want a clean install.`
+          existingRow.status !== "active"
+            ? notActiveHint(resolved.name, existingRow.status)
             : `Run \`arc upgrade ${resolved.name}\`, or \`arc remove ${resolved.name}\` first if the existing install can't be upgraded in place.`;
         console.error(`'${resolved.name}' v${existingRow.version} is already installed (status: ${existingRow.status}). ${hint}`);
         process.exit(1);

@@ -62,6 +62,11 @@ function tildify(path: string, home: string): string {
   return home && (path === home || path.startsWith(`${home}/`)) ? `~${path.slice(home.length)}` : path;
 }
 
+/** How a principal takes back a `kept` answer (soma-lifeos#17). */
+export function keptSkillHint(name: string): string {
+  return `Your own copy of '${name}' was kept. Run \`arc remove ${name}\`, then install again to choose replace or keep.`;
+}
+
 export function skillConflictRefusalReason(conflict: SkillConflict): string {
   return (
     `Skill '${conflict.name}' already exists at ${conflict.target} (not installed by arc). ` +

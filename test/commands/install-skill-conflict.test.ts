@@ -461,3 +461,33 @@ describe("arc upgrade linking a new library skill (soma-lifeos#17)", () => {
     expect(getSkill(env.db, "research")?.status).toBe("kept");
   });
 });
+
+describe("a dependency the principal kept (soma-lifeos#17)", () => {
+  test("satisfies the dependent but is warned about, even under --yes", async () => {
+    await newEnv();
+    const dep = await createMockSkillRepo(env.root, { name: "research" });
+    await handMadeSkill("research");
+    const { resolver } = recordingResolver("keep");
+    await install({ arc: env.arc, host: env.host, db: env.db, repoUrl: dep.url, yes: true, onSkillConflict: resolver });
+    const parent = await createMockSkillRepo(env.root, {
+      name: "writer",
+      dependsOnPackages: [{ name: "research", repo: dep.url }],
+    });
+    const errors: string[] = [];
+    const origWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((chunk: string | Uint8Array) => {
+      errors.push(String(chunk));
+      return true;
+    });
+    let result;
+    try {
+      result = await install({ arc: env.arc, host: env.host, db: env.db, repoUrl: parent.url, yes: true });
+    } finally {
+      process.stderr.write = origWrite;
+    }
+
+    expect(result.success).toBe(true);
+    expect(errors.join("")).toContain("depends on 'research', which is kept");
+    expect(getSkill(env.db, "research")?.status).toBe("kept");
+  });
+});

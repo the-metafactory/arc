@@ -36,7 +36,7 @@ import {
   rollbackArtifactSymlinks,
   toposortArtifacts,
 } from "../lib/artifact-installer.js";
-import { formatSkillConflictRefusals, type SkillConflictResolver } from "../lib/skill-conflict.js";
+import { formatSkillConflictRefusals, keptSkillHint, type SkillConflictResolver } from "../lib/skill-conflict.js";
 import { extractRepoName, isInsideRepos, repoNameFromPreExtracted } from "../lib/repo-name.js";
 import { requireBrokerForManifest } from "../lib/nats-broker.js";
 import {
@@ -377,9 +377,11 @@ export async function installPackageDependencies(
           .prepare("SELECT * FROM skills WHERE repo_url = ? AND library_name IS NULL")
           .get(dep.repo) as InstalledSkill | null);
       if (existing?.status === "kept") {
-        if (!ctx.yes) {
-          console.log(`  ✓ dependency '${dep.name}' is kept (your own copy) — satisfied`);
-        }
+        // soma-lifeos#17: the principal kept their own copy of this skill, so
+        // nothing of the package landed. Not re-asked here; said out loud.
+        process.stderr.write(
+          `arc: WARN — ${manifest.name} depends on '${dep.name}', which is kept: your own copy is in place and nothing of the package landed. ${keptSkillHint(dep.name)}\n`,
+        );
         continue;
       }
       if (existing?.status === "active") {
@@ -498,9 +500,9 @@ export async function installPackageDependencies(
  * 6. Run bun install (if package.json in repo root)
  * 7. Record in database
  */
-function notActiveHint(name: string, status: string): string {
+export function notActiveHint(name: string, status: string): string {
   return status === "kept"
-    ? `Your own copy of the skill was kept. Run \`arc remove ${name}\`, then install again to choose replace or keep.`
+    ? keptSkillHint(name)
     : `Run \`arc enable ${name}\` to re-enable it, or \`arc remove ${name}\` first if you want a clean install.`;
 }
 
@@ -1743,7 +1745,6 @@ async function installPerTarget(opts: {
     shims: { dir: opts.arc.shimDir, names: [] },
     backups: [],
   };
-  const kept: string[] = [];
   const launchd: LaunchdInstallRecord[] = [];
   const systemd: SystemdInstallRecord[] = [];
 
@@ -1880,13 +1881,17 @@ async function installPerTarget(opts: {
       await rollbackAll();
       return { error: `[${targetId}] ${formatSkillConflictRefusals(r.skillsRefused)}` };
     }
+    if (r.skillsKept.length) {
+      // Keep is all-or-nothing: a kept package lands nothing on any target.
+      await rollbackAll();
+      return { symlinks: { symlinks: [], shims: { dir: opts.arc.shimDir, names: [] } }, kept: r.skillsKept, launchd: [], systemd: [] };
+    }
     merged.symlinks.push(...r.record.symlinks);
     merged.shims.names.push(...r.record.shims.names);
     merged.backups?.push(...(r.record.backups ?? []));
-    kept.push(...r.skillsKept);
   }
 
-  return { symlinks: merged, kept, launchd, systemd };
+  return { symlinks: merged, kept: [], launchd, systemd };
 }
 
 /**

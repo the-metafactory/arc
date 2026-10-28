@@ -16,7 +16,7 @@ import {
 import { readManifest, readLibraryArtifacts } from "../lib/manifest.js";
 import YAML from "yaml";
 import { install, installSingleArtifact, installPackageDependencies, type InstallResult } from "./install.js";
-import type { SkillConflictResolver } from "../lib/skill-conflict.js";
+import { keptSkillHint, type SkillConflictResolver } from "../lib/skill-conflict.js";
 import { recordCompositionSnapshot } from "./files.js";
 import { errorMessage } from "../lib/errors.js";
 import {
@@ -607,10 +607,8 @@ export async function upgradePackage(
     return { success: false, name, oldVersion: "?", error: `"${name}" is not installed` };
   }
   if (skill.status !== "active") {
-    const why = skill.status === "kept"
-      ? "is kept (your own copy stays in place) — `arc remove` it, then install again to choose"
-      : "is disabled — enable it first";
-    return { success: false, name, oldVersion: skill.version, error: `"${name}" ${why}` };
+    const error = skill.status === "kept" ? keptSkillHint(name) : `"${name}" is disabled — enable it first`;
+    return { success: false, name, oldVersion: skill.version, error };
   }
 
   const installPath = skill.install_path;

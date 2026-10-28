@@ -170,11 +170,11 @@ describe("diffSkillTarget", () => {
     await writeFile(join(root, "mine", "SKILL.md"), "old line\n");
     await writeFile(join(root, "pkg", "SKILL.md"), "new line\n");
     await writeFile(join(root, "pkg", "sub", "extra.md"), "x\n");
-    const out = diffSkillTarget(join(root, "mine"), join(root, "pkg"));
-    expect(out).toContain(`diff -ru ${join(root, "mine", "SKILL.md")} ${join(root, "pkg", "SKILL.md")}`);
-    expect(out).toContain("-old line");
-    expect(out).toContain("+new line");
-    expect(out).toContain(`Only in ${join(root, "pkg", "sub")}: extra.md`);
+    const diff = diffSkillTarget(join(root, "mine"), join(root, "pkg"));
+    expect(diff).toContain(`diff -ru ${join(root, "mine", "SKILL.md")} ${join(root, "pkg", "SKILL.md")}`);
+    expect(diff).toContain("-old line");
+    expect(diff).toContain("+new line");
+    expect(diff).toContain(`Only in ${join(root, "pkg", "sub")}: extra.md`);
   });
 
   test("says so when there is no difference", async () => {

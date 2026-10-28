@@ -350,7 +350,7 @@ export function beginInstallTransaction(opts: {
       }
       for (const record of symlinkRecords) {
         try {
-          await rollbackArtifactSymlinks(record);
+          for (const warning of await rollbackArtifactSymlinks(record)) warn(warning);
         } catch (err) {
           warn(`failed to roll back symlinks: ${errorMessage(err)}`);
         }
@@ -393,8 +393,9 @@ export interface CompleteInstallTransactionOptions {
   postinstallEnv?: Record<string, string>;
   /**
    * soma-lifeos#17: the principal kept their own skill. Only the `kept` DB row
-   * is written; hooks, extensions, dependencies, postinstall and the Soma
-   * projection are skipped, as nothing of the package landed.
+   * is written; hooks, extensions, node dependencies, postinstall and the Soma
+   * projection are skipped, as nothing of the package landed. Its
+   * `depends_on.packages` are separate packages, installed before the question.
    */
   kept?: boolean;
   onTransaction?: (tx: InstallTransaction) => void;
