@@ -68,11 +68,16 @@ function stackDirFromArgs(args: string[], home: string): string | undefined {
   if (!isCortexStart) return undefined;
   const config = configArgValue(args);
   if (config === undefined) return undefined;
-  const expanded = config.startsWith("%h/")
-    ? join(home, config.slice(3))
-    : config === "~" ? home : config.startsWith("~/") ? join(home, config.slice(2)) : config;
+  const expanded = expandHome(config, home);
   if (!isAbsolute(expanded) || !existsSync(expanded)) return undefined;
   return dirname(resolve(expanded));
+}
+
+function expandHome(p: string, home: string): string {
+  if (p === "~") return home;
+  if (p.startsWith("~/")) return join(home, p.slice(2));
+  if (p.startsWith("%h/")) return join(home, p.slice(3));
+  return p;
 }
 
 function configArgValue(args: string[]): string | undefined {
