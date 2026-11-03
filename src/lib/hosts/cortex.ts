@@ -10,6 +10,7 @@ import {
   resolveCortexConfigDir,
   type CortexConfigDirSeam,
 } from "./cortex-config-dir.js";
+import { resolveLiveCortexStackDir } from "./cortex-live-stack.js";
 
 /**
  * Cortex host adapter.
@@ -67,7 +68,8 @@ export interface CortexHostOptions {
 export function cortexPaths(opts?: CortexHostOptions): CortexHostPaths {
   // DEFAULT config root is existence-gated to match the live cortex (G-18);
   // an explicit override keeps its verbatim precedence above it.
-  const configRoot = opts?.configRoot ?? resolveCortexConfigDir(opts?.seam);
+  const configRoot =
+    opts?.configRoot ?? resolveLiveCortexStackDir(opts?.seam) ?? resolveCortexConfigDir(opts?.seam);
   const credsRoot =
     opts?.credsRoot ??
     join(opts?.seam?.home ?? homedir(), ".config", "nats", "creds");
