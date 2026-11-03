@@ -1,4 +1,4 @@
-import { basename, dirname, join, resolve } from "path";
+import { basename, dirname, isAbsolute, join, resolve } from "path";
 import { existsSync, readdirSync, readFileSync } from "fs";
 import { userHome } from "../user-home.js";
 import { cortexConfigDirOverride, type CortexConfigDirSeam } from "./cortex-config-dir.js";
@@ -18,8 +18,11 @@ import { cortexConfigDirOverride, type CortexConfigDirSeam } from "./cortex-conf
  * `start --config` argv, the same match cortex's own `daemon-locator.ts` uses.
  * One stack wins outright; with several, the stack named `default` (the stack
  * Pulse and the cortex CLI address by default) wins; otherwise the result is
- * `undefined` and the caller keeps its existing fallback. `$CORTEX_CONFIG_DIR`
- * is an explicit root, so it disables discovery.
+ * `undefined` and the caller keeps its existing fallback. A descriptor whose
+ * `--config` is relative, or names a file that no longer exists (a retired
+ * stack), is skipped; systemd `%h` expands to the home dir. Whether the service
+ * is currently LOADED is not checked. `$CORTEX_CONFIG_DIR` is an explicit root,
+ * so it disables discovery.
  */
 export function resolveLiveCortexStackDir(seam?: CortexConfigDirSeam): string | undefined {
   if (cortexConfigDirOverride(seam) !== undefined) return undefined;
@@ -59,14 +62,16 @@ function readDescriptors(dir: string, namePattern: RegExp): string[] {
   return texts;
 }
 
-/** `dirname(--config)` for a `cortex … start --config <p>` argv, else undefined. */
-export function stackDirFromArgs(args: string[], home: string): string | undefined {
+function stackDirFromArgs(args: string[], home: string): string | undefined {
   const isCortexStart =
     args.some((a) => basename(a) === "cortex" || a.endsWith("/cortex/src/cli.ts")) && args.includes("start");
   if (!isCortexStart) return undefined;
   const config = configArgValue(args);
   if (config === undefined) return undefined;
-  const expanded = config === "~" ? home : config.startsWith("~/") ? join(home, config.slice(2)) : config;
+  const expanded = config.startsWith("%h/")
+    ? join(home, config.slice(3))
+    : config === "~" ? home : config.startsWith("~/") ? join(home, config.slice(2)) : config;
+  if (!isAbsolute(expanded) || !existsSync(expanded)) return undefined;
   return dirname(resolve(expanded));
 }
 
